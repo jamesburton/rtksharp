@@ -125,16 +125,16 @@ planning reference for "is command X already scoped and what's its priority."
 - `Jest` shares its dispatch arm with `Vitest` (`Commands::Jest { ref args } | Commands::Vitest { ref args } => vitest_cmd::run(...)`)
   in the Rust source — both route to the same `vitest_cmd` module. This is recorded
   as-is; it is not a modeling error in this inventory.
-- The `Replace with better abstraction` group (20 commands, mostly single-ecosystem
-  passthrough+filter wrappers such as `Ruff`, `Pytest`, `Ruff`, `Rake`, `Gradlew`,
-  `Mvn`, `Prettier`, etc.) is a judgment call: the Rust source hand-implements each
-  as its own module, but given Phase 4's explicit goal of a declarative
-  module/filter system ("a new simple line filter can be added without
-  recompiling") and RTK's existing 60 TOML filter configs, treating these as
-  candidates for the new abstraction rather than 1:1 bespoke C# ports seemed the
-  intent of the Global Constraints' "duplicates what the new module/filter system
-  will replace wholesale" clause. A later task/reviewer may want to confirm this
-  reading before Phase 4 planning locks in scope.
+- No command rows carry `Replace with better abstraction` after review: an earlier
+  draft assigned it to ~20 single-ecosystem wrapper commands (`Ruff`, `Pytest`,
+  `Rake`, `Gradlew`, `Mvn`, etc.), but two review rounds established that
+  `docs/PLANS.md` Phase 4 only authorizes wholesale replacement for TOML-filter
+  migration and the `gh`/`az` module abstraction — never bespoke language-ecosystem
+  command modules. JS-stack differentiators (Jest/Vitest/Prisma/Tsc/Playwright/Npx)
+  were moved to `Must port for MVP` per CLAUDE.md's headline framing; the remaining
+  ecosystem wrappers were moved to `Port after core`. `Replace with better
+  abstraction` is reserved for the TOML filter inventory
+  (`docs/parity/filter-inventory.md`), where it is genuinely Phase 4's scope.
 - `Run` and `Proxy` have no dedicated `cmds::` module (they execute directly in
   `main.rs`), so "Routed module" for these two rows names the core execution path
   rather than a `src/cmds/<ecosystem>/` module — flagged since the Method section's
