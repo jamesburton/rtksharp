@@ -70,4 +70,37 @@ public static class ParityRunner
             rustResult.ExitCode == dotnetResult.ExitCode
         );
     }
+
+    /// <summary>
+    /// Runs a single binary once and returns its captured stdout and exit code.
+    /// </summary>
+    /// <remarks>
+    /// Used by the rewrite-parity harness to drive each side independently (the two
+    /// binaries live in different locations and, for the oracle, need an isolated
+    /// environment). Stderr is intentionally ignored: the oracle emits a
+    /// <c>[rtk] /!\ No hook installed</c> warning to stderr that is not part of the
+    /// <c>rewrite</c> contract.
+    /// </remarks>
+    /// <param name="fileName">Executable to run (or the <c>dotnet</c> muxer).</param>
+    /// <param name="args">Arguments to pass to the executable.</param>
+    /// <param name="workingDirectory">Working directory for the child process, or null.</param>
+    /// <param name="environment">Environment overrides to apply, or null to inherit.</param>
+    /// <param name="cancellationToken">Token to cancel the execution.</param>
+    /// <returns>A tuple of the captured stdout and the process exit code.</returns>
+    public static async Task<(string Stdout, int ExitCode)> RunAsync(
+        string fileName,
+        string[] args,
+        string? workingDirectory = null,
+        IReadOnlyDictionary<string, string?>? environment = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var executor = new ProcessExecutor();
+        var result = await executor.ExecuteAsync(
+            new ExecutionRequest(fileName, args, workingDirectory, environment),
+            cancellationToken
+        ).ConfigureAwait(false);
+
+        return (result.Stdout, result.ExitCode);
+    }
 }
