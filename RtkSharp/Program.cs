@@ -1,6 +1,6 @@
+using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Execution;
-using RtkSharp.Rewrite;
 
 return await RtkProgram.RunAsync(args);
 
@@ -23,11 +23,9 @@ internal static class RtkProgram
             return 0;
         }
 
-        if (parsed.CommandName == "rewrite")
+        if (CommandRegistry.TryGet(parsed.CommandName, out var handler))
         {
-            var (exitCode, output) = RewriteCommand.Evaluate(string.Join(' ', parsed.CommandArgs));
-            Console.Out.Write(output);
-            return exitCode;
+            return await handler(parsed.CommandArgs).ConfigureAwait(false);
         }
 
         var executor = new ProcessExecutor();
