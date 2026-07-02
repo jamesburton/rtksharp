@@ -21,11 +21,23 @@ namespace RtkSharp.Commands.System;
 ///   <item><c>.gitignore</c> files are respected hierarchically (repo-root <c>.git/info/exclude</c>,
 ///   each ancestor between the git root and the search path, and each directory descended into),
 ///   mirroring <c>git_ignore(true)</c>. The git root is located by walking up for a <c>.git</c>
-///   entry; when none is found no ignore rules apply. Two documented scope limits vs the Rust
-///   <c>ignore</c> crate: the global <c>core.excludesFile</c> (<c>git_global</c>) is not consulted,
-///   and a directory named <c>.git</c> is always pruned. The gitignore pattern engine supports the
-///   common syntax (comments, negation, leading/trailing/internal slash anchoring, <c>*</c>,
-///   <c>?</c>, and a pragmatic <c>**</c>); exotic edge cases are approximated.</item>
+///   entry; when none is found no ignore rules apply. A directory named <c>.git</c> is always
+///   pruned.</item>
+///   <item><b>Concrete divergence:</b> the Rust <c>ignore</c> crate also enables
+///   <c>git_global(true)</c>, which consults the user's global <c>core.excludesFile</c> (typically
+///   <c>~/.gitconfig</c>'s <c>[core] excludesFile</c>, e.g. a machine-wide <c>~/.gitignore_global</c>).
+///   RtkSharp's from-scratch gitignore engine does not read this file at all. On any machine with a
+///   global excludesFile configured, this means <b>RtkSharp will list files that the Rust oracle
+///   silently omits</b> (e.g. editor swap files, OS metadata like <c>.DS_Store</c>, or IDE
+///   directories commonly placed in a global excludesFile rather than per-repo). This is not an
+///   exotic edge case — it is host-config-dependent and will reproducibly diverge from the oracle on
+///   any developer machine with a global gitignore set up. See
+///   <c>docs/parity/compatibility-ledger.md</c> for the ledger entry.</item>
+///   <item>Separately, the gitignore <i>pattern engine itself</i> supports the common syntax
+///   (comments, negation, leading/trailing/internal slash anchoring, <c>*</c>, <c>?</c>, and a
+///   pragmatic <c>**</c>); genuinely exotic pattern forms (e.g. bracket character classes like
+///   <c>[abc]</c>) are approximated rather than fully implemented — see
+///   <c>FindCommandTests</c> for the pinned current behavior of specific pattern forms.</item>
 /// </list>
 /// Token-savings tracking (find_cmd.rs's <c>TimedExecution</c>) is omitted, matching the
 /// <see cref="ReadCommand"/> precedent: native commands are not wired to a tracker through the
@@ -381,6 +393,14 @@ public static class FindCommand
         if (byExt.Count > 1)
         {
             lines.Add(string.Empty);
+
+            // The `.ThenBy(Ordinal)` tie-break is an intentional determinism choice, not a literal
+            // port: find_cmd.rs accumulates counts in a std::collections::HashMap and its iteration
+            // order (used to break ties among equal counts) is randomized per-process by Rust's
+            // SipHash-based default hasher. There is no single "correct" Rust tie order to match —
+            // the oracle itself is nondeterministic here, so a fresh oracle run can legitimately
+            // differ from another oracle run on tied-count extensions. RtkSharp instead picks a
+            // fixed, reproducible order (alphabetical) rather than reproducing that nondeterminism.
             var extParts = byExt
                 .OrderByDescending(kv => kv.Value)
                 .ThenBy(kv => kv.Key, StringComparer.Ordinal)

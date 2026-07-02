@@ -301,6 +301,82 @@ public sealed class FindCommandTests
         Assert.Equal("1F 1D:\n\n./ keep.rs\n", output);
     }
 
+    // ---- Gitignore glob-engine pinning tests ----
+    //
+    // These tests pin the CURRENT behavior of IgnoreRule.TranslateGlob (a from-scratch engine, not
+    // a literal port of any Rust glob crate). Where the observed behavior diverges from real git
+    // semantics, that is called out in a comment rather than "fixed" here — engine behavior changes
+    // are out of scope for this fix round; see FindCommand.cs's gitignore <remarks> for the broader
+    // pattern-engine caveat.
+
+    [Fact]
+    public void Gitignore_LeadingDoubleStarSlash_MatchesNestedButNotRoot()
+    {
+        // Real git's "**/foo" matches "foo" at any depth, INCLUDING the repo root. The current
+        // engine translates "**/foo" to the regex "^.*/foo$", which requires a "/" before "foo" and
+        // therefore does NOT match a root-level "foo" — only nested occurrences. This is a known
+        // divergence from git semantics, pinned here rather than silently changed.
+        var root = CreateTree(new Dictionary<string, string>
+        {
+            [".gitignore"] = "**/foo\n",
+            ["foo"] = "root-level, should be ignored by git but is NOT ignored by this engine",
+            [Combine("sub", "foo")] = "nested, ignored by both git and this engine"
+        });
+
+        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        Assert.Equal("1F 1D:\n\n./ foo\n", output);
+    }
+
+    [Fact]
+    public void Gitignore_TrailingDoubleStar_IgnoresDirectoryContents()
+    {
+        // "foo/**" ignores everything under foo/ (but not foo/ itself), matching git semantics for
+        // this pattern shape.
+        var root = CreateTree(new Dictionary<string, string>
+        {
+            [".gitignore"] = "foo/**\n",
+            [Combine("foo", "bar.txt")] = "ignored",
+            ["kept.txt"] = "kept"
+        });
+
+        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        Assert.Equal("1F 1D:\n\n./ kept.txt\n", output);
+    }
+
+    [Fact]
+    public void Gitignore_Negation_ReincludesSpecificFile()
+    {
+        // "!keep.txt" after "*.txt" re-includes keep.txt; last-matching-rule-wins semantics.
+        var root = CreateTree(new Dictionary<string, string>
+        {
+            [".gitignore"] = "*.txt\n!keep.txt\n",
+            ["a.txt"] = "ignored",
+            ["keep.txt"] = "kept"
+        });
+
+        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        Assert.Equal("1F 1D:\n\n./ keep.txt\n", output);
+    }
+
+    [Fact]
+    public void Gitignore_BracketClass_IsTreatedAsLiteralCharacters_NotACharacterClass()
+    {
+        // TranslateGlob has no special case for '[' / ']' — every character in the pattern other
+        // than '*' and '?' is individually Regex.Escape()'d, including brackets. So "file[abc].txt"
+        // is NOT a character class matching one of a/b/c; it only matches a file literally named
+        // "file[abc].txt". This is a known, documented approximation (FindCommand.cs <remarks>), not
+        // fixed here.
+        var root = CreateTree(new Dictionary<string, string>
+        {
+            [".gitignore"] = "file[abc].txt\n",
+            ["file[abc].txt"] = "matches the literal pattern text, so it is ignored",
+            ["filea.txt"] = "would match a git character class, but this engine has none, so it is kept"
+        });
+
+        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        Assert.Equal("1F 1D:\n\n./ filea.txt\n", output);
+    }
+
     // ---- Helpers ----
 
     private static string Combine(params string[] parts) => Path.Combine(parts);
