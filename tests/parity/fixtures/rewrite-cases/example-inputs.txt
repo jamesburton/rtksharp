@@ -32,3 +32,14 @@ grep -n "fn main" src/main.rs
 ls -la
 find . -name "*.rs"
 go test ./...
+
+# --- MVP coverage additions (Phase 3 final review follow-up) ---
+dotnet build
+vitest run
+pnpm tsc
+npx playwright test
+jest
+prisma generate
+tree src
+wc -l file.txt
+npx tsc
