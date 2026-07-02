@@ -26,6 +26,8 @@ public static class CommandRegistry
         });
 
         Register("ls", LsCommand.RunAsync);
+        Register("read", ReadCommand.RunAsync);
+        Register("wc", WcCommand.RunAsync);
     }
 
     /// <summary>
