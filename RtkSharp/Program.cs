@@ -1,5 +1,6 @@
 using RtkSharp.Core;
 using RtkSharp.Execution;
+using RtkSharp.Rewrite;
 
 return await RtkProgram.RunAsync(args);
 
@@ -20,6 +21,13 @@ internal static class RtkProgram
         {
             Console.WriteLine(GetHelp());
             return 0;
+        }
+
+        if (parsed.CommandName == "rewrite")
+        {
+            var (exitCode, output) = RewriteCommand.Evaluate(string.Join(' ', parsed.CommandArgs));
+            Console.Out.Write(output);
+            return exitCode;
         }
 
         var executor = new ProcessExecutor();
