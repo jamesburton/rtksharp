@@ -6,7 +6,9 @@ namespace RtkSharp.Rewrite;
 /// The full table of rewrite rules used to detect raw shell commands that have a
 /// token-optimized <c>rtk</c> equivalent. Transcribed verbatim, in source order, from
 /// the Rust <c>RULES</c> array in <c>src/discover/rules.rs</c>. Order matters: the
-/// rewrite engine uses first-match-wins semantics.
+/// rewrite engine uses last-match-wins semantics (faithful to the Rust
+/// <c>RegexSet</c>, which reports the highest-index match — see
+/// <see cref="RewriteEngine"/>).
 /// </summary>
 public static class RewriteRules
 {
