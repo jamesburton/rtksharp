@@ -154,6 +154,33 @@ public class ProcessExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_MergedMode_HandlesLargeOutputWithoutTruncation()
+    {
+        var executor = new ProcessExecutor();
+        const int lineCount = 5000; // each line ~15 bytes => well over 64KB total
+        var request = OperatingSystem.IsWindows()
+            ? new ExecutionRequest(
+                "cmd",
+                ["/d", "/s", "/c", $"for /L %i in (1,1,{lineCount}) do @echo line-number-%i"],
+                CaptureMode: ExecutionCaptureMode.Merged
+            )
+            : new ExecutionRequest(
+                "sh",
+                ["-c", $"for i in $(seq 1 {lineCount}); do echo line-number-$i; done"],
+                CaptureMode: ExecutionCaptureMode.Merged
+            );
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.True(result.WasStarted);
+        Assert.Equal(0, result.ExitCode);
+        var lines = result.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(lineCount, lines.Length);
+        Assert.Contains("line-number-1", result.Stdout);
+        Assert.Contains($"line-number-{lineCount}", result.Stdout);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_SeparateMode_StillKeepsStdoutAndStderrApart()
     {
         var executor = new ProcessExecutor();

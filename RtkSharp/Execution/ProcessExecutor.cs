@@ -4,8 +4,20 @@ using System.Text;
 
 namespace RtkSharp.Execution;
 
+/// <summary>
+/// Default <see cref="IProcessExecutor"/> implementation backed by <see cref="System.Diagnostics.Process"/>.
+/// Supports separate, merged, and inherited stdout/stderr capture, plus timeout-based cancellation.
+/// </summary>
 public sealed class ProcessExecutor : IProcessExecutor
 {
+    /// <summary>
+    /// Executes a child process as described by <paramref name="request"/>, capturing its
+    /// output according to <see cref="ExecutionRequest.CaptureMode"/> and enforcing
+    /// <see cref="ExecutionRequest.Timeout"/> if set.
+    /// </summary>
+    /// <param name="request">The process execution request.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>The execution result.</returns>
     public async ValueTask<ExecutionResult> ExecuteAsync(
         ExecutionRequest request,
         CancellationToken cancellationToken = default
@@ -76,7 +88,7 @@ public sealed class ProcessExecutor : IProcessExecutor
 
             if (merged)
             {
-                var mergedOutput = ReadMergedAsync(mergedBuffer!, mergedLock);
+                var mergedOutput = ReadMerged(mergedBuffer!, mergedLock);
                 return new ExecutionResult(mergedOutput, "", process.ExitCode, stopwatch.Elapsed, true, null, false);
             }
 
@@ -91,7 +103,7 @@ public sealed class ProcessExecutor : IProcessExecutor
 
             if (merged)
             {
-                var mergedOutput = ReadMergedAsync(mergedBuffer!, mergedLock);
+                var mergedOutput = ReadMerged(mergedBuffer!, mergedLock);
                 return new ExecutionResult(
                     mergedOutput,
                     "",
@@ -130,7 +142,7 @@ public sealed class ProcessExecutor : IProcessExecutor
         }
     }
 
-    private static string ReadMergedAsync(StringBuilder buffer, object lockObj)
+    private static string ReadMerged(StringBuilder buffer, object lockObj)
     {
         lock (lockObj)
         {

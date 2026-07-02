@@ -57,6 +57,19 @@ public class TruncationCapsTests
     }
 
     [Fact]
+    public void Truncate_ExactlyAtCap_ReturnsUnchangedWithNoOmissionOrHint()
+    {
+        var lines = Enumerable.Range(1, 30).Select(i => $"line{i}").ToArray();
+        var content = string.Join('\n', lines);
+
+        var result = TruncationCaps.Truncate(content, TruncationCategory.Warnings, "test-cmd");
+
+        Assert.Equal(content, result.Text);
+        Assert.Equal(0, result.OmittedLineCount);
+        Assert.Null(result.RecoveryHint);
+    }
+
+    [Fact]
     public void Truncate_EmptyContent_ReturnsEmptyWithNoOmission()
     {
         var result = TruncationCaps.Truncate("", TruncationCategory.Errors, "test-cmd");
