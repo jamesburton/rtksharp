@@ -4,6 +4,10 @@
 # .NET pack/publish output (RtkSharp port)
 .artifacts/
 
+# .NET build output
+bin/
+obj/
+
 # Environment & Secrets
 .env
 .env.*
