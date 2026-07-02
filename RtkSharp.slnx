@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="RtkSharp.Tests/RtkSharp.Tests.csproj" />
+  <Project Path="RtkSharp/RtkSharp.csproj" />
+</Solution>
