@@ -18,6 +18,16 @@ public sealed class ProcessExecutor : IProcessExecutor
         process.StartInfo = CreateStartInfo(request);
         process.EnableRaisingEvents = true;
 
+        var merged = request.CaptureMode == ExecutionCaptureMode.Merged;
+        StringBuilder? mergedBuffer = merged ? new StringBuilder() : null;
+        var mergedLock = new object();
+
+        if (merged)
+        {
+            process.OutputDataReceived += (_, e) => AppendMergedLine(mergedBuffer!, mergedLock, e.Data);
+            process.ErrorDataReceived += (_, e) => AppendMergedLine(mergedBuffer!, mergedLock, e.Data);
+        }
+
         try
         {
             if (!process.Start())
@@ -32,12 +42,25 @@ public sealed class ProcessExecutor : IProcessExecutor
             return new ExecutionResult("", "", 127, stopwatch.Elapsed, false, ex.Message, false);
         }
 
-        Task<string> stdoutTask = process.StartInfo.RedirectStandardOutput
-            ? process.StandardOutput.ReadToEndAsync(cancellationToken)
-            : Task.FromResult("");
-        Task<string> stderrTask = process.StartInfo.RedirectStandardError
-            ? process.StandardError.ReadToEndAsync(cancellationToken)
-            : Task.FromResult("");
+        Task<string> stdoutTask;
+        Task<string> stderrTask;
+
+        if (merged)
+        {
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            stdoutTask = Task.FromResult("");
+            stderrTask = Task.FromResult("");
+        }
+        else
+        {
+            stdoutTask = process.StartInfo.RedirectStandardOutput
+                ? process.StandardOutput.ReadToEndAsync(cancellationToken)
+                : Task.FromResult("");
+            stderrTask = process.StartInfo.RedirectStandardError
+                ? process.StandardError.ReadToEndAsync(cancellationToken)
+                : Task.FromResult("");
+        }
 
         using var timeoutCts = request.Timeout is { } timeout
             ? new CancellationTokenSource(timeout)
@@ -51,6 +74,12 @@ public sealed class ProcessExecutor : IProcessExecutor
             await process.WaitForExitAsync(linkedCts.Token).ConfigureAwait(false);
             stopwatch.Stop();
 
+            if (merged)
+            {
+                var mergedOutput = ReadMergedAsync(mergedBuffer!, mergedLock);
+                return new ExecutionResult(mergedOutput, "", process.ExitCode, stopwatch.Elapsed, true, null, false);
+            }
+
             var stdout = await stdoutTask.ConfigureAwait(false);
             var stderr = await stderrTask.ConfigureAwait(false);
             return new ExecutionResult(stdout, stderr, process.ExitCode, stopwatch.Elapsed, true, null, false);
@@ -59,6 +88,20 @@ public sealed class ProcessExecutor : IProcessExecutor
         {
             TryKill(process);
             stopwatch.Stop();
+
+            if (merged)
+            {
+                var mergedOutput = ReadMergedAsync(mergedBuffer!, mergedLock);
+                return new ExecutionResult(
+                    mergedOutput,
+                    "",
+                    -1,
+                    stopwatch.Elapsed,
+                    true,
+                    $"Process timed out after {request.Timeout!.Value}.",
+                    true
+                );
+            }
 
             var stdout = await ReadCompletedOrEmptyAsync(stdoutTask).ConfigureAwait(false);
             var stderr = await ReadCompletedOrEmptyAsync(stderrTask).ConfigureAwait(false);
@@ -71,6 +114,27 @@ public sealed class ProcessExecutor : IProcessExecutor
                 $"Process timed out after {request.Timeout!.Value}.",
                 true
             );
+        }
+    }
+
+    private static void AppendMergedLine(StringBuilder buffer, object lockObj, string? line)
+    {
+        if (line is null)
+        {
+            return;
+        }
+
+        lock (lockObj)
+        {
+            buffer.AppendLine(line);
+        }
+    }
+
+    private static string ReadMergedAsync(StringBuilder buffer, object lockObj)
+    {
+        lock (lockObj)
+        {
+            return buffer.ToString();
         }
     }
 

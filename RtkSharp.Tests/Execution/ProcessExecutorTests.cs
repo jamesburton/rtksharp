@@ -108,4 +108,62 @@ public class ProcessExecutorTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public async Task ExecuteAsync_MergedMode_InterleavesStdoutAndStderrInOrder()
+    {
+        var executor = new ProcessExecutor();
+        var request = OperatingSystem.IsWindows()
+            ? new ExecutionRequest(
+                "cmd",
+                ["/d", "/s", "/c", "echo out1 & echo err1 1>&2 & echo out2"],
+                CaptureMode: ExecutionCaptureMode.Merged
+            )
+            : new ExecutionRequest(
+                "sh",
+                ["-c", "echo out1; echo err1 1>&2; echo out2"],
+                CaptureMode: ExecutionCaptureMode.Merged
+            );
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.True(result.WasStarted);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("out1", result.Stdout);
+        Assert.Contains("err1", result.Stdout);
+        Assert.Contains("out2", result.Stdout);
+        Assert.Equal("", result.Stderr);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_MergedMode_PreservesExitCodeAndFailureOnNotFound()
+    {
+        var executor = new ProcessExecutor();
+
+        var result = await executor.ExecuteAsync(
+            new ExecutionRequest(
+                "rtksharp-definitely-missing-command",
+                [],
+                CaptureMode: ExecutionCaptureMode.Merged
+            )
+        );
+
+        Assert.False(result.WasStarted);
+        Assert.Equal(127, result.ExitCode);
+        Assert.NotNull(result.Failure);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_SeparateMode_StillKeepsStdoutAndStderrApart()
+    {
+        var executor = new ProcessExecutor();
+        var request = OperatingSystem.IsWindows()
+            ? new ExecutionRequest("cmd", ["/d", "/s", "/c", "echo onlyout"])
+            : new ExecutionRequest("sh", ["-c", "printf onlyout"]);
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.Equal("onlyout", result.Stdout.Trim());
+        Assert.Equal("", result.Stderr);
+    }
 }
