@@ -28,6 +28,8 @@ public static class CommandRegistry
         Register("ls", LsCommand.RunAsync);
         Register("read", ReadCommand.RunAsync);
         Register("wc", WcCommand.RunAsync);
+        Register("tree", TreeCommand.RunAsync);
+        Register("find", FindCommand.RunAsync);
     }
 
     /// <summary>
