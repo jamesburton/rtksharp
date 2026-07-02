@@ -1,3 +1,4 @@
+using RtkSharp.Commands.System;
 using RtkSharp.Rewrite;
 
 namespace RtkSharp.Cli;
@@ -23,6 +24,8 @@ public static class CommandRegistry
             Console.Out.Write(output);
             return Task.FromResult(exitCode);
         });
+
+        Register("ls", LsCommand.RunAsync);
     }
 
     /// <summary>

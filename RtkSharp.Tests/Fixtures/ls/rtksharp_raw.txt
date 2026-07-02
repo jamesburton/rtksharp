@@ -1,0 +1,12 @@
+total 37
+drwxr-xr-x 1 james 197609    0 Jul  2 23:09 .
+drwxr-xr-x 1 james 197609    0 Jul  2 21:44 ..
+drwxr-xr-x 1 james 197609    0 Jul  2 23:21 Cli
+drwxr-xr-x 1 james 197609    0 Jul  2 23:07 Commands
+drwxr-xr-x 1 james 197609    0 Jul  2 19:08 Core
+drwxr-xr-x 1 james 197609    0 Jul  2 23:08 Execution
+-rw-r--r-- 1 james 197609 2264 Jul  2 23:09 Program.cs
+drwxr-xr-x 1 james 197609    0 Jul  2 23:03 Rewrite
+-rw-r--r-- 1 james 197609  599 Jul  2 15:02 RtkSharp.csproj
+drwxr-xr-x 1 james 197609    0 Jun 26 16:36 bin
+drwxr-xr-x 1 james 197609    0 Jul  2 22:50 obj
