@@ -1,0 +1,5 @@
+2790	Fix #2762: `rtk gain` reports unreproducible savings — `read`/`grep`/`tail` show 0% compres	thangtran7314:fix/issue-2762	DRAFT	2026-07-02T16:03:18Z
+2789	fix(analytics): truncate display strings on UTF-8 char boundaries	fix/analytics-utf8-char-boundary-panic	OPEN	2026-07-02T13:29:19Z
+2785	feat: support for systemctl, python3, ssh, adb, pgrep, pactl, xrandr	wilmerdooley:oss/issue-1904	OPEN	2026-07-02T05:22:55Z
+2784	feat: [Request] Please add support for crush agent (by Charmbracelet)	wilmerdooley:oss/issue-1896	OPEN	2026-07-02T01:20:22Z
+2783	fix(openclaw): plugin manifest and configurable exit-3 handling	kzzalews:fix/openclaw-plugin-manifest-and-auto-apply	OPEN	2026-07-01T21:02:27Z

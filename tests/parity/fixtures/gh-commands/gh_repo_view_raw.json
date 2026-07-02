@@ -1,0 +1,1 @@
+{"defaultBranchRef":{"name":"develop"},"description":"CLI proxy that reduces LLM token consumption by 60-90% on common dev commands. Single Rust binary, zero dependencies","name":"rtk","owner":{"id":"O_kgDOD2SkHg","login":"rtk-ai"},"url":"https://github.com/rtk-ai/rtk"}

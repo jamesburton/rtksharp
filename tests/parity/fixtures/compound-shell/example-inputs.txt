@@ -1,0 +1,28 @@
+# Golden fixture: compound-shell candidate strings.
+#
+# These are INPUT strings for the shell lexer / rewrite engine (parsed by
+# RtkSharp/Rewrite/ShellLexer.cs on the .NET side, ShellLexer/rewrite engine
+# on the Rust side). They are not command output.
+#
+# Sourced verbatim from real test-input strings already used in
+# RtkSharp.Tests/Rewrite/ShellLexerTests.cs (lines noted), reused here per the
+# task brief's explicit instruction rather than inventing new examples.
+#
+#   ShellLexerTests.cs:137  cmd1 && cmd2
+#   ShellLexerTests.cs:144  cmd1 || cmd2
+#   ShellLexerTests.cs:151  cmd1 ; cmd2
+#   ShellLexerTests.cs:158  a && b && c
+#   ShellLexerTests.cs:166  a && b || c
+#   ShellLexerTests.cs:426  cargo test 2>&1 && echo done
+#   ShellLexerTests.cs:434  if ! grep -q pattern file; then echo missing; fi
+#   ShellLexerTests.cs:456  git status;cargo test
+#   ShellLexerTests.cs:495  cargo fmt --all && cargo clippy --all-targets && cargo test
+cmd1 && cmd2
+cmd1 || cmd2
+cmd1 ; cmd2
+a && b && c
+a && b || c
+cargo test 2>&1 && echo done
+if ! grep -q pattern file; then echo missing; fi
+git status;cargo test
+cargo fmt --all && cargo clippy --all-targets && cargo test

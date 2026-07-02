@@ -1,0 +1,8 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  RtkSharp -> C:\Development\rtksharp\RtkSharp\bin\Debug\net10.0\RtkSharp.dll
+  RtkSharp.Tests -> C:\Development\rtksharp\RtkSharp.Tests\bin\Debug\net10.0\RtkSharp.Tests.dll
+Test run for C:\Development\rtksharp\RtkSharp.Tests\bin\Debug\net10.0\RtkSharp.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+
+Passed!  - Failed:     0, Passed:   146, Skipped:     0, Total:   146, Duration: 50 s - RtkSharp.Tests.dll (net10.0)

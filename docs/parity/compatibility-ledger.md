@@ -1,0 +1,58 @@
+# RtkSharp / RTK (Rust) Compatibility Ledger
+
+Phase 0 living document. Tracks (1) which of the seven Global-Constraints
+parity categories have golden fixtures and where those fixtures live, and
+(2) known/accepted output differences between the Rust `rtk` binary and the
+in-progress `RtkSharp` .NET port. Later phases append to both sections as
+filtering behavior is actually implemented — this document does not attempt
+to be exhaustive at Phase 0, since most of RtkSharp's filter modules don't
+exist yet.
+
+## Step 1 survey: existing `tests/fixtures/` coverage
+
+`tests/fixtures/` (31 files, pre-existing before this task) was surveyed
+first, per the task brief, to avoid recapturing coverage that already exists.
+
+| Required category | Already covered by `tests/fixtures/`? | Notes |
+|---|---|---|
+| rewrite cases | No | No rewrite-input fixtures present; existing files are all captured *command output* (git/gh/maven/gradle/etc.), not rewrite-engine input strings. |
+| compound shell commands | No | Not represented; nearest existing coverage is `RtkSharp.Tests/Rewrite/ShellLexerTests.cs`'s in-code test strings (not under `tests/fixtures/`). |
+| pipe safety | No | Same as above — no dedicated pipe-input fixtures existed. |
+| `gh` commands | No | `tests/fixtures/` has `glab_*` (GitLab CLI) fixtures but no `gh` (GitHub CLI) fixtures. |
+| `dotnet build/test/restore/format` | Partially | `tests/fixtures/dotnet/` (5 files) exists but only covers **failure/edge** paths: `build_failed.txt`, `test_failed.txt`, `format_changes.json`, `format_empty.json`, `format_success.json`. There was no `dotnet build` **success**, `dotnet test` **success**, or `dotnet restore` output captured. Gap filled in Step 2 below with real captures from this repo. |
+| `ls/read/find/grep` | No | Not represented in `tests/fixtures/`. |
+| TOML filter application | N/A (by design) | Not applicable as a *captured-output* fixture category — see the dedicated note in Fixture Coverage below; the 63 `src/filters/*.toml` files already embed `[[tests.<name>]]` blocks with `input`/`expected` pairs and are the intended source of truth per the task brief (avoids duplicating fixture data into a second location). |
+
+Conclusion: only `dotnet build/test/restore/format` had partial existing
+coverage (failure paths only); all other categories needed new fixtures,
+captured in `tests/parity/fixtures/` (Step 2).
+
+## Fixture Coverage
+
+| Category | Source of truth | What's captured |
+|---|---|---|
+| rewrite cases | new `tests/parity/fixtures/rewrite-cases/example-inputs.txt` | 13 real candidate command strings, one per representative `pattern` regex in `src/discover/rules.rs` (git, gh, glab, cargo, pnpm, npm, cat, grep, ls, find, go), with a header cross-referencing the exact `rules.rs` line numbers. These are rewrite-engine *inputs*, not command output. |
+| compound shell commands | new `tests/parity/fixtures/compound-shell/example-inputs.txt` | 9 real compound-command strings (`&&`, `\|\|`, `;` combinations, including `if`/`then`/`fi` and multi-stage cargo chains) copied verbatim from existing `RtkSharp.Tests/Rewrite/ShellLexerTests.cs` test-input literals, per the task brief's explicit instruction to reuse rather than invent. Header cites exact source line numbers. |
+| pipe safety | new `tests/parity/fixtures/pipe-safety/example-inputs.txt` | 4 real piped-command strings (`\|`) copied verbatim from `RtkSharp.Tests/Rewrite/ShellLexerTests.cs` test-input literals. Header cites exact source line numbers. |
+| `gh` commands | new `tests/parity/fixtures/gh-commands/gh_pr_list_raw.txt`, `gh_repo_view_raw.json` | Real captured output of `gh pr list --limit 5` and `gh repo view --json name,owner,description,url,defaultBranchRef`, run against this repo (`rtk-ai/rtk`) with an authenticated `gh` CLI (`gh version 2.75.1`, account `jamesburton`). Exit code 0 for both. |
+| `dotnet build/test/restore/format` | existing `tests/fixtures/dotnet/` (failure paths, pre-existing) + new `tests/parity/fixtures/dotnet-workflow/` (success paths, this task) | New files: `dotnet_build_success_raw.txt` (`dotnet build RtkSharp.slnx`, exit 0, "Build succeeded"), `dotnet_test_success_raw.txt` (`dotnet test RtkSharp.Tests`, exit 0, 146/146 passed), `dotnet_restore_raw.txt` (`dotnet restore RtkSharp.slnx`, exit 0). Format success/failure and build/test failure paths remain covered by the pre-existing `tests/fixtures/dotnet/` files — not recaptured. |
+| `ls/read/find/grep` | new `tests/parity/fixtures/ls-read-find-grep/` | Real captured output of `ls -la` (repo root), `grep -n "fn main" src/main.rs`, `find src/cmds -maxdepth 1 -type d`, and `cat RtkSharp.slnx` (stand-in for `read`), all run in this repo. |
+| TOML filter application | `src/filters/*.toml` embedded `[[tests.*]]` blocks (not duplicated here) | Confirmed all 63 TOML filter files under `src/filters/` contain `[[tests.` blocks (`grep -l '\[\[tests\.' src/filters/*.toml` returns 63/63). Per the task brief, this category is intentionally *not* re-captured into `tests/parity/fixtures/` — Task 6's parity runner should read `input`/`expected` pairs directly from `src/filters/*.toml` to avoid a second, driftable copy of ~63 files' worth of test data. |
+
+## Known Acceptable Differences
+
+Populated with differences already confirmed during Phase 1/2 work. Expected
+to stay short until RtkSharp implements actual filtering (Phase 4+) — not
+padded with speculative entries.
+
+| Area | Rust behavior | RtkSharp behavior | Why acceptable |
+|---|---|---|---|
+| Merged stdout/stderr line endings | Expected byte-exact passthrough of whatever the child process wrote (Rust's `std::process::Command::output()` returns separate, unmodified stdout/stderr byte buffers with no line-ending translation on read; the exact merge path — if any — was not located in `src/core/utils.rs`/`tee.rs` in this pass, so this is the brief's characterization rather than code-verified). | `RtkSharp/Execution/ProcessExecutor.cs`'s `AppendMergedLine` (confirmed at the current `port/dotnet-phase0` HEAD) builds the merged buffer via `StringBuilder.AppendLine(line)` on each `OutputDataReceived`/`ErrorDataReceived` callback, which appends `Environment.NewLine` (`\r\n` on Windows) regardless of the child's original line-ending bytes. | Line-ending normalization in the merged-capture path is a deliberate, low-risk simplification of .NET's event-based `OutputDataReceived` API (which already strips the original terminator per line); it does not affect any filter logic that operates on already-split lines, and is expected to be revisited only if a future filter needs byte-exact merged output. |
+| Fixture file line endings (git normalization) | N/A — this is a fixture-storage concern, not a Rust-vs-RtkSharp behavior difference. | N/A | `tests/parity/fixtures/**/*.txt` and `.json` files were captured on Windows (CRLF) and may be subject to this repo's `.gitattributes` line-ending normalization on commit. Task 6's parity runner should normalize line endings before byte-comparing captured fixtures against fresh command output, rather than assuming the committed bytes are identical to a live Windows capture. |
+
+## Verification
+
+See Step 4 output in `.superpowers/sdd/task-5-report.md` for the full file
+listing and spot-check confirmation that every file under
+`tests/parity/fixtures/` corresponds to a command actually run during this
+task (no fabricated content).

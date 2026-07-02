@@ -1,0 +1,34 @@
+# Golden fixture: rewrite-case candidate strings.
+#
+# These are INPUT strings that RTK's rewrite engine is expected to match and
+# rewrite to `rtk <command>` form. They are not command output.
+#
+# Sourced from the `pattern` regex fields in src/discover/rules.rs (Task 2's
+# rewrite-rule-inventory.md cross-references the same file). One representative
+# example command per matched pattern is listed below, each satisfying the
+# corresponding regex from rules.rs (line numbers as of this capture):
+#
+#   rules.rs:15  ^(?:git|yadm)\s+(?:-[Cc]\s+\S+\s+)*(status|log|diff|show|add|commit|push|pull|branch|fetch|stash|worktree)
+#   rules.rs:29  ^gh\s+(pr|issue|run|repo|api|release)
+#   rules.rs:38  ^glab\s+(mr|issue|ci|pipeline|api|release)
+#   rules.rs:47  ^cargo\s+(build|test|clippy|check|fmt|install)
+#   rules.rs:56  ^pnpm\s+(exec|i|install|list|ls|outdated|run|run-script)
+#   rules.rs:65  ^npm\s+(exec|run|run-script|rum|urn|x)(\s|$)
+#   rules.rs:83  ^(cat|head|tail)\s+
+#   rules.rs:92  ^(rg|grep)\s+
+#   rules.rs:101 ^ls(\s|$)
+#   rules.rs:110 ^find\s+
+#   rules.rs:474 ^go\s+(test|build|vet)
+git status
+git log
+gh pr list
+glab mr list
+cargo build
+cargo test
+pnpm install
+npm run build
+cat README.md
+grep -n "fn main" src/main.rs
+ls -la
+find . -name "*.rs"
+go test ./...

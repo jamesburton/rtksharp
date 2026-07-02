@@ -1,0 +1,19 @@
+# Golden fixture: pipe-safety candidate strings.
+#
+# These are INPUT strings involving pipe (`|`) operators, for the shell lexer /
+# rewrite engine to verify that a piped command is NOT mistakenly rewritten
+# into a bare `rtk <cmd>` invocation that would break stdin/stdout piping
+# semantics. They are not command output.
+#
+# Sourced verbatim from real test-input strings already used in
+# RtkSharp.Tests/Rewrite/ShellLexerTests.cs (lines noted), reused here per the
+# task brief's explicit instruction rather than inventing new examples.
+#
+#   ShellLexerTests.cs:188  cat file | grep pattern
+#   ShellLexerTests.cs:202  a | b | c
+#   ShellLexerTests.cs:418  cargo test 2>&1 | head
+#   ShellLexerTests.cs:504  find . -name '*.rs' | xargs grep 'fn run'
+cat file | grep pattern
+a | b | c
+cargo test 2>&1 | head
+find . -name '*.rs' | xargs grep 'fn run'
