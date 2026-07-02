@@ -1,6 +1,9 @@
 # Build
 /target
 
+# .NET pack/publish output (RtkSharp port)
+.artifacts/
+
 # Environment & Secrets
 .env
 .env.*
