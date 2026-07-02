@@ -4,8 +4,19 @@ using System.Runtime.InteropServices;
 
 namespace RtkSharp.Execution;
 
+/// <summary>
+/// Resolves an executable name or relative path to a full file path by searching the
+/// current directory and the <c>PATH</c> environment variable, applying <c>PATHEXT</c>
+/// extension matching on Windows.
+/// </summary>
 public static class PathResolver
 {
+    /// <summary>
+    /// Resolves an executable name to a full path, using the current process's
+    /// <c>PATH</c>, <c>PATHEXT</c>, and current directory.
+    /// </summary>
+    /// <param name="name">The executable name or path to resolve.</param>
+    /// <returns>The resolved full path, or <paramref name="name"/> unchanged if it could not be resolved.</returns>
     public static string Resolve(string name)
     {
         return Resolve(
@@ -16,6 +27,15 @@ public static class PathResolver
         );
     }
 
+    /// <summary>
+    /// Resolves an executable name to a full path, searching the given directory and
+    /// <c>PATH</c> entries, with explicit <c>PATHEXT</c> extension matching on Windows.
+    /// </summary>
+    /// <param name="name">The executable name or path to resolve.</param>
+    /// <param name="pathEnv">The <c>PATH</c>-style, platform path-separator-delimited search list.</param>
+    /// <param name="pathExtEnv">The <c>PATHEXT</c>-style extension list used on Windows, or null to use the default set.</param>
+    /// <param name="currentDirectory">The directory to check before searching <paramref name="pathEnv"/>.</param>
+    /// <returns>The resolved full path, or <paramref name="name"/> unchanged if it could not be resolved.</returns>
     public static string Resolve(string name, string? pathEnv, string? pathExtEnv, string currentDirectory)
     {
         if (Path.IsPathRooted(name))

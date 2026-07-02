@@ -4,28 +4,62 @@ using System.Linq;
 
 namespace RtkSharp.Rewrite;
 
+/// <summary>
+/// Classifies a lexed shell token.
+/// </summary>
 public enum TokenKind
 {
+    /// <summary>A plain argument or word.</summary>
     Arg,
+
+    /// <summary>A control operator such as <c>;</c>, <c>&amp;&amp;</c>, or <c>||</c>.</summary>
     Operator,
+
+    /// <summary>A pipe operator (<c>|</c>).</summary>
     Pipe,
+
+    /// <summary>A redirect operator such as <c>&gt;</c>, <c>&gt;&gt;</c>, or <c>&lt;</c>.</summary>
     Redirect,
+
+    /// <summary>A shell metacharacter with special meaning (e.g. <c>*</c>, <c>$</c>, backtick, <c>(</c>, <c>)</c>).</summary>
     Shellism
 }
 
+/// <summary>
+/// A single lexed token from a shell command string.
+/// </summary>
+/// <param name="Kind">The token's classification.</param>
+/// <param name="Value">The token's raw text value.</param>
+/// <param name="Offset">The character offset of the token within the original input.</param>
 public record ParsedToken(
     TokenKind Kind,
     string Value,
     int Offset
 );
 
+/// <summary>
+/// A lightweight, quote- and escape-aware shell command lexer used to split and
+/// classify command strings without invoking an actual shell.
+/// </summary>
 public static class ShellLexer
 {
+    /// <summary>
+    /// Tokenizes a shell command string, treating newlines as whitespace.
+    /// </summary>
+    /// <param name="input">The command string to tokenize.</param>
+    /// <returns>The list of parsed tokens.</returns>
     public static List<ParsedToken> Tokenize(string input)
     {
         return TokenizeInner(input, false);
     }
 
+    /// <summary>
+    /// Tokenizes a shell command string, optionally emitting newlines as explicit
+    /// <see cref="TokenKind.Operator"/> tokens instead of treating them as whitespace.
+    /// </summary>
+    /// <param name="input">The command string to tokenize.</param>
+    /// <param name="emitNewline">Whether newlines should be emitted as operator tokens.</param>
+    /// <returns>The list of parsed tokens.</returns>
     public static List<ParsedToken> TokenizeInner(string input, bool emitNewline)
     {
         var tokens = new List<ParsedToken>();
@@ -295,6 +329,12 @@ public static class ShellLexer
         }
     }
 
+    /// <summary>
+    /// Determines whether a command string contains constructs (command/process substitution,
+    /// or redirects to a file target) that cannot be safely attested to without a real shell.
+    /// </summary>
+    /// <param name="cmd">The command string to inspect.</param>
+    /// <returns>True if the command contains an unattestable construct.</returns>
     public static bool ContainsUnattestableConstruct(string cmd)
     {
         if (ContainsSubstitution(cmd))
@@ -375,6 +415,12 @@ public static class ShellLexer
         return true;
     }
 
+    /// <summary>
+    /// Splits a command string into segments at operator/pipe/background boundaries, for
+    /// per-segment permission checks. Redirect targets are excluded from returned segments.
+    /// </summary>
+    /// <param name="cmd">The command string to split.</param>
+    /// <returns>The list of command segments.</returns>
     public static List<string> SplitForPermissions(string cmd)
     {
         string trimmed = cmd.Trim();
@@ -427,6 +473,13 @@ public static class ShellLexer
         return results;
     }
 
+    /// <summary>
+    /// Splits a command string into segments at control-operator boundaries, optionally
+    /// stopping at the first pipe.
+    /// </summary>
+    /// <param name="cmd">The command string to split.</param>
+    /// <param name="stopAtPipe">Whether to stop splitting (and return early) at the first pipe operator.</param>
+    /// <returns>The list of command segments.</returns>
     public static List<string> SplitOnOperators(string cmd, bool stopAtPipe)
     {
         string trimmed = cmd.Trim();
@@ -474,6 +527,11 @@ public static class ShellLexer
         return results;
     }
 
+    /// <summary>
+    /// Removes a single matching pair of surrounding single or double quotes from a string, if present.
+    /// </summary>
+    /// <param name="s">The string to strip quotes from.</param>
+    /// <returns>The string without surrounding quotes, or unchanged if not quoted.</returns>
     public static string StripQuotes(string s)
     {
         if (s.Length >= 2 && 
@@ -485,6 +543,12 @@ public static class ShellLexer
         return s;
     }
 
+    /// <summary>
+    /// Splits a string on whitespace, honoring single/double quoting and backslash escapes,
+    /// similar to POSIX shell word-splitting.
+    /// </summary>
+    /// <param name="input">The string to split.</param>
+    /// <returns>The list of split, unescaped words.</returns>
     public static List<string> ShellSplit(string input)
     {
         var tokens = new List<string>();

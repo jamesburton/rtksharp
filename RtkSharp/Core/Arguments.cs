@@ -1,5 +1,10 @@
 namespace RtkSharp.Core;
 
+/// <summary>
+/// Represents the parsed command-line invocation of rtk: its own flags
+/// (verbosity, ultra-compact mode, color, help/version) plus the wrapped
+/// command name and the arguments to forward to it.
+/// </summary>
 public record RtkArguments(
     int Verbosity,
     bool UltraCompact,
@@ -10,6 +15,12 @@ public record RtkArguments(
     string[] CommandArgs
 )
 {
+    /// <summary>
+    /// Parses raw process arguments into an <see cref="RtkArguments"/>, separating rtk's own
+    /// flags from the wrapped command name and its arguments.
+    /// </summary>
+    /// <param name="args">The raw command-line arguments passed to the process.</param>
+    /// <returns>The parsed <see cref="RtkArguments"/>.</returns>
     public static RtkArguments Parse(string[] args)
     {
         int verbosity = 0;
@@ -103,7 +114,15 @@ public record RtkArguments(
     }
 }
 
+/// <summary>
+/// Default <see cref="IArgumentParser"/> implementation backed by <see cref="RtkArguments.Parse"/>.
+/// </summary>
 public sealed class ArgumentParser : IArgumentParser
 {
+    /// <summary>
+    /// Parses raw process arguments into an <see cref="RtkArguments"/>.
+    /// </summary>
+    /// <param name="args">The raw command-line arguments passed to the process.</param>
+    /// <returns>The parsed <see cref="RtkArguments"/>.</returns>
     public RtkArguments Parse(string[] args) => RtkArguments.Parse(args);
 }
