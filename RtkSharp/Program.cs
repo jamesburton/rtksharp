@@ -19,6 +19,11 @@ internal static class RtkProgram
         IArgumentParser argumentParser = new ArgumentParser();
         var parsed = argumentParser.Parse(args);
 
+        // Publish the parsed global --ultra-compact flag for handlers whose registry delegate
+        // (Func<string[], Task<int>>) cannot carry it. Mirrors Rust threading cli.ultra_compact
+        // into gh_cmd::run (main.rs:1673). See RuntimeOptions for the rationale.
+        RuntimeOptions.UltraCompact = parsed.UltraCompact;
+
         if (parsed.Version)
         {
             Console.WriteLine(GetVersion());

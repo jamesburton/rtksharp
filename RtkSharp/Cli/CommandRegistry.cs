@@ -1,4 +1,5 @@
 using RtkSharp.Commands.Dotnet;
+using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
 using RtkSharp.Commands.System;
 using RtkSharp.Rewrite;
@@ -35,6 +36,7 @@ public static class CommandRegistry
         Register("grep", GrepCommand.RunAsync);
         Register("dotnet", DotnetCommand.RunAsync);
         Register("git", GitCommand.RunAsync);
+        Register("gh", GhCommand.RunAsync);
     }
 
     /// <summary>
