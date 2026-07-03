@@ -1,3 +1,4 @@
+using System.Text;
 using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Execution;
@@ -8,6 +9,13 @@ internal static class RtkProgram
 {
     public static async Task<int> RunAsync(string[] args, CancellationToken cancellationToken = default)
     {
+        // The Rust `rtk` binary writes raw UTF-8 bytes to stdout (e.g. the U+2502 `│`
+        // line-number gutter in `read -n`, and box-drawing glyphs in `tree`). On Windows
+        // .NET defaults Console.OutputEncoding to the system OEM code page, which encodes
+        // those glyphs as a single mismatched byte and breaks byte-for-byte parity. Force
+        // UTF-8 without a BOM so our output stream matches the oracle's exactly.
+        TrySetUtf8Output();
+
         IArgumentParser argumentParser = new ArgumentParser();
         var parsed = argumentParser.Parse(args);
 
@@ -50,6 +58,22 @@ internal static class RtkProgram
         }
 
         return result.ExitCode;
+    }
+
+    private static void TrySetUtf8Output()
+    {
+        try
+        {
+            // UTF8Encoding(false) => no byte-order mark, matching Rust's raw byte output.
+            Console.OutputEncoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+        }
+        catch (IOException)
+        {
+            // Reassigning the encoding can fail when stdout is a handle that cannot be
+            // reopened (rare in redirected/piped scenarios). Fall back silently: ASCII
+            // output is unaffected, and blocking the whole command over a gutter glyph
+            // would violate the never-block-the-user contract.
+        }
     }
 
     private static string GetVersion()
