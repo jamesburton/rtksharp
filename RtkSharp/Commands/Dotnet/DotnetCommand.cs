@@ -29,6 +29,13 @@ namespace RtkSharp.Commands.Dotnet;
 /// vs. a "details omitted" placeholder) is lost when binlog is deferred. Diagnostic counts
 /// and the verdict line are unaffected. See the task report for details.
 /// </para>
+/// <para>
+/// <b>Windows drive-letter paths (intentional deviation, ledgered).</b> <see cref="IssueRegex"/>
+/// widens Rust's file-capture group with an optional drive-letter prefix, so Windows-absolute
+/// diagnostic lines are enriched (real file/line/col/code/message) even without the binlog —
+/// see the regex's own comment and <c>docs/parity/compatibility-ledger.md</c>. The "enrichment
+/// lost without binlog" statement above still holds for non-drive-letter paths.
+/// </para>
 /// </remarks>
 public static class DotnetCommand
 {
@@ -44,8 +51,14 @@ public static class DotnetCommand
 
     // --- Regexes ported verbatim from binlog.rs's lazy_static! block ---
 
+    // Intentional deviation from Rust's ISSUE_RE (binlog.rs:56): the file-capturing group is
+    // widened with an optional drive-letter prefix so Windows-absolute paths (e.g.
+    // "C:\src\Program.cs(1,40): error CS1525: ...") are captured whole instead of the regex
+    // stopping at the drive-letter colon. Rust's text parser has this same limitation, but it
+    // is masked there by the (deferred, see class remarks) binlog path. The prefix is optional
+    // so Unix/relative paths are unaffected. Ledgered in docs/parity/compatibility-ledger.md.
     private static readonly Regex IssueRegex = new(
-        @"^\s*(?<file>[^\r\n:(]+)\((?<line>\d+),(?<column>\d+)\):\s*(?<kind>error|warning)\s*(?:(?<code>[A-Za-z]+\d+)\s*:\s*)?(?<msg>.*)$",
+        @"^\s*(?<file>(?:[A-Za-z]:)?[^\r\n:(]+)\((?<line>\d+),(?<column>\d+)\):\s*(?<kind>error|warning)\s*(?:(?<code>[A-Za-z]+\d+)\s*:\s*)?(?<msg>.*)$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     private static readonly Regex BuildSummaryRegex = new(

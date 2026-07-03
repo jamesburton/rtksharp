@@ -56,7 +56,7 @@ public sealed class DotnetCommandTests
 
         Assert.Equal(
             "Warnings:\n" +
-            "  warning Build warning #1 (details omitted)\n" +
+            "  C:\\Development\\rtksharp\\RtkSharp.Tests\\Rewrite\\ShellLexerTests.cs(34,9) warning xUnit2012: Do not use Assert.False() to check if a value exists in a collection. Use Assert.DoesNotContain instead. (https://xunit.net/xunit.analyzers/rules/xUnit2012) [C:\\Development\\rtks...\n" +
             "\n" +
             "ok dotnet build: 1 projects, 0 errors, 1 warnings (00:01:45.81)",
             output);
@@ -73,6 +73,57 @@ public sealed class DotnetCommandTests
             "\n" +
             "fail dotnet build: 1 projects, 1 errors, 0 warnings (00:00:00.76)",
             output);
+    }
+
+    [Fact]
+    public void FilterBuild_WindowsDriveLetterPath_ExtractsRealDetailsNotPlaceholder()
+    {
+        // Regression test for the drive-letter IssueRegex widening: a Windows-absolute path
+        // diagnostic must be captured whole (through the drive-letter colon) and produce real
+        // file/line/col/code/message details, not the "details omitted" placeholder that Rust's
+        // ISSUE_RE (binlog.rs:56) falls back to for this same shape of line.
+        const string raw =
+            "  Determining projects to restore...\n" +
+            "C:\\src\\RtkDotnetSmoke\\Program.cs(1,40): error CS1525: Invalid expression term ';' [C:\\src\\RtkDotnetSmoke\\RtkDotnetSmoke.csproj]\n" +
+            "\n" +
+            "Build FAILED.\n" +
+            "\n" +
+            "C:\\src\\RtkDotnetSmoke\\Program.cs(1,40): error CS1525: Invalid expression term ';' [C:\\src\\RtkDotnetSmoke\\RtkDotnetSmoke.csproj]\n" +
+            "    0 Warning(s)\n" +
+            "    1 Error(s)\n" +
+            "\n" +
+            "Time Elapsed 00:00:00.50\n";
+
+        var output = DotnetCommand.FilterBuild(raw, commandSuccess: false);
+
+        Assert.Equal(
+            "Errors:\n" +
+            "  C:\\src\\RtkDotnetSmoke\\Program.cs(1,40) error CS1525: Invalid expression term ';' [C:\\src\\RtkDotnetSmoke\\RtkDotnetSmoke.csproj]\n" +
+            "\n" +
+            "fail dotnet build: 1 projects, 1 errors, 0 warnings (00:00:00.50)",
+            output);
+        Assert.DoesNotContain("details omitted", output);
+    }
+
+    [Fact]
+    public void ParseBuildFromText_WindowsDriveLetterPath_ExtractsRealDetails()
+    {
+        const string raw =
+            "C:\\src\\Program.cs(1,40): error CS1525: Invalid expression term ';' [C:\\src\\App.csproj]\n" +
+            "Build FAILED.\n" +
+            "    0 Warning(s)\n" +
+            "    1 Error(s)\n" +
+            "Time Elapsed 00:00:01.00\n";
+
+        var summary = DotnetCommand.ParseBuildFromText(raw);
+
+        Assert.Single(summary.Errors);
+        var issue = summary.Errors[0];
+        Assert.Equal("C:\\src\\Program.cs", issue.File);
+        Assert.Equal(1, issue.Line);
+        Assert.Equal(40, issue.Column);
+        Assert.Equal("CS1525", issue.Code);
+        Assert.DoesNotContain("details omitted", issue.Message);
     }
 
     [Fact]
