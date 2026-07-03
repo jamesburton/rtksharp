@@ -3,8 +3,25 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace RtkSharp.Rewrite;
+
+/// <summary>
+/// The agent host whose own permission settings should be consulted when a hook evaluates a
+/// command. Mirrors Rust <c>permissions::Host</c> (permissions.rs:31).
+/// </summary>
+public enum PermissionHost
+{
+    /// <summary>Claude Code / VS Code Copilot / Copilot CLI — reads <c>~/.claude/settings*.json</c>.</summary>
+    Claude,
+
+    /// <summary>Cursor Agent — reads <c>~/.cursor/cli-config.json</c> (<c>Shell(...)</c>-scoped rules).</summary>
+    Cursor,
+
+    /// <summary>Gemini CLI — reads <c>~/.gemini/settings.json</c> (project override when folder-trusted).</summary>
+    Gemini,
+}
 
 /// <summary>
 /// The deny / ask / allow Bash permission patterns loaded from Claude Code settings files.
@@ -48,16 +65,36 @@ public sealed record PermissionRuleSet(
 public static class PermissionRules
 {
     private const string ClaudeDir = ".claude";
+    private const string CursorDir = ".cursor";
+    private const string CursorConfig = "cli-config.json";
+    private const string GeminiDir = ".gemini";
     private const string SettingsJson = "settings.json";
     private const string SettingsLocalJson = "settings.local.json";
     private const string BashPrefix = "Bash(";
 
     private static readonly Lazy<PermissionRuleSet> CachedDefault = new(() => Load(baseOverride: null));
+    private static readonly Lazy<PermissionRuleSet> CachedCursor = new(LoadCursor);
+    private static readonly Lazy<PermissionRuleSet> CachedGemini = new(LoadGemini);
 
     /// <summary>
     /// The permission rules for the real user profile, loaded once and cached for the process.
     /// </summary>
     public static PermissionRuleSet Default => CachedDefault.Value;
+
+    /// <summary>
+    /// Returns the cached permission rule set for the given agent host. Faithful port of Rust
+    /// <c>check_command_for</c>'s host dispatch (permissions.rs:37): Claude reads the
+    /// <c>~/.claude/settings*.json</c> Bash rules; Cursor reads <c>~/.cursor/cli-config.json</c>
+    /// <c>Shell(...)</c> rules; Gemini reads <c>~/.gemini/settings.json</c> shell-tool rules.
+    /// </summary>
+    /// <param name="host">The agent host whose settings should be consulted.</param>
+    /// <returns>The merged deny / ask / allow rule set for the host.</returns>
+    public static PermissionRuleSet ForHost(PermissionHost host) => host switch
+    {
+        PermissionHost.Cursor => CachedCursor.Value,
+        PermissionHost.Gemini => CachedGemini.Value,
+        _ => Default,
+    };
 
     /// <summary>
     /// Loads permission rules, optionally overriding the settings root for deterministic testing.
@@ -285,5 +322,162 @@ public static class PermissionRules
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Loads Cursor's <c>Shell(...)</c>-scoped deny/allow rules from <c>~/.cursor/cli-config.json</c>.
+    /// Global config only, mirroring Rust <c>load_cursor_rules</c> (permissions.rs:226): RTK never
+    /// applies Cursor's project/folder-trust config, keeping its allow set a subset of the host's.
+    /// </summary>
+    /// <returns>The cursor deny / (empty ask) / allow rule set.</returns>
+    private static PermissionRuleSet LoadCursor()
+    {
+        var deny = new List<string>();
+        var allow = new List<string>();
+
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (!string.IsNullOrEmpty(home) &&
+            TryReadNode(Path.Combine(home, CursorDir, CursorConfig), out var root) &&
+            root["permissions"] is JsonObject perms)
+        {
+            AppendWrappedRules(perms["deny"], ["Shell("], deny);
+            AppendWrappedRules(perms["allow"], ["Shell("], allow);
+        }
+
+        return new PermissionRuleSet(deny, [], allow);
+    }
+
+    /// <summary>
+    /// Loads Gemini's shell-tool ask/allow rules from <c>~/.gemini/settings.json</c> (with a
+    /// folder-trusted project override). Faithful port of <c>load_gemini_rules</c> /
+    /// <c>gemini_settings</c> (permissions.rs:243).
+    /// </summary>
+    /// <returns>The gemini (empty deny) / ask / allow rule set.</returns>
+    private static PermissionRuleSet LoadGemini()
+    {
+        var ask = new List<string>();
+        var allow = new List<string>();
+        string[] shells = ["run_shell_command(", "ShellTool("];
+
+        if (GeminiSettings() is { } settings && settings["tools"] is JsonObject tools)
+        {
+            AppendWrappedRules(tools["allowed"], shells, allow);
+            AppendWrappedRules(tools["confirmationRequired"], shells, ask);
+        }
+
+        return new PermissionRuleSet([], ask, allow);
+    }
+
+    /// <summary>
+    /// Resolves the Gemini settings object to consult: the folder-trusted project
+    /// <c>.gemini/settings.json</c> when the workspace is trusted, otherwise the global one.
+    /// Port of Rust <c>gemini_settings</c> (permissions.rs:243).
+    /// </summary>
+    /// <returns>The chosen settings object, or <see langword="null"/> when none is readable.</returns>
+    private static JsonObject? GeminiSettings()
+    {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        JsonObject? global = null;
+        if (!string.IsNullOrEmpty(home) &&
+            TryReadNode(Path.Combine(home, GeminiDir, SettingsJson), out var g))
+        {
+            global = g;
+        }
+
+        var folderTrustEnabled = global?["security"]?["folderTrust"]?["enabled"] is JsonValue v &&
+            v.GetValueKind() == JsonValueKind.True;
+        var trusted = string.Equals(
+                Environment.GetEnvironmentVariable("GEMINI_CLI_TRUST_WORKSPACE"),
+                "true",
+                StringComparison.Ordinal)
+            || !folderTrustEnabled;
+
+        if (trusted && FindProjectRoot() is { } root &&
+            TryReadNode(Path.Combine(root, GeminiDir, SettingsJson), out var projectSettings))
+        {
+            return projectSettings;
+        }
+
+        return global;
+    }
+
+    /// <summary>
+    /// Extracts wrapped shell rules (e.g. <c>Shell(git:*)</c>, <c>run_shell_command(npm test)</c>)
+    /// from a JSON array. A bare wrapper name (e.g. <c>run_shell_command</c>) maps to <c>*</c>.
+    /// Port of Rust <c>append_wrapped_rules</c> (permissions.rs:200).
+    /// </summary>
+    /// <param name="rulesValue">The JSON array node (or <see langword="null"/>).</param>
+    /// <param name="prefixes">The wrapper prefixes to strip, e.g. <c>Shell(</c>.</param>
+    /// <param name="target">The list to append extracted patterns to.</param>
+    private static void AppendWrappedRules(JsonNode? rulesValue, string[] prefixes, List<string> target)
+    {
+        if (rulesValue is not JsonArray arr)
+        {
+            return;
+        }
+
+        foreach (var node in arr)
+        {
+            if (node is not JsonValue val || val.GetValueKind() != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            var rule = val.GetValue<string>();
+            foreach (var pre in prefixes)
+            {
+                var bare = pre[..^1];
+                if (rule == bare)
+                {
+                    target.Add("*");
+                    break;
+                }
+
+                if (rule.StartsWith(pre, StringComparison.Ordinal) && rule.EndsWith(')'))
+                {
+                    target.Add(rule[pre.Length..^1]);
+                    break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads and parses a settings file into a <see cref="JsonObject"/>. Missing/unreadable files
+    /// return <see langword="false"/> silently; malformed JSON returns <see langword="false"/> with
+    /// a stderr warning (matching Rust <c>read_json</c>).
+    /// </summary>
+    /// <param name="path">The settings file path.</param>
+    /// <param name="obj">The parsed object on success; otherwise <see langword="null"/>.</param>
+    /// <returns>True if the file was read and parsed as a JSON object.</returns>
+    private static bool TryReadNode(string path, out JsonObject obj)
+    {
+        obj = null!;
+
+        string content;
+        try
+        {
+            content = File.ReadAllText(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+
+        try
+        {
+            if (JsonNode.Parse(content) is JsonObject parsed)
+            {
+                obj = parsed;
+                return true;
+            }
+
+            return false;
+        }
+        catch (JsonException)
+        {
+            Console.Error.WriteLine($"[rtk] warning: failed to parse permissions from {path}");
+            return false;
+        }
     }
 }

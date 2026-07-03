@@ -2,6 +2,7 @@ using RtkSharp.Commands.Dotnet;
 using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
 using RtkSharp.Commands.System;
+using RtkSharp.Hooks;
 using RtkSharp.Rewrite;
 
 namespace RtkSharp.Cli;
@@ -27,6 +28,8 @@ public static class CommandRegistry
             Console.Out.Write(output);
             return Task.FromResult(exitCode);
         });
+
+        Register("hook", args => Task.FromResult(HookCommand.Run(args)));
 
         Register("ls", LsCommand.RunAsync);
         Register("read", ReadCommand.RunAsync);
