@@ -181,6 +181,60 @@ public class ProcessExecutorTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_StdinContent_IsPipedToChildAndClosed()
+    {
+        var executor = new ProcessExecutor();
+
+        // findstr/grep read from stdin when given no file operand, so the child only produces
+        // matching output if StdinContent was actually written and the stream then closed
+        // (both tools block waiting for more input, or EOF, before exiting).
+        var request = OperatingSystem.IsWindows()
+            ? new ExecutionRequest("findstr", ["needle"], StdinContent: "haystack\nneedle-line\nhaystack2\n")
+            : new ExecutionRequest("grep", ["needle"], StdinContent: "haystack\nneedle-line\nhaystack2\n");
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.True(result.WasStarted);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("needle-line", result.Stdout);
+        Assert.DoesNotContain("haystack2", result.Stdout);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_StdinContent_Empty_StillClosesStreamSoChildExits()
+    {
+        var executor = new ProcessExecutor();
+
+        // With an empty StdinContent, findstr/grep should see immediate EOF (no match found)
+        // rather than hang waiting for input — proving the stream is closed even when nothing
+        // is written.
+        var request = OperatingSystem.IsWindows()
+            ? new ExecutionRequest("findstr", ["needle"], StdinContent: "")
+            : new ExecutionRequest("grep", ["needle"], StdinContent: "");
+
+        var result = await executor.ExecuteAsync(request).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.True(result.WasStarted);
+        Assert.NotEqual(0, result.ExitCode); // no match found
+        Assert.Equal("", result.Stdout.Trim());
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_NoStdinContent_DoesNotRedirectStandardInput()
+    {
+        var executor = new ProcessExecutor();
+        var request = OperatingSystem.IsWindows()
+            ? new ExecutionRequest("cmd", ["/d", "/s", "/c", "echo no-stdin-needed"])
+            : new ExecutionRequest("sh", ["-c", "echo no-stdin-needed"]);
+
+        var result = await executor.ExecuteAsync(request);
+
+        Assert.True(result.WasStarted);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("no-stdin-needed", result.Stdout.Trim());
+    }
+
+    [Fact]
     public async Task ExecuteAsync_SeparateMode_StillKeepsStdoutAndStderrApart()
     {
         var executor = new ProcessExecutor();

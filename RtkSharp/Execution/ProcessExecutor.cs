@@ -6,7 +6,8 @@ namespace RtkSharp.Execution;
 
 /// <summary>
 /// Default <see cref="IProcessExecutor"/> implementation backed by <see cref="System.Diagnostics.Process"/>.
-/// Supports separate, merged, and inherited stdout/stderr capture, plus timeout-based cancellation.
+/// Supports separate, merged, and inherited stdout/stderr capture, timeout-based cancellation, and
+/// optional stdin piping via <see cref="ExecutionRequest.StdinContent"/>.
 /// </summary>
 public sealed class ProcessExecutor : IProcessExecutor
 {
@@ -52,6 +53,14 @@ public sealed class ProcessExecutor : IProcessExecutor
         {
             stopwatch.Stop();
             return new ExecutionResult("", "", 127, stopwatch.Elapsed, false, ex.Message, false);
+        }
+
+        if (request.StdinContent is not null)
+        {
+            // Write and close eagerly (fire-and-forget-then-await pattern via a background task)
+            // so a child that reads stdin before producing output doesn't deadlock against the
+            // stdout/stderr reads below.
+            _ = WriteStdinAsync(process, request.StdinContent, cancellationToken);
         }
 
         Task<string> stdoutTask;
@@ -129,6 +138,34 @@ public sealed class ProcessExecutor : IProcessExecutor
         }
     }
 
+    /// <summary>
+    /// Writes <paramref name="content"/> to the child's redirected standard input (UTF-8, no
+    /// byte-order mark) and closes the stream so the child observes EOF. Broken-pipe failures
+    /// (the child exits or closes its stdin before consuming everything) are swallowed — this
+    /// mirrors piping into a real shell command, where a short-lived reader on the other end of
+    /// a pipe does not fail the writer.
+    /// </summary>
+    /// <param name="process">The started child process, with <c>RedirectStandardInput</c> set.</param>
+    /// <param name="content">The text to write to the child's standard input.</param>
+    /// <param name="cancellationToken">A token to cancel the write.</param>
+    private static async Task WriteStdinAsync(Process process, string content, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var writer = process.StandardInput;
+            await writer.WriteAsync(content.AsMemory(), cancellationToken).ConfigureAwait(false);
+            writer.Close();
+        }
+        catch (IOException)
+        {
+            // Broken pipe: the child closed stdin (or exited) before reading everything.
+        }
+        catch (ObjectDisposedException)
+        {
+            // The process (and its stdin stream) already exited/disposed.
+        }
+    }
+
     private static void AppendMergedLine(StringBuilder buffer, object lockObj, string? line)
     {
         if (line is null)
@@ -159,9 +196,10 @@ public sealed class ProcessExecutor : IProcessExecutor
             UseShellExecute = false,
             RedirectStandardOutput = capture,
             RedirectStandardError = capture,
-            RedirectStandardInput = false,
+            RedirectStandardInput = request.StdinContent is not null,
             StandardOutputEncoding = capture ? Encoding.UTF8 : null,
-            StandardErrorEncoding = capture ? Encoding.UTF8 : null
+            StandardErrorEncoding = capture ? Encoding.UTF8 : null,
+            StandardInputEncoding = request.StdinContent is not null ? new UTF8Encoding(encoderShouldEmitUTF8Identifier: false) : null
         };
 
         if (!string.IsNullOrWhiteSpace(request.WorkingDirectory))
