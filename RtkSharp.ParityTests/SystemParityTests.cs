@@ -41,24 +41,26 @@ public class SystemParityTests
 
     /// <summary>
     /// The battery: at least three variants per verb, plus the <c>tree</c> missing-tool
-    /// parity case. Each entry is (display label, argument vector) run verbatim on both sides.
+    /// parity case. Each entry is (display label, argument vector, ordering-tolerance flag)
+    /// run verbatim on both sides. <c>AllowUnorderedLines</c> is <c>true</c> only for the
+    /// <c>grep -rln</c> files-with-matches entry — see <see cref="CommandResult.Compare"/>.
     /// </summary>
-    private static readonly (string Command, string[] Args)[] Battery =
+    private static readonly (string Command, string[] Args, bool AllowUnorderedLines)[] Battery =
     [
-        ("ls RtkSharp", ["ls", "RtkSharp"]),
-        ("ls -la src/cmds/system", ["ls", "-la", "src/cmds/system"]),
-        ("ls .", ["ls", "."]),
-        ("read Cargo.toml", ["read", "Cargo.toml"]),
-        ("read --max-lines 10 README.md", ["read", "--max-lines", "10", "README.md"]),
-        ("read -n RtkSharp.slnx", ["read", "-n", "RtkSharp.slnx"]),
-        ("wc -l Cargo.toml", ["wc", "-l", "Cargo.toml"]),
-        ("wc README.md", ["wc", "README.md"]),
-        ("find src/cmds/system -name \"*.rs\"", ["find", "src/cmds/system", "-name", "*.rs"]),
-        ("find RtkSharp -type d", ["find", "RtkSharp", "-type", "d"]),
-        ("grep \"fn main\" src/main.rs", ["grep", "fn main", "src/main.rs"]),
-        ("grep -rln \"TokenKind\" RtkSharp/Rewrite", ["grep", "-rln", "TokenKind", "RtkSharp/Rewrite"]),
-        ("grep -C 2 \"PackAsTool\" RtkSharp/RtkSharp.csproj", ["grep", "-C", "2", "PackAsTool", "RtkSharp/RtkSharp.csproj"]),
-        ("tree", ["tree"]),
+        ("ls RtkSharp", ["ls", "RtkSharp"], false),
+        ("ls -la src/cmds/system", ["ls", "-la", "src/cmds/system"], false),
+        ("ls .", ["ls", "."], false),
+        ("read Cargo.toml", ["read", "Cargo.toml"], false),
+        ("read --max-lines 10 README.md", ["read", "--max-lines", "10", "README.md"], false),
+        ("read -n RtkSharp.slnx", ["read", "-n", "RtkSharp.slnx"], false),
+        ("wc -l Cargo.toml", ["wc", "-l", "Cargo.toml"], false),
+        ("wc README.md", ["wc", "README.md"], false),
+        ("find src/cmds/system -name \"*.rs\"", ["find", "src/cmds/system", "-name", "*.rs"], false),
+        ("find RtkSharp -type d", ["find", "RtkSharp", "-type", "d"], false),
+        ("grep \"fn main\" src/main.rs", ["grep", "fn main", "src/main.rs"], false),
+        ("grep -rln \"TokenKind\" RtkSharp/Rewrite", ["grep", "-rln", "TokenKind", "RtkSharp/Rewrite"], true),
+        ("grep -C 2 \"PackAsTool\" RtkSharp/RtkSharp.csproj", ["grep", "-C", "2", "PackAsTool", "RtkSharp/RtkSharp.csproj"], false),
+        ("tree", ["tree"], false),
     ];
 
     [Fact]
@@ -95,7 +97,7 @@ public class SystemParityTests
 
         var results = new List<CommandResult>();
 
-        foreach (var (command, args) in Battery)
+        foreach (var (command, args, allowUnorderedLines) in Battery)
         {
             var (rustOut, rustExit) = await ParityRunner.RunAsync(oraclePath, args, repoRoot, childEnv);
 
@@ -103,7 +105,7 @@ public class SystemParityTests
             var (dotnetOut, dotnetExit) = await ParityRunner.RunAsync(dotnetFileName, dotnetArgs, repoRoot, childEnv);
 
             results.Add(CommandResult.Compare(
-                command, Clean(rustOut), Clean(dotnetOut), rustExit, dotnetExit));
+                command, Clean(rustOut), Clean(dotnetOut), rustExit, dotnetExit, allowUnorderedLines));
         }
 
         var totalLines = results.Sum(r => r.TotalLines);
@@ -342,8 +344,12 @@ public class SystemParityTests
             ?? throw new InvalidOperationException("Could not locate repo root (no Cargo.toml found in any parent directory).");
     }
 
-    /// <summary>The parity outcome for a single battery command.</summary>
-    private sealed record CommandResult(
+    /// <summary>
+    /// The parity outcome for a single battery command. Internal (not private) so
+    /// <c>RtkSharp.ParityTests</c> unit tests in this assembly can construct/compare results
+    /// directly (e.g. exercising the ordering-tolerance branch synthetically).
+    /// </summary>
+    internal sealed record CommandResult(
         string Command,
         int RustExit,
         int DotnetExit,
@@ -369,18 +375,23 @@ public class SystemParityTests
         /// is the longer of the two so extra/missing lines count against parity.
         /// </summary>
         /// <remarks>
-        /// When the two outputs are unequal in index order but equal as sorted line multisets,
-        /// the divergence is pure line reordering with no missing/extra/changed content. The
-        /// only battery command that exhibits this is <c>grep -rln</c>, whose files-with-matches
-        /// list is emitted by ripgrep's parallel directory walker in a run-to-run
-        /// nondeterministic order (verified: the SAME oracle binary flips the order across
-        /// repeated runs). Line order is not part of the files-with-matches contract, so this is
-        /// recorded as an ordering-only deviation and its lines are counted as matched; a
-        /// missing, extra, or altered line would change the multiset and still fail. See
-        /// <c>docs/parity/compatibility-ledger.md</c> → Known Acceptable Differences.
+        /// When <paramref name="allowUnorderedLines"/> is set AND the two outputs are unequal in
+        /// index order but equal as sorted line multisets, the divergence is pure line reordering
+        /// with no missing/extra/changed content. The only battery command this is enabled for is
+        /// <c>grep -rln</c> (see <c>Battery</c>'s <c>AllowUnorderedLines</c> flag), whose
+        /// files-with-matches list is emitted by ripgrep's parallel directory walker in a
+        /// run-to-run nondeterministic order (verified: the SAME oracle binary flips the order
+        /// across repeated runs). Line order is not part of the files-with-matches contract, so
+        /// this is recorded as an ordering-only deviation and its lines are counted as matched;
+        /// a missing, extra, or altered line would change the multiset and still fail. Every
+        /// other battery entry compares strictly in-order — the tolerance does not leak to
+        /// commands whose output order IS part of the contract (e.g. <c>ls</c>, <c>grep -C</c>
+        /// context blocks). See <c>docs/parity/compatibility-ledger.md</c> → Known Acceptable
+        /// Differences.
         /// </remarks>
         public static CommandResult Compare(
-            string command, string rustOut, string dotnetOut, int rustExit, int dotnetExit)
+            string command, string rustOut, string dotnetOut, int rustExit, int dotnetExit,
+            bool allowUnorderedLines)
         {
             var rustLines = rustOut.Length == 0 ? [] : rustOut.Split('\n');
             var dotnetLines = dotnetOut.Length == 0 ? [] : dotnetOut.Split('\n');
@@ -402,8 +413,9 @@ public class SystemParityTests
                 }
             }
 
-            // Ordering-only deviation: identical line multisets, differing only in order.
-            var orderingOnly = matched != total && SortedEqual(rustLines, dotnetLines);
+            // Ordering-only deviation: identical line multisets, differing only in order — only
+            // tolerated for battery entries that opt in via allowUnorderedLines.
+            var orderingOnly = allowUnorderedLines && matched != total && SortedEqual(rustLines, dotnetLines);
             if (orderingOnly)
             {
                 matched = total;
@@ -418,7 +430,13 @@ public class SystemParityTests
             return new CommandResult(command, rustExit, dotnetExit, matched, total, orderingOnly, diffs);
         }
 
-        private static bool SortedEqual(string[] a, string[] b)
+        /// <summary>
+        /// True when <paramref name="a"/> and <paramref name="b"/> contain the same lines as
+        /// multisets (same length, same elements after sorting), regardless of order. Internal
+        /// (not private) so <c>RtkSharp.ParityTests</c> unit tests can exercise the ordering-
+        /// tolerance branch directly without spawning the oracle or RtkSharp binaries.
+        /// </summary>
+        internal static bool SortedEqual(string[] a, string[] b)
         {
             if (a.Length != b.Length)
             {

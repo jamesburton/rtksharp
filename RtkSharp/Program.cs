@@ -60,7 +60,12 @@ internal static class RtkProgram
         return result.ExitCode;
     }
 
-    private static void TrySetUtf8Output()
+    /// <summary>
+    /// Forces <see cref="Console.OutputEncoding"/> to UTF-8 without a byte-order mark.
+    /// Internal (not private) so <c>RtkSharp.Tests</c> can assert the encoding directly
+    /// without depending on the Rust oracle or spawning a child process.
+    /// </summary>
+    internal static void TrySetUtf8Output()
     {
         try
         {
