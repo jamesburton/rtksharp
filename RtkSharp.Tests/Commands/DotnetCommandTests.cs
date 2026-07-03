@@ -231,4 +231,249 @@ public sealed class DotnetCommandTests
 
         Assert.Equal("GITHUB_TOKEN=[REDACTED] rest", scrubbed);
     }
+
+    // ---- ParseTestFromText ----
+
+    // tests/fixtures/dotnet/test_failed.txt failure block (classic VSTest console output).
+    private const string TestFailedConsole =
+        "  Determining projects to restore...\n" +
+        "Starting test execution, please wait...\n" +
+        "[xUnit.net 00:00:00.11]     RtkDotnetSmoke.UnitTest1.Test1 [FAIL]\n" +
+        "  Failed RtkDotnetSmoke.UnitTest1.Test1 [4 ms]\n" +
+        "  Error Message:\n" +
+        "   Assert.Equal() Failure: Values differ\n" +
+        "Expected: 2\n" +
+        "Actual:   3\n" +
+        "  Stack Trace:\n" +
+        "     at RtkDotnetSmoke.UnitTest1.Test1() in /private/tmp/RtkDotnetSmoke/UnitTest1.cs:line 8\n" +
+        "\n" +
+        "Failed!  - Failed:     1, Passed:     0, Skipped:     0, Total:     1, Duration: 13 ms - RtkDotnetSmoke.dll (net10.0)\n";
+
+    [Fact]
+    public void ParseTestFromText_Failure_ExtractsCountsDurationAndFailedTest()
+    {
+        var summary = DotnetCommand.ParseTestFromText(TestFailedConsole);
+
+        Assert.Equal(0, summary.Passed);
+        Assert.Equal(1, summary.Failed);
+        Assert.Equal(0, summary.Skipped);
+        Assert.Equal(1, summary.Total);
+        Assert.Equal("13 ms", summary.DurationText);
+        Assert.Single(summary.FailedTests);
+        Assert.Equal("RtkDotnetSmoke.UnitTest1.Test1", summary.FailedTests[0].Name);
+        Assert.Contains(summary.FailedTests[0].Details, d => d.Contains("Assert.Equal() Failure"));
+    }
+
+    [Fact]
+    public void ParseTestFromText_Success_ExtractsPassedFromResultLine()
+    {
+        const string raw =
+            "Starting test execution, please wait...\n" +
+            "Passed!  - Failed:     0, Passed:   470, Skipped:     0, Total:   470, Duration: 4 s - RtkSharp.Tests.dll (net10.0)\n";
+
+        var summary = DotnetCommand.ParseTestFromText(raw);
+
+        Assert.Equal(470, summary.Passed);
+        Assert.Equal(0, summary.Failed);
+        Assert.Equal(470, summary.Total);
+        Assert.Equal("4 s", summary.DurationText);
+        Assert.Empty(summary.FailedTests);
+    }
+
+    // ---- FormatTestOutput ----
+
+    [Fact]
+    public void FormatTestOutput_AllPass_MatchesOracleShape()
+    {
+        var summary = new TestSummary
+        {
+            Passed = 470,
+            Total = 470,
+            ProjectCount = 1,
+            DurationText = "4.1 s",
+        };
+        var warnings = new List<DotnetCommand.BinlogIssue>
+        {
+            new(string.Empty, string.Empty, 0, 0, "Build warning #1 (details omitted)"),
+        };
+
+        var output = DotnetCommand.FormatTestOutput(summary, new List<DotnetCommand.BinlogIssue>(), warnings);
+
+        Assert.Equal(
+            "Warnings:\n" +
+            "  warning Build warning #1 (details omitted)\n" +
+            "\n" +
+            "ok dotnet test: 470 tests passed, 1 warnings in 1 projects (4.1 s)",
+            output);
+    }
+
+    [Fact]
+    public void FormatTestOutput_Failure_ListsFailedTestAndVerdict()
+    {
+        var summary = new TestSummary
+        {
+            Passed = 1,
+            Failed = 1,
+            Skipped = 1,
+            Total = 3,
+            ProjectCount = 1,
+            DurationText = "76 ms",
+            FailedTests =
+            {
+                new FailedTest
+                {
+                    Name = "FailProj.Tests.FailingTest",
+                    Details = { "Assert.Equal() Failure: Values differ", "at FailProj.Tests.FailingTest()" },
+                },
+            },
+        };
+
+        var output = DotnetCommand.FormatTestOutput(summary, new List<DotnetCommand.BinlogIssue>(), new List<DotnetCommand.BinlogIssue>());
+
+        Assert.Equal(
+            "Failed Tests:\n" +
+            "  FailProj.Tests.FailingTest\n" +
+            "    Assert.Equal() Failure: Values differ\n" +
+            "    at FailProj.Tests.FailingTest()\n" +
+            "\n" +
+            "\n" +
+            "fail dotnet test: 1 passed, 1 failed, 1 skipped, 0 warnings in 1 projects (76 ms)",
+            output);
+    }
+
+    // ---- TestNeedsRawFallback ----
+
+    [Fact]
+    public void TestNeedsRawFallback_CompleteFailureDetail_IsFalse()
+    {
+        var summary = new TestSummary
+        {
+            Failed = 1,
+            FailedTests = { new FailedTest { Name = "T", Details = { "boom" } } },
+        };
+
+        Assert.False(DotnetCommand.TestNeedsRawFallback(summary));
+    }
+
+    [Fact]
+    public void TestNeedsRawFallback_NoParsedFailures_IsTrue()
+    {
+        var summary = new TestSummary { Failed = 2 };
+
+        Assert.True(DotnetCommand.TestNeedsRawFallback(summary));
+    }
+
+    [Fact]
+    public void TestNeedsRawFallback_FailureWithoutDetail_IsTrue()
+    {
+        var summary = new TestSummary
+        {
+            Failed = 1,
+            FailedTests = { new FailedTest { Name = "T" } },
+        };
+
+        Assert.True(DotnetCommand.TestNeedsRawFallback(summary));
+    }
+
+    // ---- BuildEffectiveTestArgs ----
+
+    [Fact]
+    public void BuildEffectiveTestArgs_Classic_InjectsLoggerAndResultsDir()
+    {
+        var effective = DotnetCommand.BuildEffectiveTestArgs(
+            new[] { "RtkSharp.Tests" }, TestRunnerMode.Classic, "/tmp/rd");
+
+        Assert.Equal(
+            new[] { "-nologo", "--logger", "trx", "--results-directory", "/tmp/rd", "RtkSharp.Tests" },
+            effective);
+    }
+
+    [Fact]
+    public void BuildEffectiveTestArgs_Classic_RespectsUserLoggerAndResultsDir()
+    {
+        var effective = DotnetCommand.BuildEffectiveTestArgs(
+            new[] { "--logger", "trx", "--results-directory", "mine", "proj.csproj" },
+            TestRunnerMode.Classic,
+            "/tmp/rd");
+
+        Assert.Equal(
+            new[] { "-nologo", "--logger", "trx", "--results-directory", "mine", "proj.csproj" },
+            effective);
+    }
+
+    [Fact]
+    public void BuildEffectiveTestArgs_MtpNative_InjectsReportTrxAndSkipsNoLogo()
+    {
+        var effective = DotnetCommand.BuildEffectiveTestArgs(
+            new[] { "proj.csproj" }, TestRunnerMode.MtpNative, null);
+
+        Assert.Equal(new[] { "--report-trx", "proj.csproj" }, effective);
+    }
+
+    [Fact]
+    public void BuildEffectiveTestArgs_MtpVsTestBridge_InjectsReportTrxAfterSeparator()
+    {
+        var effective = DotnetCommand.BuildEffectiveTestArgs(
+            new[] { "proj.csproj" }, TestRunnerMode.MtpVsTestBridge, null);
+
+        Assert.Equal(new[] { "-nologo", "proj.csproj", "--", "--report-trx" }, effective);
+    }
+
+    [Fact]
+    public void BuildEffectiveTestArgs_DoesNotInjectBinlog()
+    {
+        var effective = DotnetCommand.BuildEffectiveTestArgs(
+            Array.Empty<string>(), TestRunnerMode.Classic, "/tmp/rd");
+
+        Assert.DoesNotContain(effective, arg => arg.StartsWith("-bl", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ---- DetectTestRunnerMode ----
+
+    [Fact]
+    public void DetectTestRunnerMode_PlainProject_IsClassic()
+    {
+        // A non-existent, plain project path exercises no MTP property; expect Classic VSTest.
+        Assert.Equal(TestRunnerMode.Classic, DotnetCommand.DetectTestRunnerMode(new[] { "Nonexistent.csproj" }));
+    }
+
+    // ---- MergeTestSummaryFromTrx ----
+
+    [Fact]
+    public void MergeTestSummaryFromTrx_TrxOverridesTextCounts()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "rtk_merge_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            File.WriteAllText(
+                Path.Combine(dir, "r.trx"),
+                "<TestRun>\n" +
+                "  <Times start=\"2026-02-21T12:00:00.0000000+00:00\" finish=\"2026-02-21T12:00:04.0000000+00:00\" />\n" +
+                "  <Counters total=\"470\" executed=\"470\" passed=\"470\" failed=\"0\" />\n" +
+                "</TestRun>");
+
+            var textSummary = new TestSummary { Passed = 0, Total = 0, ProjectCount = 1 };
+            var merged = DotnetCommand.MergeTestSummaryFromTrx(textSummary, dir, null, DateTime.UtcNow.AddMinutes(-5));
+
+            Assert.Equal(470, merged.Total);
+            Assert.Equal(470, merged.Passed);
+            Assert.Equal("4.0 s", merged.DurationText);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void MergeTestSummaryFromTrx_NoTrx_ReturnsInputUnchanged()
+    {
+        var textSummary = new TestSummary { Passed = 5, Total = 5, ProjectCount = 1 };
+
+        var merged = DotnetCommand.MergeTestSummaryFromTrx(textSummary, null, null, DateTime.UtcNow);
+
+        Assert.Equal(5, merged.Passed);
+        Assert.Equal(5, merged.Total);
+    }
 }

@@ -1,5 +1,8 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
 using RtkSharp.Core;
 using RtkSharp.Execution;
 
@@ -37,6 +40,28 @@ namespace RtkSharp.Commands.Dotnet;
 /// lost without binlog" statement above still holds for non-drive-letter paths.
 /// </para>
 /// </remarks>
+/// <summary>
+/// How the targeted test project(s) run tests — determines which TRX-reporting flags to inject.
+/// Ported from Rust's <c>TestRunnerMode</c> in <c>dotnet_cmd.rs</c>.
+/// </summary>
+internal enum TestRunnerMode
+{
+    /// <summary>Classic VSTest runner. Inject <c>--logger trx --results-directory</c>.</summary>
+    Classic,
+
+    /// <summary>
+    /// Native Microsoft.Testing.Platform runner (global.json MTP mode). <c>--logger trx</c> breaks
+    /// the run; inject <c>--report-trx</c> directly.
+    /// </summary>
+    MtpNative,
+
+    /// <summary>
+    /// VSTest bridge for MTP (project-file / <c>Directory.Build.props</c> properties). MTP args must
+    /// come after the <c>--</c> separator; inject <c>-- --report-trx</c>.
+    /// </summary>
+    MtpVsTestBridge,
+}
+
 public static class DotnetCommand
 {
     private const string DotnetCliUiLanguage = "DOTNET_CLI_UI_LANGUAGE";
@@ -46,6 +71,13 @@ public static class DotnetCommand
     // caps, distinct from RtkSharp.Core.TruncationCaps' per-category defaults.
     private const int CapBuildErrors = 20;
     private const int CapBuildWarnings = 10;
+
+    // Rust format_test_output uses CAP_WARNINGS (=10) for MAX_DOTNET_FAILURES, MAX_TEST_ERRORS,
+    // and MAX_TEST_WARNINGS alike.
+    private const int CapTestSection = 10;
+
+    // Bound on failure-detail lines kept per test, matching truncate(detail, 320) in Rust.
+    private const int TestDetailTruncate = 320;
 
     private const string PlaceholderMessage = "diagnostic without message";
 
@@ -95,6 +127,25 @@ public static class DotnetCommand
 
     private static readonly Regex ProjectPathRegex = new(
         @"^\s*([A-Za-z]:)?[^\r\n]*\.csproj(?:\s|$)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    // --- test-output regexes ported verbatim from binlog.rs's lazy_static! block ---
+
+    // TEST_RESULT_RE (binlog.rs:74): the VSTest per-project summary line
+    // "Passed!/Failed!  - Failed: N, Passed: N, Skipped: N, Total: N, Duration: <text>".
+    private static readonly Regex TestResultRegex = new(
+        @"(?:Passed!|Failed!)\s*-\s*Failed:\s*(?<failed>\d+),\s*Passed:\s*(?<passed>\d+),\s*Skipped:\s*(?<skipped>\d+),\s*Total:\s*(?<total>\d+),\s*Duration:\s*(?<duration>[^\r\n-]+)",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    // TEST_SUMMARY_RE (binlog.rs:78): the MTP-style "Test summary: total: N, failed: N,
+    // succeeded/passed: N, skipped: N, duration: <text>" line.
+    private static readonly Regex TestSummaryLineRegex = new(
+        @"^\s*Test summary:\s*total:\s*(?<total>\d+),\s*failed:\s*(?<failed>\d+),\s*(?:succeeded|passed):\s*(?<passed>\d+),\s*skipped:\s*(?<skipped>\d+),\s*duration:\s*(?<duration>[^\r\n]+)$",
+        RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // FAILED_TEST_HEAD_RE (binlog.rs:82): "  Failed <Name> [<duration>]" heading emitted by VSTest.
+    private static readonly Regex FailedTestHeadRegex = new(
+        @"^\s*Failed\s+(?<name>[^\r\n\[]+)\s+\[[^\]\r\n]+\]\s*$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
     private static readonly Regex SensitiveEnvRegex = BuildSensitiveEnvRegex();
@@ -149,8 +200,7 @@ public static class DotnetCommand
         {
             "build" => await RunTextFilteredAsync("build", rest, executor).ConfigureAwait(false),
             "restore" => await RunTextFilteredAsync("restore", rest, executor).ConfigureAwait(false),
-            // TODO Task 2: replace with a real run_test port (TRX parsing).
-            "test" => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
+            "test" => await RunTestAsync(rest, executor).ConfigureAwait(false),
             // TODO Task 3: replace with a real run_format port (format-report parsing).
             "format" => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
             _ => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
@@ -196,7 +246,7 @@ public static class DotnetCommand
         }
 
         // Build/restore always request the raw fallback on failure (needs_raw_fallback = true).
-        var outputToPrint = ComposeFailureOutput(commandSuccess, result.Stdout, result.Stderr, filtered);
+        var outputToPrint = ComposeFailureOutput(commandSuccess, needsRawFallback: true, result.Stdout, result.Stderr, filtered);
 
         // Rust println! terminates with "\n"; Console.WriteLine would emit Environment.NewLine.
         Console.Out.Write(outputToPrint + "\n");
@@ -223,6 +273,793 @@ public static class DotnetCommand
         Console.Error.Write(result.Stderr);
         return result.ExitCode;
     }
+
+    // --- test path (ported from run_dotnet_with_binlog's "test" arm in dotnet_cmd.rs) ---
+
+    private static long testTempCounter;
+
+    /// <summary>
+    /// Runs <c>dotnet test</c>, injects a TRX logger + isolated results directory (Classic VSTest)
+    /// or the equivalent MTP flags, then prints a compact pass/fail summary with failed-test detail
+    /// parsed from the resulting TRX. Ports the <c>"test"</c> arm of Rust's
+    /// <c>run_dotnet_with_binlog</c> plus <c>run_test</c>.
+    /// </summary>
+    /// <remarks>
+    /// <b>Binlog deferral.</b> For <c>test</c>, Rust only expects a binlog when the user explicitly
+    /// passes <c>-bl</c> (<c>should_expect_binlog = has_binlog_arg(args)</c>). The default path — the
+    /// one this port implements — never injects <c>-bl</c> and relies entirely on the console text
+    /// parser plus TRX. Binlog-enhanced diagnostics are therefore not lost relative to the default
+    /// oracle behavior. See the task report.
+    /// </remarks>
+    private static async Task<int> RunTestAsync(string[] rest, IProcessExecutor executor)
+    {
+        var (resultsDir, cleanupResultsDir) = ResolveTrxResultsDir(rest);
+        var runnerMode = DetectTestRunnerMode(rest);
+
+        var invocation = new List<string> { "test" };
+        invocation.AddRange(BuildEffectiveTestArgs(rest, runnerMode, resultsDir));
+
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [DotnetCliUiLanguage] = DotnetCliUiLanguageValue,
+        };
+
+        var commandStartedAt = DateTime.UtcNow;
+        var result = await executor
+            .ExecuteAsync(new ExecutionRequest("dotnet", invocation, Environment: environment, CaptureMode: ExecutionCaptureMode.Separate))
+            .ConfigureAwait(false);
+
+        var raw = result.Stdout + "\n" + result.Stderr;
+        var commandSuccess = result.ExitCode == 0;
+
+        string filtered;
+        bool needsRawFallback;
+        try
+        {
+            // Binlog path deferred: parsed_summary starts empty and the text parser fills it.
+            var rawSummary = ParseTestFromText(raw);
+            var merged = MergeTestSummaries(new TestSummary(), rawSummary);
+            var summary = MergeTestSummaryFromTrx(
+                merged,
+                resultsDir,
+                DotnetTrx.FindRecentTrxInTestResults(),
+                commandStartedAt);
+            summary = NormalizeTestSummary(summary, commandSuccess);
+
+            // Build diagnostics carried alongside test results come from the text parser only
+            // (binlog deferred).
+            var testBuildSummary = ParseBuildFromText(raw);
+
+            needsRawFallback = TestNeedsRawFallback(summary);
+            filtered = FormatTestOutput(summary, testBuildSummary.Errors, testBuildSummary.Warnings);
+        }
+        catch (Exception ex)
+        {
+            // Mandatory fallback contract: a filter must never crash or hide output.
+            Console.Error.Write($"rtk: filter warning: {ex.Message}\n");
+            Console.Out.Write(result.Stdout);
+            Console.Error.Write(result.Stderr);
+            CleanupResultsDir(cleanupResultsDir, resultsDir);
+            return result.ExitCode;
+        }
+
+        var outputToPrint = ComposeFailureOutput(commandSuccess, needsRawFallback, result.Stdout, result.Stderr, filtered);
+        Console.Out.Write(outputToPrint + "\n");
+
+        CleanupResultsDir(cleanupResultsDir, resultsDir);
+        return result.ExitCode;
+    }
+
+    /// <summary>
+    /// Resolves the TRX results directory for a <c>dotnet test</c> run: honors an explicit
+    /// <c>--results-directory</c> (no cleanup), otherwise mints an isolated temp directory that
+    /// should be cleaned up afterwards. Ports Rust's <c>resolve_trx_results_dir</c>.
+    /// </summary>
+    private static (string? Dir, bool Cleanup) ResolveTrxResultsDir(string[] args)
+    {
+        var userDir = ExtractResultsDirectoryArg(args);
+        if (userDir is not null)
+        {
+            return (userDir, false);
+        }
+
+        return (BuildTrxResultsDir(), true);
+    }
+
+    private static string BuildTrxResultsDir() =>
+        Path.Combine(Path.GetTempPath(), $"rtk_dotnet_testresults_{UniqueTempSuffix()}");
+
+    private static string UniqueTempSuffix()
+    {
+        var ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var pid = Environment.ProcessId;
+        var seq = Interlocked.Increment(ref testTempCounter) - 1;
+        return $"{ts:x}{pid:x}{seq:x}";
+    }
+
+    private static void CleanupResultsDir(bool cleanup, string? dir)
+    {
+        if (!cleanup || dir is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (Directory.Exists(dir))
+            {
+                Directory.Delete(dir, recursive: true);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort cleanup — a leftover temp directory must never fail the command.
+        }
+    }
+
+    /// <summary>
+    /// Builds the effective <c>dotnet test</c> arguments, injecting the TRX-reporting flags that
+    /// match the detected runner mode. Ports the <c>test</c> branch of Rust's
+    /// <c>build_effective_dotnet_args</c> (binlog injection deferred).
+    /// </summary>
+    /// <param name="args">The user-supplied arguments (after the <c>test</c> subcommand).</param>
+    /// <param name="mode">The detected test runner mode.</param>
+    /// <param name="resultsDir">The TRX results directory to inject (Classic mode only).</param>
+    /// <returns>The effective argument list.</returns>
+    internal static List<string> BuildEffectiveTestArgs(string[] args, TestRunnerMode mode, string? resultsDir)
+    {
+        var effective = new List<string>();
+
+        // -bl (binlog) and -v:minimal are non-test-only in Rust; skipped for test.
+
+        // --nologo: skipped for MtpNative — args pass directly to the MTP runtime.
+        if (mode != TestRunnerMode.MtpNative && !HasNoLogoArg(args))
+        {
+            effective.Add("-nologo");
+        }
+
+        switch (mode)
+        {
+            case TestRunnerMode.Classic:
+                if (!HasTrxLoggerArg(args))
+                {
+                    effective.Add("--logger");
+                    effective.Add("trx");
+                }
+
+                if (!HasResultsDirectoryArg(args) && resultsDir is not null)
+                {
+                    effective.Add("--results-directory");
+                    effective.Add(resultsDir);
+                }
+
+                effective.AddRange(args);
+                break;
+
+            case TestRunnerMode.MtpNative:
+                if (!HasReportTrxArg(args))
+                {
+                    effective.Add("--report-trx");
+                }
+
+                effective.AddRange(args);
+                break;
+
+            case TestRunnerMode.MtpVsTestBridge:
+                if (!HasReportTrxArg(args))
+                {
+                    effective.AddRange(InjectReportTrxIntoArgs(args));
+                }
+                else
+                {
+                    effective.AddRange(args);
+                }
+
+                break;
+        }
+
+        return effective;
+    }
+
+    // --- test arg predicates (ported from dotnet_cmd.rs) ---
+
+    private static bool HasTrxLoggerArg(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var lower = args[i].ToLowerInvariant();
+            if (lower == "--logger")
+            {
+                if (i + 1 < args.Length)
+                {
+                    var next = args[i + 1].ToLowerInvariant();
+                    if (next == "trx" || next.StartsWith("trx;", StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+
+                continue;
+            }
+
+            foreach (var prefix in new[] { "--logger:", "--logger=" })
+            {
+                if (lower.StartsWith(prefix, StringComparison.Ordinal))
+                {
+                    var value = lower[prefix.Length..];
+                    if (value == "trx" || value.StartsWith("trx;", StringComparison.Ordinal))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasResultsDirectoryArg(string[] args) => args.Any(arg =>
+    {
+        var lower = arg.ToLowerInvariant();
+        return lower == "--results-directory" || lower.StartsWith("--results-directory=", StringComparison.Ordinal);
+    });
+
+    private static bool HasReportTrxArg(string[] args) =>
+        args.Any(a => a.Equals("--report-trx", StringComparison.OrdinalIgnoreCase));
+
+    private static string? ExtractResultsDirectoryArg(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg.Equals("--results-directory", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < args.Length)
+                {
+                    return args[i + 1];
+                }
+
+                continue;
+            }
+
+            var eq = arg.IndexOf('=', StringComparison.Ordinal);
+            if (eq >= 0 && arg[..eq].Equals("--results-directory", StringComparison.OrdinalIgnoreCase))
+            {
+                return arg[(eq + 1)..];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Injects <c>--report-trx</c> after the <c>--</c> separator, or appends <c>-- --report-trx</c>
+    /// if there is none. Ports Rust's <c>inject_report_trx_into_args</c>.
+    /// </summary>
+    private static List<string> InjectReportTrxIntoArgs(string[] args)
+    {
+        var result = new List<string>(args);
+        var sep = result.IndexOf("--");
+        if (sep >= 0)
+        {
+            result.Insert(sep + 1, "--report-trx");
+        }
+        else
+        {
+            result.Add("--");
+            result.Add("--report-trx");
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Detects which test runner the targeted project(s) use, mirroring Rust's
+    /// <c>detect_test_runner_mode</c>. Priority: <c>global.json</c> native MTP mode &gt;
+    /// project-file / <c>Directory.Build.props</c> VSTest-bridge MTP &gt; Classic VSTest.
+    /// </summary>
+    /// <param name="args">The user-supplied test arguments (scanned for explicit project paths).</param>
+    /// <returns>The detected runner mode.</returns>
+    internal static TestRunnerMode DetectTestRunnerMode(string[] args)
+    {
+        if (IsGlobalJsonMtpMode())
+        {
+            return TestRunnerMode.MtpNative;
+        }
+
+        string[] projectExtensions = { "csproj", "fsproj", "vbproj" };
+
+        var explicitProjects = args
+            .Where(a =>
+            {
+                var lower = a.ToLowerInvariant();
+                return projectExtensions.Any(ext => lower.EndsWith($".{ext}", StringComparison.Ordinal));
+            })
+            .ToList();
+
+        var foundBridge = false;
+
+        if (explicitProjects.Count > 0)
+        {
+            foreach (var project in explicitProjects)
+            {
+                if (ScanIsVsTestBridge(project))
+                {
+                    foundBridge = true;
+                }
+            }
+        }
+        else
+        {
+            try
+            {
+                foreach (var entry in Directory.EnumerateFiles("."))
+                {
+                    var name = Path.GetFileName(entry).ToLowerInvariant();
+                    if (projectExtensions.Any(ext => name.EndsWith($".{ext}", StringComparison.Ordinal))
+                        && ScanIsVsTestBridge(entry))
+                    {
+                        foundBridge = true;
+                    }
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Directory unreadable — fall through to the Directory.Build.props / Classic checks.
+            }
+        }
+
+        if (foundBridge)
+        {
+            return TestRunnerMode.MtpVsTestBridge;
+        }
+
+        try
+        {
+            var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
+            while (dir is not null)
+            {
+                var props = Path.Combine(dir.FullName, "Directory.Build.props");
+                if (File.Exists(props))
+                {
+                    return ScanIsVsTestBridge(props)
+                        ? TestRunnerMode.MtpVsTestBridge
+                        : TestRunnerMode.Classic;
+                }
+
+                dir = dir.Parent;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Ignore — default to Classic.
+        }
+
+        return TestRunnerMode.Classic;
+    }
+
+    private static bool IsGlobalJsonMtpMode()
+    {
+        try
+        {
+            var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
+            while (dir is not null)
+            {
+                var path = Path.Combine(dir.FullName, "global.json");
+                if (File.Exists(path))
+                {
+                    return ParseGlobalJsonMtpMode(path); // stop at first global.json found
+                }
+
+                dir = dir.Parent;
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Ignore — treat as non-MTP.
+        }
+
+        return false;
+    }
+
+    private static bool ParseGlobalJsonMtpMode(string path)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(path));
+            if (doc.RootElement.TryGetProperty("test", out var test)
+                && test.TryGetProperty("runner", out var runner)
+                && runner.ValueKind == JsonValueKind.String)
+            {
+                return string.Equals(runner.GetString(), "Microsoft.Testing.Platform", StringComparison.OrdinalIgnoreCase);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            // Malformed or unreadable global.json — treat as non-MTP.
+        }
+
+        return false;
+    }
+
+    private static readonly string[] VsTestBridgeProperties =
+    {
+        "usemicrosofttestingplatformrunner",
+        "usetestingplatformrunner",
+        "testingplatformdotnettestsupport",
+    };
+
+    /// <summary>
+    /// Scans an MSBuild file for an MTP VSTest-bridge property set to <c>true</c>. Ports Rust's
+    /// <c>scan_mtp_kind_in_file</c> (returns whether the file declares a bridge property).
+    /// </summary>
+    private static bool ScanIsVsTestBridge(string path)
+    {
+        string content;
+        try
+        {
+            content = File.ReadAllText(path);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            return false;
+        }
+
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Parse(content);
+        }
+        catch (XmlException)
+        {
+            return false;
+        }
+
+        return doc.Descendants().Any(e =>
+            VsTestBridgeProperties.Contains(e.Name.LocalName.ToLowerInvariant())
+            && e.Value.Trim().Equals("true", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // --- test text parsing (ported from binlog.rs parse_test_from_text) ---
+
+    /// <summary>
+    /// Parses the console text of a <c>dotnet test</c> run into a <see cref="TestSummary"/>. Ports
+    /// Rust's <c>parse_test_from_text</c>: the VSTest per-project result line, the MTP
+    /// <c>Test summary:</c> line (last wins), and <c>Failed &lt;name&gt; [..]</c> failure blocks.
+    /// </summary>
+    /// <param name="raw">The combined stdout+stderr from <c>dotnet test</c>.</param>
+    /// <returns>The parsed summary.</returns>
+    internal static TestSummary ParseTestFromText(string raw)
+    {
+        var text = raw.Replace("\r\n", "\n");
+        var clean = Utils.StripAnsi(text);
+        var scrubbed = ScrubSensitiveEnvVars(clean);
+
+        var summary = new TestSummary
+        {
+            ProjectCount = Math.Max(CountProjects(scrubbed), 1),
+            DurationText = ExtractDuration(scrubbed),
+        };
+
+        var foundSummaryLine = false;
+        string? fallbackDuration = null;
+        foreach (Match m in TestResultRegex.Matches(scrubbed))
+        {
+            foundSummaryLine = true;
+            summary.Passed += ParseIntOrZero(m.Groups["passed"].Value);
+            summary.Failed += ParseIntOrZero(m.Groups["failed"].Value);
+            summary.Skipped += ParseIntOrZero(m.Groups["skipped"].Value);
+            summary.Total += ParseIntOrZero(m.Groups["total"].Value);
+
+            if (m.Groups["duration"].Success)
+            {
+                fallbackDuration = m.Groups["duration"].Value.Trim();
+            }
+        }
+
+        if (foundSummaryLine && summary.DurationText is null)
+        {
+            summary.DurationText = fallbackDuration;
+        }
+
+        Match? last = null;
+        foreach (Match m in TestSummaryLineRegex.Matches(scrubbed))
+        {
+            last = m;
+        }
+
+        if (last is not null)
+        {
+            summary.Passed = ParseIntOrDefault(last.Groups["passed"].Value, summary.Passed);
+            summary.Failed = ParseIntOrDefault(last.Groups["failed"].Value, summary.Failed);
+            summary.Skipped = ParseIntOrDefault(last.Groups["skipped"].Value, summary.Skipped);
+            summary.Total = ParseIntOrDefault(last.Groups["total"].Value, summary.Total);
+
+            if (last.Groups["duration"].Success)
+            {
+                summary.DurationText = last.Groups["duration"].Value.Trim();
+            }
+        }
+
+        var lines = scrubbed.Split('\n');
+        var idx = 0;
+        while (idx < lines.Length)
+        {
+            var headMatch = FailedTestHeadRegex.Match(lines[idx]);
+            if (headMatch.Success)
+            {
+                var name = headMatch.Groups["name"].Success
+                    ? headMatch.Groups["name"].Value.Trim()
+                    : "unknown";
+                var details = new List<string>();
+                idx += 1;
+                while (idx < lines.Length)
+                {
+                    var detailLine = lines[idx].TrimEnd();
+                    if (FailedTestHeadRegex.IsMatch(detailLine))
+                    {
+                        idx = Math.Max(0, idx - 1);
+                        break;
+                    }
+
+                    var detailTrimmed = detailLine.TrimStart();
+                    if (detailTrimmed.StartsWith("Failed!  -", StringComparison.Ordinal)
+                        || detailTrimmed.StartsWith("Passed!  -", StringComparison.Ordinal)
+                        || detailTrimmed.StartsWith("Test summary:", StringComparison.Ordinal)
+                        || detailTrimmed.StartsWith("Build ", StringComparison.Ordinal))
+                    {
+                        idx = Math.Max(0, idx - 1);
+                        break;
+                    }
+
+                    if (detailLine.Trim().Length == 0)
+                    {
+                        if (details.Count > 0)
+                        {
+                            details.Add(string.Empty);
+                        }
+                    }
+                    else
+                    {
+                        details.Add(detailLine.Trim());
+                    }
+
+                    if (details.Count >= 20)
+                    {
+                        break;
+                    }
+
+                    idx += 1;
+                }
+
+                summary.FailedTests.Add(new FailedTest { Name = name, Details = details });
+            }
+
+            idx += 1;
+        }
+
+        if (summary.Failed == 0)
+        {
+            summary.Failed = summary.FailedTests.Count;
+        }
+
+        if (summary.Total == 0)
+        {
+            summary.Total = summary.Passed + summary.Failed + summary.Skipped;
+        }
+
+        return summary;
+    }
+
+    // --- test merge / normalize (ported from dotnet_cmd.rs) ---
+
+    private static TestSummary MergeTestSummaries(TestSummary binlogSummary, TestSummary rawSummary)
+    {
+        if (binlogSummary.Total == 0 && rawSummary.Total > 0)
+        {
+            binlogSummary.Passed = rawSummary.Passed;
+            binlogSummary.Failed = rawSummary.Failed;
+            binlogSummary.Skipped = rawSummary.Skipped;
+            binlogSummary.Total = rawSummary.Total;
+        }
+
+        if (rawSummary.FailedTests.Count > 0)
+        {
+            binlogSummary.FailedTests = rawSummary.FailedTests;
+        }
+
+        if (binlogSummary.ProjectCount == 0)
+        {
+            binlogSummary.ProjectCount = rawSummary.ProjectCount;
+        }
+
+        binlogSummary.DurationText ??= rawSummary.DurationText;
+
+        return binlogSummary;
+    }
+
+    /// <summary>
+    /// Overlays authoritative TRX counts/failures/duration onto a text-parsed summary. Ports Rust's
+    /// <c>merge_test_summary_from_trx</c>: prefers the isolated results directory (filtered by run
+    /// start time, then unfiltered), then a fallback <c>./TestResults</c> TRX.
+    /// </summary>
+    internal static TestSummary MergeTestSummaryFromTrx(
+        TestSummary summary,
+        string? trxResultsDir,
+        string? fallbackTrxPath,
+        DateTime commandStartedAt)
+    {
+        TestSummary? trxSummary = null;
+
+        if (trxResultsDir is not null && Directory.Exists(trxResultsDir))
+        {
+            trxSummary = DotnetTrx.ParseTrxFilesInDirSince(trxResultsDir, commandStartedAt)
+                ?? DotnetTrx.ParseTrxFilesInDir(trxResultsDir);
+        }
+
+        if (trxSummary is null && fallbackTrxPath is not null)
+        {
+            trxSummary = DotnetTrx.ParseTrxFileSince(fallbackTrxPath, commandStartedAt);
+        }
+
+        if (trxSummary is null)
+        {
+            return summary;
+        }
+
+        if (trxSummary.Total > 0 && (summary.Total == 0 || trxSummary.Total >= summary.Total))
+        {
+            summary.Passed = trxSummary.Passed;
+            summary.Failed = trxSummary.Failed;
+            summary.Skipped = trxSummary.Skipped;
+            summary.Total = trxSummary.Total;
+        }
+
+        if (summary.FailedTests.Count == 0 && trxSummary.FailedTests.Count > 0)
+        {
+            summary.FailedTests = trxSummary.FailedTests;
+        }
+
+        if (trxSummary.DurationText is not null)
+        {
+            summary.DurationText = trxSummary.DurationText;
+        }
+
+        if (trxSummary.ProjectCount > summary.ProjectCount)
+        {
+            summary.ProjectCount = trxSummary.ProjectCount;
+        }
+
+        return summary;
+    }
+
+    private static TestSummary NormalizeTestSummary(TestSummary summary, bool commandSuccess)
+    {
+        if (!commandSuccess && summary.Failed == 0 && summary.FailedTests.Count == 0)
+        {
+            summary.Failed = 1;
+            if (summary.Total == 0)
+            {
+                summary.Total = 1;
+            }
+        }
+
+        if (commandSuccess && summary.Total == 0 && summary.Passed == 0)
+        {
+            summary.ProjectCount = Math.Max(summary.ProjectCount, 1);
+        }
+
+        return summary;
+    }
+
+    /// <summary>
+    /// Decides whether the raw stdout/stderr should be prepended ahead of the filtered summary on a
+    /// failing test run. Ports Rust's <c>test_needs_raw_fallback</c>: keep the raw fallback only when
+    /// the structured <c>Failed Tests:</c> section can't stand on its own (no failures parsed, fewer
+    /// parsed failures than the failed count, or a parsed failure with no detail).
+    /// </summary>
+    internal static bool TestNeedsRawFallback(TestSummary summary) =>
+        summary.FailedTests.Count == 0
+        || summary.FailedTests.Count < summary.Failed
+        || summary.FailedTests.Any(t => t.Details.Count == 0);
+
+    // --- test formatting (ported from format_test_output in dotnet_cmd.rs) ---
+
+    /// <summary>
+    /// Formats a test summary for stdout: a failed-tests section, build warnings/errors sections, and
+    /// a trailing verdict line (emitted last so tail readers get a definitive result). Ports Rust's
+    /// <c>format_test_output</c>.
+    /// </summary>
+    /// <param name="summary">The merged test summary.</param>
+    /// <param name="errors">Build errors captured alongside the test run.</param>
+    /// <param name="warnings">Build warnings captured alongside the test run.</param>
+    /// <returns>The filtered summary string (no trailing newline).</returns>
+    internal static string FormatTestOutput(TestSummary summary, List<BinlogIssue> errors, List<BinlogIssue> warnings)
+    {
+        var hasFailures = summary.Failed > 0 || summary.FailedTests.Count > 0;
+        var statusIcon = hasFailures ? "fail" : "ok";
+        var duration = summary.DurationText ?? "unknown";
+        var warningCount = warnings.Count;
+        var countsUnavailable = summary.Passed == 0
+            && summary.Failed == 0
+            && summary.Skipped == 0
+            && summary.Total == 0
+            && summary.FailedTests.Count == 0;
+
+        string header;
+        if (countsUnavailable)
+        {
+            header =
+                $"{statusIcon} dotnet test: completed (binlog-only mode, counts unavailable, {warningCount} warnings) ({duration})";
+        }
+        else if (hasFailures)
+        {
+            header =
+                $"{statusIcon} dotnet test: {summary.Passed} passed, {summary.Failed} failed, {summary.Skipped} skipped, {warningCount} warnings in {summary.ProjectCount} projects ({duration})";
+        }
+        else
+        {
+            header =
+                $"{statusIcon} dotnet test: {summary.Passed} tests passed, {warningCount} warnings in {summary.ProjectCount} projects ({duration})";
+        }
+
+        var failedSection = FormatFailedTestsSection(summary, hasFailures);
+        var warningsSection = FormatIssueSection(warnings, "warning", "Warnings:", CapTestSection, "dotnet-test-warnings");
+        var errorsSection = FormatIssueSection(errors, "error", "Errors:", CapTestSection, "dotnet-test-errors");
+
+        // Warnings before errors so errors survive `| tail -N` immediately above the verdict;
+        // verdict last so tail readers always get a definitive result. See issue #1574.
+        return JoinNonEmpty(failedSection, warningsSection, errorsSection, header);
+    }
+
+    private static string FormatFailedTestsSection(TestSummary summary, bool hasFailures)
+    {
+        if (!hasFailures || summary.FailedTests.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("Failed Tests:\n");
+
+        foreach (var failed in summary.FailedTests.Take(CapTestSection))
+        {
+            builder.Append("  ").Append(failed.Name).Append('\n');
+            foreach (var detail in failed.Details)
+            {
+                builder.Append("    ").Append(Truncate(detail, TestDetailTruncate)).Append('\n');
+            }
+
+            builder.Append('\n');
+        }
+
+        if (summary.FailedTests.Count > CapTestSection)
+        {
+            builder.Append($"… +{summary.FailedTests.Count - CapTestSection} more failed tests\n");
+            var allFailed = string.Join(
+                "\n\n",
+                summary.FailedTests.Skip(CapTestSection).Select(t =>
+                {
+                    var sb = new StringBuilder(t.Name);
+                    foreach (var detail in t.Details)
+                    {
+                        sb.Append("\n  ").Append(Truncate(detail, TestDetailTruncate));
+                    }
+
+                    return sb.ToString();
+                }));
+            var hint = Tee.ForceTeeHint(allFailed, "dotnet-test-failures");
+            if (hint is not null)
+            {
+                builder.Append($"  {hint}\n");
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static int ParseIntOrDefault(string value, int fallback) =>
+        int.TryParse(value, out var result) ? result : fallback;
 
     /// <summary>
     /// Computes the effective <c>dotnet</c> arguments, injecting the text-shaping flags
@@ -640,9 +1477,9 @@ public static class DotnetCommand
     /// stdout (or stderr) is prepended so nothing is lost. Ports Rust's
     /// <c>compose_failure_output</c> with <c>needs_raw_fallback = true</c> (build/restore).
     /// </summary>
-    private static string ComposeFailureOutput(bool commandSuccess, string stdout, string stderr, string filtered)
+    private static string ComposeFailureOutput(bool commandSuccess, bool needsRawFallback, string stdout, string stderr, string filtered)
     {
-        if (commandSuccess)
+        if (commandSuccess || !needsRawFallback)
         {
             return filtered;
         }
