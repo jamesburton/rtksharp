@@ -15,21 +15,20 @@ namespace RtkSharp.ParityTests;
 /// engine) is exercised, not just the engine layer.
 /// </para>
 /// <para>
-/// <b>Config isolation (Windows blocker).</b> The Rust oracle loads the developer's
-/// <c>~/.claude/settings.json</c> permission rules and <c>~/.config/rtk/config.toml</c>.
-/// RtkSharp implements no config, so it always returns the <c>Ask</c> verdict (exit 3).
-/// The oracle is therefore run with an isolated environment (fresh temp dir for
-/// <c>USERPROFILE</c>/<c>HOME</c>/<c>APPDATA</c>/<c>LOCALAPPDATA</c>/<c>XDG_CONFIG_HOME</c>
-/// and a temp working directory) to neutralise project-level settings and
-/// <c>config.toml</c>. However, on Windows the <c>dirs</c> crate resolves the home
-/// directory via <c>SHGetKnownFolderPath(FOLDERID_Profile)</c>, which ignores those
-/// environment variables, so <c>~/.claude/settings.json</c> still loads. Its
-/// <c>Bash(git:*)</c> allow rule makes the oracle return exit 0 (Allow) for the two
-/// <c>git</c> fixture lines where RtkSharp returns exit 3 (Ask) — with byte-identical
-/// stdout. That single, fully-characterised exit-code delta is a documented config-scope
-/// deviation (see <c>docs/parity/compatibility-ledger.md</c>), not a rewrite-engine bug,
-/// and is treated as an acceptable match. Modifying the user's real <c>settings.json</c>
-/// is out of bounds, so this is the tightest isolation achievable on this host.
+/// <b>Config parity (Phase 9a — permission-rule loading).</b> RtkSharp now loads the same
+/// <c>~/.claude/settings.json</c> allow/deny/ask rules the Rust oracle reads (via
+/// <c>PermissionRules</c>), so the two binaries evaluate permission verdicts symmetrically:
+/// a <c>Bash(git:*)</c> allow rule yields exit 0 (Allow) on <em>both</em> sides for the
+/// <c>git</c> fixture lines. The former config-scope exit-code deviation (oracle exit 0 vs
+/// RtkSharp exit 3, identical stdout) is therefore <b>CLOSED</b> — strict stdout+exit parity
+/// is 100%. The <see cref="LineResult.IsHostAllowDeviation"/> allowance below is retained only
+/// as a defensive fallback; it should no longer fire. The oracle is still run with an isolated
+/// environment (fresh temp dir for <c>USERPROFILE</c>/<c>HOME</c>/<c>APPDATA</c>/<c>LOCALAPPDATA</c>/
+/// <c>XDG_CONFIG_HOME</c> and a temp working directory) to neutralise <c>~/.config/rtk/config.toml</c>
+/// (<c>exclude_commands</c>/<c>transparent_prefixes</c>, still out of scope in RtkSharp). On Windows
+/// the <c>dirs</c> crate resolves the home directory via <c>SHGetKnownFolderPath(FOLDERID_Profile)</c>,
+/// which ignores those environment variables, so <c>~/.claude/settings.json</c> still loads for the
+/// oracle — but RtkSharp reads it too, so this is now a match rather than a deviation.
 /// </para>
 /// </remarks>
 public class RewriteParityTests
@@ -331,8 +330,10 @@ public class RewriteParityTests
         public bool StrictMatch => StdoutMatches && RustExit == DotnetExit;
 
         /// <summary>
-        /// The one documented config-scope exit-code deviation: the host allow-list makes the
-        /// oracle Allow (exit 0) where RtkSharp (no config) Asks (exit 3), stdout identical.
+        /// Formerly the one documented config-scope exit-code deviation: the host allow-list made
+        /// the oracle Allow (exit 0) where RtkSharp (no config) Asked (exit 3), stdout identical.
+        /// CLOSED in Phase 9a — RtkSharp now loads the same rules via <c>PermissionRules</c>, so
+        /// both sides Allow (exit 0). Retained as a defensive fallback; expected to never fire.
         /// </summary>
         public bool IsHostAllowDeviation =>
             StdoutMatches && RustExit == 0 && DotnetExit == 3 && RustStdout.Length > 0;

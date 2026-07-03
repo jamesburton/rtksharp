@@ -5,22 +5,40 @@ namespace RtkSharp.Tests.Rewrite;
 
 public class RewriteCommandTests
 {
-    // NOTE: the task-4 brief's test table expected exit 0 for a plain rewrite (e.g. "git
-    // status" -> exit 0). That is only correct when `~/.claude/settings.json` allow rules are
-    // loaded and match. RtkSharp has no config-loading support (Task 3's Permissions port is
-    // config-free by design), so Permissions.CheckCommand always falls through to
-    // PermissionVerdict.Ask for every command. Per the brief's own "oracle wins" rule, the
-    // Rust oracle probed with an isolated (empty HOME) config also returns exit 3 for plain
-    // rewrites, confirming exit 3 (not 0) is correct here. Expectations below are corrected
-    // accordingly.
+    // These cases inject an EMPTY rule set explicitly (via the internal Evaluate overload) so the
+    // contract is exercised deterministically, independent of the developer's real
+    // ~/.claude/settings.json. With no rules loaded every rewritable command falls through to the
+    // Ask verdict → exit 3 (Rust's evaluate() resolves the same way under an empty-config oracle).
     [Theory]
     [InlineData("git status", 3, "rtk git status")]
     [InlineData("echo hello", 1, "")]
     [InlineData("cd foo && git status", 3, "cd foo && rtk git status")]
-    public void Evaluate_MatchesRustContract(string cmd, int expectedExit, string expectedOut)
+    public void Evaluate_NoRules_MatchesRustContract(string cmd, int expectedExit, string expectedOut)
     {
-        var (exit, output) = RewriteCommand.Evaluate(cmd);
+        var (exit, output) = RewriteCommand.Evaluate(cmd, PermissionRuleSet.Empty);
         Assert.Equal(expectedExit, exit);
         Assert.Equal(expectedOut, output);
+    }
+
+    [Theory]
+    // With a loaded allow rule matching the command, the verdict is Allow → exit 0 with the
+    // rewritten stdout (this is the behaviour the real host settings' `Bash(git:*)` produces).
+    [InlineData("git status", "git:*", 0, "rtk git status")]
+    [InlineData("git status", "git status", 0, "rtk git status")]
+    public void Evaluate_AllowRuleMatches_ExitsZero(string cmd, string allowPattern, int expectedExit, string expectedOut)
+    {
+        var rules = new PermissionRuleSet([], [], [allowPattern]);
+        var (exit, output) = RewriteCommand.Evaluate(cmd, rules);
+        Assert.Equal(expectedExit, exit);
+        Assert.Equal(expectedOut, output);
+    }
+
+    [Fact]
+    public void Evaluate_DenyRuleMatches_ExitsTwoWithEmptyOutput()
+    {
+        var rules = new PermissionRuleSet(["git push --force"], [], []);
+        var (exit, output) = RewriteCommand.Evaluate("git push --force", rules);
+        Assert.Equal(2, exit);
+        Assert.Equal("", output);
     }
 }

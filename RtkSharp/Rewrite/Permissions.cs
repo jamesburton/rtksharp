@@ -23,24 +23,23 @@ public enum PermissionVerdict
 }
 
 /// <summary>
-/// Ports the built-in (no-user-config) subset of Claude Code's Bash permission
-/// verdict logic from rtk's <c>src/hooks/permissions.rs</c> (<c>check_command</c> /
-/// <c>check_command_with_rules</c>).
+/// Ports Claude Code's Bash permission verdict logic from rtk's
+/// <c>src/hooks/permissions.rs</c> (<c>check_command</c> / <c>check_command_with_rules</c>).
 /// </summary>
 /// <remarks>
 /// <para>
-/// This port deliberately omits project- and global-level <c>.claude/settings*.json</c>
-/// rule loading (deny/ask/allow lists) — that is out of scope per the phase-3 built-in-only
-/// mandate. <see cref="CheckCommand"/> always evaluates with empty rule lists, i.e. the
-/// state Claude Code is in when no user permission rules exist anywhere.
+/// <see cref="CheckCommand"/> loads the deny/ask/allow rules from the user's Claude Code
+/// settings files via <see cref="PermissionRules.Default"/> and evaluates against them, so a
+/// command matching an allow rule (e.g. <c>Bash(git:*)</c>) resolves to
+/// <see cref="PermissionVerdict.Allow"/>. When no rules exist anywhere, deny/allow can never
+/// match and every command falls through to <c>PermissionVerdict::Default</c> — except commands
+/// containing an "unattestable construct" (command/process substitution, or a redirect to a file
+/// target), which always resolve to <c>Ask</c> regardless of rules, since such commands can't be
+/// safely decomposed and attested to.
 /// </para>
 /// <para>
-/// Under that state, the Rust algorithm's own precedence rules mean: deny can never match
-/// (no deny rules), allow can never match (no allow rules), and every command falls through
-/// to <c>PermissionVerdict::Default</c> — except commands containing an "unattestable
-/// construct" (command/process substitution, or a redirect to a file target), which the
-/// algorithm always resolves to <c>Ask</c> regardless of rules, since such commands can't be
-/// safely decomposed and attested to.
+/// <see cref="CheckCommandWithRules"/> is the rule-injected core, used directly by tests to stay
+/// independent of the host's real settings files.
 /// </para>
 /// <para>
 /// The Rust source models <c>Default</c> as a fourth enum variant distinct from <c>Ask</c>,
@@ -52,13 +51,15 @@ public enum PermissionVerdict
 public static class Permissions
 {
     /// <summary>
-    /// Checks <paramref name="cmd"/> against Bash permission rules and returns a verdict.
+    /// Checks <paramref name="cmd"/> against the user's loaded Bash permission rules and returns
+    /// a verdict.
     /// </summary>
     /// <param name="cmd">The raw shell command string to check.</param>
     /// <returns>The permission verdict for the command.</returns>
     public static PermissionVerdict CheckCommand(string cmd)
     {
-        return CheckCommandWithRules(cmd, denyRules: [], askRules: [], allowRules: []);
+        var rules = PermissionRules.Default;
+        return CheckCommandWithRules(cmd, rules.Deny, rules.Ask, rules.Allow);
     }
 
     /// <summary>
