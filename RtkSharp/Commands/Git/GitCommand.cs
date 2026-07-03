@@ -11,8 +11,8 @@ namespace RtkSharp.Commands.Git;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Scope (Phase 7a, Task 1).</b> Only <c>status</c> and <c>log</c> are filtered here. Every other
-/// subcommand — the yet-to-be-ported filters (<c>diff</c>, <c>show</c>, <c>add</c>, <c>commit</c>,
+/// <b>Scope (Phase 7a, Tasks 1-2).</b> <c>status</c>, <c>log</c>, <c>diff</c>, and <c>show</c> are
+/// filtered here. Every other subcommand — the yet-to-be-ported filters (<c>add</c>, <c>commit</c>,
 /// <c>push</c>, <c>pull</c>, <c>branch</c>, <c>fetch</c>, <c>stash</c>, <c>worktree</c>) and any
 /// genuinely unknown subcommand — is routed to <see cref="RunPassthroughAsync"/>, which runs raw
 /// <c>git</c> with the global args threaded through and propagates the exit code. This mirrors Rust's
@@ -43,6 +43,16 @@ public static class GitCommand
 
     /// <summary>Maximum commit-body lines kept per commit before an omission marker (git.rs:596).</summary>
     private const int LogMaxBodyLines = 3;
+
+    /// <summary>
+    /// Default per-diff line budget for the compact filter. Rust threads <c>max_lines</c> from
+    /// main.rs, which always passes <c>None</c> for git, so <c>compact_diff</c> resolves to
+    /// <c>unwrap_or(500)</c> (git.rs:197, 310). RtkSharp inlines the same default.
+    /// </summary>
+    private const int CompactDiffDefaultMaxLines = 500;
+
+    /// <summary>Maximum +/- lines shown per hunk before the remainder is counted as truncated (git.rs:338).</summary>
+    private const int CompactDiffMaxHunkLines = 100;
 
     /// <summary>
     /// The in-progress states git prints a prose header for but porcelain <c>-b</c> omits. Each maps
@@ -149,6 +159,8 @@ public static class GitCommand
         {
             "status" => await RunStatusAsync(subArgs, globalArgs, executor, stdout, stderr).ConfigureAwait(false),
             "log" => await RunLogAsync(subArgs, globalArgs, executor, stdout, stderr).ConfigureAwait(false),
+            "diff" => await RunDiffAsync(subArgs, globalArgs, executor, stdout, stderr).ConfigureAwait(false),
+            "show" => await RunShowAsync(subArgs, globalArgs, executor, stdout, stderr).ConfigureAwait(false),
             _ => await RunPassthroughAsync(rest.ToArray(), globalArgs, executor, stdout, stderr).ConfigureAwait(false),
         };
     }
@@ -385,6 +397,371 @@ public static class GitCommand
 
         var kept = string.Concat(runes.Take(width - 3).Select(r => r.ToString()));
         return $"{kept}...";
+    }
+
+    // ===================== diff =====================
+
+    /// <summary>
+    /// Runs <c>git diff</c> with RTK's compact-by-default behavior. Ports <c>run_diff</c>
+    /// (git.rs:106): <c>--stat</c>/<c>--numstat</c>/<c>--shortstat</c> or an explicit
+    /// <c>--no-compact</c> pass straight through (the RTK-only <c>--no-compact</c> flag is stripped
+    /// before reaching git); otherwise a <c>--stat</c> summary is printed first, then the full diff
+    /// condensed by <see cref="CompactDiff"/>.
+    /// </summary>
+    private static async Task<int> RunDiffAsync(
+        string[] args, List<string> globalArgs, IProcessExecutor executor, TextWriter stdout, TextWriter stderr)
+    {
+        // Issue #1215 (git.rs:115): restore any `--` clap consumed. RtkSharp's top-level parser
+        // preserves `--` in the command args (see RestoreDoubleDashWithRaw), so re-insertion is a
+        // no-op here and `args` is already the faithful, double-dash-preserving vector.
+        var wantsStat = args.Any(a => a == "--stat" || a == "--numstat" || a == "--shortstat");
+        var wantsCompact = !args.Any(a => a == "--no-compact");
+
+        if (wantsStat || !wantsCompact)
+        {
+            // Passthrough: --stat family or explicit --no-compact. Drop the RTK-only --no-compact flag.
+            var passArgs = new List<string>(globalArgs) { "diff" };
+            foreach (var a in args)
+            {
+                if (a == "--no-compact")
+                {
+                    continue;
+                }
+
+                passArgs.Add(a);
+            }
+
+            var passResult = await ExecAsync(executor, passArgs, null).ConfigureAwait(false);
+            if (!Succeeded(passResult))
+            {
+                stderr.Write(passResult.Stderr + "\n");
+                return passResult.ExitCode;
+            }
+
+            stdout.Write(passResult.Stdout.Trim() + "\n");
+            return 0;
+        }
+
+        // Default RTK behavior: --stat summary first, then the compacted diff.
+        var statArgs = new List<string>(globalArgs) { "diff", "--stat" };
+        statArgs.AddRange(args);
+        var statResult = await ExecAsync(executor, statArgs, null).ConfigureAwait(false);
+        if (!Succeeded(statResult))
+        {
+            // Mirror run_diff: only emit stderr when it carries a non-blank message (git.rs:166).
+            if (!string.IsNullOrWhiteSpace(statResult.Stderr))
+            {
+                stderr.Write(statResult.Stderr);
+            }
+
+            return statResult.ExitCode;
+        }
+
+        stdout.Write(statResult.Stdout.Trim() + "\n");
+
+        var diffArgs = new List<string>(globalArgs) { "diff" };
+        diffArgs.AddRange(args);
+        var diffResult = await ExecAsync(executor, diffArgs, null).ConfigureAwait(false);
+
+        if (!string.IsNullOrEmpty(diffResult.Stdout))
+        {
+            string compacted;
+            try
+            {
+                compacted = CompactDiff(diffResult.Stdout, CompactDiffDefaultMaxLines);
+            }
+            catch (Exception ex)
+            {
+                // Mandatory fallback contract: a filter must never crash or hide output.
+                stderr.Write($"rtk: filter warning: {ex.Message}\n");
+                stdout.Write(diffResult.Stdout);
+                return 0;
+            }
+
+            stdout.Write("\nChanges:\n");
+            stdout.Write(compacted + "\n");
+        }
+
+        return 0;
+    }
+
+    // ===================== show =====================
+
+    /// <summary>
+    /// Runs <c>git show</c> with RTK's compact defaults. Ports <c>run_show</c> (git.rs:213):
+    /// <c>--stat</c>/<c>--numstat</c>/<c>--shortstat</c>, an explicit <c>--pretty</c>/<c>--format</c>,
+    /// or a <c>rev:path</c> blob argument pass straight through; otherwise a one-line commit summary,
+    /// a <c>--stat</c> summary, and the compacted patch are emitted in sequence.
+    /// </summary>
+    private static async Task<int> RunShowAsync(
+        string[] args, List<string> globalArgs, IProcessExecutor executor, TextWriter stdout, TextWriter stderr)
+    {
+        var wantsStatOnly = args.Any(a => a == "--stat" || a == "--numstat" || a == "--shortstat");
+        var wantsFormat = args.Any(a =>
+            a.StartsWith("--pretty", StringComparison.Ordinal) || a.StartsWith("--format", StringComparison.Ordinal));
+
+        // `git show rev:path` prints a blob, not a commit diff — pass through to avoid duplicated
+        // output from the compact-show steps (git.rs:232).
+        var wantsBlobShow = args.Any(IsBlobShowArg);
+
+        if (wantsStatOnly || wantsFormat || wantsBlobShow)
+        {
+            var passArgs = new List<string>(globalArgs) { "show" };
+            passArgs.AddRange(args);
+            var passResult = await ExecAsync(executor, passArgs, null).ConfigureAwait(false);
+            if (!Succeeded(passResult))
+            {
+                stderr.Write(passResult.Stderr + "\n");
+                return passResult.ExitCode;
+            }
+
+            // Blob mode preserves exact bytes (no trailing-newline normalization); commit mode trims.
+            stdout.Write(wantsBlobShow ? passResult.Stdout : passResult.Stdout.Trim() + "\n");
+            return 0;
+        }
+
+        // Step 1: one-line commit summary. (The raw-output capture Rust runs only for token tracking
+        // is omitted, matching the Task 1 precedent of dropping metrics-only side effects.)
+        var summaryArgs = new List<string>(globalArgs) { "show", "--no-patch", "--pretty=format:%h %s (%ar) <%an>" };
+        summaryArgs.AddRange(args);
+        var summaryResult = await ExecAsync(executor, summaryArgs, null).ConfigureAwait(false);
+        if (!Succeeded(summaryResult))
+        {
+            stderr.Write(summaryResult.Stderr + "\n");
+            return summaryResult.ExitCode;
+        }
+
+        stdout.Write(summaryResult.Stdout.Trim() + "\n");
+
+        // Step 2: --stat summary (no success gate — Rust only propagates spawn failures here).
+        var statArgs = new List<string>(globalArgs) { "show", "--stat", "--pretty=format:" };
+        statArgs.AddRange(args);
+        var statResult = await ExecAsync(executor, statArgs, null).ConfigureAwait(false);
+        var statText = statResult.Stdout.Trim();
+        if (statText.Length != 0)
+        {
+            stdout.Write(statText + "\n");
+        }
+
+        // Step 3: compacted patch.
+        var diffArgs = new List<string>(globalArgs) { "show", "--pretty=format:" };
+        diffArgs.AddRange(args);
+        var diffResult = await ExecAsync(executor, diffArgs, null).ConfigureAwait(false);
+        var diffText = diffResult.Stdout.Trim();
+        if (diffText.Length != 0)
+        {
+            string compacted;
+            try
+            {
+                compacted = CompactDiff(diffText, CompactDiffDefaultMaxLines);
+            }
+            catch (Exception ex)
+            {
+                // Mandatory fallback contract: a filter must never crash or hide output.
+                stderr.Write($"rtk: filter warning: {ex.Message}\n");
+                stdout.Write(diffText);
+                return 0;
+            }
+
+            stdout.Write(compacted + "\n");
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Reports whether a <c>git show</c> argument is a <c>rev:path</c> blob reference (as opposed to a
+    /// flag such as <c>--pretty=format:...</c>): a non-flag token containing a colon. Ports
+    /// <c>is_blob_show_arg</c> (git.rs:325).
+    /// </summary>
+    /// <param name="arg">The <c>git show</c> argument to classify.</param>
+    /// <returns>True when the argument selects a blob rather than a commit.</returns>
+    internal static bool IsBlobShowArg(string arg)
+    {
+        ArgumentNullException.ThrowIfNull(arg);
+        return !arg.StartsWith('-') && arg.Contains(':', StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Condenses a unified diff to the changed lines, keeping hunk headers and per-file <c>+A -R</c>
+    /// counts while dropping index/mode metadata and unchanged context that precedes the first change
+    /// in a hunk. Caps each hunk at <see cref="CompactDiffMaxHunkLines"/> shown lines and the whole
+    /// output at <paramref name="maxLines"/> entries, appending truncation markers when either limit
+    /// is hit. Ports <c>compact_diff</c> (git.rs:330).
+    /// </summary>
+    /// <param name="diff">The raw unified diff text.</param>
+    /// <param name="maxLines">The overall entry budget before the diff is truncated.</param>
+    /// <returns>The compacted diff (no trailing newline).</returns>
+    internal static string CompactDiff(string diff, int maxLines)
+    {
+        ArgumentNullException.ThrowIfNull(diff);
+
+        var result = new List<string>();
+        var currentFile = string.Empty;
+        var added = 0;
+        var removed = 0;
+        var inHunk = false;
+        var hunkShown = 0;
+        var hunkSkipped = 0;
+        var wasTruncated = false;
+
+        foreach (var line in ReadCommand.SplitLines(diff))
+        {
+            if (line.StartsWith("diff --git", StringComparison.Ordinal))
+            {
+                // Flush hunk truncation before starting a new file.
+                if (hunkSkipped > 0)
+                {
+                    result.Add($"  ... ({hunkSkipped} lines truncated)");
+                    wasTruncated = true;
+                    hunkSkipped = 0;
+                }
+
+                if (currentFile.Length != 0 && (added > 0 || removed > 0))
+                {
+                    result.Add($"  +{added} -{removed}");
+                }
+
+                currentFile = ExtractDiffFileName(line);
+                result.Add($"\n{currentFile}");
+                added = 0;
+                removed = 0;
+                inHunk = false;
+                hunkShown = 0;
+            }
+            else if (line.StartsWith("@@", StringComparison.Ordinal))
+            {
+                // Flush hunk truncation before starting a new hunk.
+                if (hunkSkipped > 0)
+                {
+                    result.Add($"  ... ({hunkSkipped} lines truncated)");
+                    wasTruncated = true;
+                    hunkSkipped = 0;
+                }
+
+                inHunk = true;
+                hunkShown = 0;
+
+                // Preserve the full unified diff hunk header, including trailing function/symbol context.
+                result.Add($"  {line}");
+            }
+            else if (inHunk)
+            {
+                if (line.StartsWith('+') && !line.StartsWith("+++", StringComparison.Ordinal))
+                {
+                    added++;
+                    if (hunkShown < CompactDiffMaxHunkLines)
+                    {
+                        result.Add($"  {line}");
+                        hunkShown++;
+                    }
+                    else
+                    {
+                        hunkSkipped++;
+                    }
+                }
+                else if (line.StartsWith('-') && !line.StartsWith("---", StringComparison.Ordinal))
+                {
+                    removed++;
+                    if (hunkShown < CompactDiffMaxHunkLines)
+                    {
+                        result.Add($"  {line}");
+                        hunkShown++;
+                    }
+                    else
+                    {
+                        hunkSkipped++;
+                    }
+                }
+                else if (hunkShown < CompactDiffMaxHunkLines && !line.StartsWith('\\'))
+                {
+                    // Context line: only kept once at least one +/- line has been shown in this hunk.
+                    if (hunkShown > 0)
+                    {
+                        result.Add($"  {line}");
+                        hunkShown++;
+                    }
+                }
+            }
+
+            if (result.Count >= maxLines)
+            {
+                result.Add("\n... (more changes truncated)");
+                wasTruncated = true;
+                break;
+            }
+        }
+
+        // Flush the final hunk.
+        if (hunkSkipped > 0)
+        {
+            result.Add($"  ... ({hunkSkipped} lines truncated)");
+            wasTruncated = true;
+        }
+
+        if (currentFile.Length != 0 && (added > 0 || removed > 0))
+        {
+            result.Add($"  +{added} -{removed}");
+        }
+
+        if (wasTruncated)
+        {
+            result.Add("[full diff: rtk git diff --no-compact]");
+        }
+
+        return string.Join("\n", result);
+    }
+
+    /// <summary>
+    /// Extracts the post-image path from a <c>diff --git a/… b/…</c> header, matching Rust's
+    /// <c>line.split(" b/").nth(1).unwrap_or("unknown")</c> (git.rs:352).
+    /// </summary>
+    private static string ExtractDiffFileName(string line)
+    {
+        var parts = line.Split(" b/");
+        return parts.Length > 1 ? parts[1] : "unknown";
+    }
+
+    /// <summary>
+    /// Restores <c>--</c> tokens that clap consumed under <c>trailing_var_arg</c>, ported from
+    /// <c>args_utils::restore_double_dash_with_raw</c> (src/core/args_utils.rs) for issue #1215.
+    /// Returns <paramref name="parsedArgs"/> unchanged when <paramref name="rawArgs"/> holds no more
+    /// <c>--</c> than the parsed vector; otherwise returns the user-args suffix of the raw vector,
+    /// which restores every consumed <c>--</c> at its original position.
+    /// </summary>
+    /// <remarks>
+    /// In RtkSharp this reduces to the identity function at runtime: the top-level argument parser
+    /// preserves <c>--</c> in a command's args, so <c>run_diff</c> never sees a stripped vector. The
+    /// full algorithm is ported (and unit-tested against the Rust vectors) so the parity guarantee
+    /// survives any future change to that parser.
+    /// </remarks>
+    /// <param name="parsedArgs">The (clap-)parsed argument vector, possibly missing <c>--</c> tokens.</param>
+    /// <param name="rawArgs">The raw process argument vector to recover stripped <c>--</c> from.</param>
+    /// <returns>The argument vector with consumed <c>--</c> tokens restored.</returns>
+    internal static IReadOnlyList<string> RestoreDoubleDashWithRaw(
+        IReadOnlyList<string> parsedArgs, IReadOnlyList<string> rawArgs)
+    {
+        ArgumentNullException.ThrowIfNull(parsedArgs);
+        ArgumentNullException.ThrowIfNull(rawArgs);
+
+        var rawDashCount = rawArgs.Count(a => a == "--");
+        var parsedDashCount = parsedArgs.Count(a => a == "--");
+
+        if (rawDashCount <= parsedDashCount)
+        {
+            return parsedArgs.ToList();
+        }
+
+        var missingDashes = rawDashCount - parsedDashCount;
+        var userRegionLen = parsedArgs.Count + missingDashes;
+
+        if (rawArgs.Count <= userRegionLen)
+        {
+            return parsedArgs.ToList();
+        }
+
+        var userRegionStart = rawArgs.Count - userRegionLen;
+        return rawArgs.Skip(userRegionStart).ToList();
     }
 
     // ===================== status =====================

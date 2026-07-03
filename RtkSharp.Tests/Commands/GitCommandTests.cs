@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.RegularExpressions;
 using RtkSharp.Commands.Git;
 using RtkSharp.Execution;
@@ -468,6 +469,316 @@ public sealed class GitCommandTests
         var lines = sw.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries);
         Assert.NotEmpty(lines);
         Assert.All(lines, line => Assert.Matches(LogHeaderRegex, line));
+    }
+
+    // ==================== compact diff (Task 2) ====================
+
+    // Real `git diff 01d5d1f 4e045a7 -- .gitignore` for this repo (deterministic — a diff carries no
+    // timestamps). Captured raw; the expected compaction below was confirmed byte-identical against
+    // `rtk.exe git diff` for the equivalent live invocation.
+    private const string RawSingleFileDiff =
+        "diff --git a/.gitignore b/.gitignore\n"
+        + "index 947ca4f..a8be435 100644\n"
+        + "--- a/.gitignore\n"
+        + "+++ b/.gitignore\n"
+        + "@@ -1,6 +1,9 @@\n"
+        + " # Build\n"
+        + " /target\n"
+        + " \n"
+        + "+# .NET pack/publish output (RtkSharp port)\n"
+        + "+.artifacts/\n"
+        + "+\n"
+        + " # Environment & Secrets\n"
+        + " .env\n"
+        + " .env.*\n";
+
+    [Fact]
+    public void CompactDiff_SingleFile_MatchesOracleShape()
+    {
+        var compacted = GitCommand.CompactDiff(RawSingleFileDiff, 500);
+
+        // Leading "\n" (blank line before the filename), hunk header, +/- lines, context kept only
+        // after the first change, and a trailing per-file "+A -R" tally.
+        var expected =
+            "\n.gitignore\n"
+            + "  @@ -1,6 +1,9 @@\n"
+            + "  +# .NET pack/publish output (RtkSharp port)\n"
+            + "  +.artifacts/\n"
+            + "  +\n"
+            + "   # Environment & Secrets\n"
+            + "   .env\n"
+            + "   .env.*\n"
+            + "  +3 -0";
+        Assert.Equal(expected, compacted);
+    }
+
+    [Fact]
+    public void CompactDiff_DropsLeadingContextBeforeFirstChange()
+    {
+        // The three context lines before the first "+" (# Build, /target, blank) must not appear:
+        // context is only retained once a change has been shown in the hunk.
+        var compacted = GitCommand.CompactDiff(RawSingleFileDiff, 500);
+        Assert.DoesNotContain("# Build", compacted);
+        Assert.DoesNotContain("/target", compacted);
+    }
+
+    [Fact]
+    public void CompactDiff_HunkOverflow_TruncatesAndAppendsFooter()
+    {
+        // 150 added lines in one hunk; only the first 100 are shown, the remaining 50 counted.
+        var sb = new StringBuilder("diff --git a/big.txt b/big.txt\n@@ -0,0 +1,150 @@\n");
+        for (var i = 0; i < 150; i++)
+        {
+            sb.Append("+line ").Append(i).Append('\n');
+        }
+
+        var compacted = GitCommand.CompactDiff(sb.ToString(), 500);
+
+        Assert.Contains("+line 99", compacted);
+        Assert.DoesNotContain("+line 100", compacted);
+        Assert.Contains("  ... (50 lines truncated)", compacted);
+        Assert.Contains("[full diff: rtk git diff --no-compact]", compacted);
+        Assert.Contains("  +150 -0", compacted);
+    }
+
+    [Fact]
+    public void CompactDiff_MaxLines_StopsEmittingAndFlagsTruncation()
+    {
+        var sb = new StringBuilder("diff --git a/big.txt b/big.txt\n@@ -0,0 +1,20 @@\n");
+        for (var i = 0; i < 20; i++)
+        {
+            sb.Append("+line ").Append(i).Append('\n');
+        }
+
+        // maxLines=5 → the overall budget trips before the hunk is exhausted.
+        var compacted = GitCommand.CompactDiff(sb.ToString(), 5);
+        Assert.Contains("... (more changes truncated)", compacted);
+        Assert.Contains("[full diff: rtk git diff --no-compact]", compacted);
+    }
+
+    [Fact]
+    public void CompactDiff_MissingBSlash_FallsBackToUnknownFile()
+    {
+        // A malformed header with no " b/" segment maps the file name to "unknown".
+        var diff = "diff --git weird\n@@ -1 +1 @@\n-old\n+new\n";
+        var compacted = GitCommand.CompactDiff(diff, 500);
+        Assert.Contains("\nunknown", compacted);
+    }
+
+    [Theory]
+    [InlineData("HEAD:src/main.rs", true)]
+    [InlineData("abc123:path/to/file", true)]
+    [InlineData("HEAD", false)]
+    [InlineData("--pretty=format:%h", false)]
+    [InlineData("--stat", false)]
+    public void IsBlobShowArg_MatchesRust(string arg, bool expected) =>
+        Assert.Equal(expected, GitCommand.IsBlobShowArg(arg));
+
+    // ==================== restore_double_dash (issue #1215) ====================
+
+    [Fact]
+    public void RestoreDoubleDash_SingleDashSwallowed_Restored()
+    {
+        // rtk git diff -- file → clap gave ["file"], restore "--".
+        var restored = GitCommand.RestoreDoubleDashWithRaw(
+            ["file"], ["rtk", "git", "diff", "--", "file"]);
+        Assert.Equal(["--", "file"], restored);
+    }
+
+    [Fact]
+    public void RestoreDoubleDash_ArgsBeforeDash_PositionPreserved()
+    {
+        var restored = GitCommand.RestoreDoubleDashWithRaw(
+            ["HEAD", "file"], ["rtk", "git", "diff", "HEAD", "--", "file"]);
+        Assert.Equal(["HEAD", "--", "file"], restored);
+    }
+
+    [Fact]
+    public void RestoreDoubleDash_DashAlreadyPresent_ReturnedUnchanged()
+    {
+        // RtkSharp's parser preserves "--", so raw and parsed dash counts match → identity.
+        var restored = GitCommand.RestoreDoubleDashWithRaw(
+            ["--cached", "--", "file"], ["rtk", "git", "diff", "--cached", "--", "file"]);
+        Assert.Equal(["--cached", "--", "file"], restored);
+    }
+
+    [Fact]
+    public void RestoreDoubleDash_NoDashInRaw_ReturnedUnchanged()
+    {
+        var restored = GitCommand.RestoreDoubleDashWithRaw(
+            ["main...feature"], ["rtk", "git", "diff", "main...feature"]);
+        Assert.Equal(["main...feature"], restored);
+    }
+
+    [Fact]
+    public void RestoreDoubleDash_MultipleFiles_RestoresLeadingDash()
+    {
+        var restored = GitCommand.RestoreDoubleDashWithRaw(
+            ["file1", "file2", "file3"], ["rtk", "git", "diff", "--", "file1", "file2", "file3"]);
+        Assert.Equal(["--", "file1", "file2", "file3"], restored);
+    }
+
+    // ==================== diff / show argument threading ====================
+
+    [Fact]
+    public async Task Diff_Default_RunsStatThenFullDiff_ThreadsGlobalArgs()
+    {
+        var exec = new RecordingExecutor(req =>
+            req.Arguments.Contains("--stat")
+                ? Ok(" f.txt | 1 +\n 1 file changed, 1 insertion(+)\n")
+                : Ok("diff --git a/f.txt b/f.txt\n@@ -0,0 +1 @@\n+hello\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["-C", "/repo", "diff", "HEAD~1"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(2, exec.Requests.Count);
+        Assert.Equal(["-C", "/repo", "diff", "--stat", "HEAD~1"], exec.Requests[0].Arguments);
+        Assert.Equal(["-C", "/repo", "diff", "HEAD~1"], exec.Requests[1].Arguments);
+
+        var output = sw.ToString();
+        Assert.StartsWith("f.txt | 1 +", output);
+        Assert.Contains("\nChanges:\n", output);
+        Assert.Contains("\nf.txt\n  @@ -0,0 +1 @@\n  +hello", output);
+    }
+
+    [Fact]
+    public async Task Diff_NoCompact_PassesThroughAndStripsRtkFlag()
+    {
+        ExecutionRequest? seen = null;
+        var exec = new RecordingExecutor(req => { seen = req; return Ok("diff --git a/f b/f\n@@ -1 +1 @@\n-a\n+b\n"); });
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["diff", "--no-compact", "HEAD"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        // Single invocation; the RTK-only --no-compact is stripped, no --stat prepended.
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["diff", "HEAD"], request.Arguments);
+        Assert.DoesNotContain("--no-compact", seen!.Arguments);
+        // Raw diff, trimmed, no "Changes:" scaffolding.
+        Assert.DoesNotContain("Changes:", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Diff_Stat_PassesThroughSingleInvocation()
+    {
+        var exec = new RecordingExecutor(_ => Ok(" f.txt | 2 +-\n 1 file changed\n"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["diff", "--stat"], exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["diff", "--stat"], request.Arguments);
+        Assert.Equal("f.txt | 2 +-\n 1 file changed\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Diff_Failure_EmitsStderrAndPropagatesExit()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult(string.Empty, "fatal: bad revision 'nope'\n", 128, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["diff", "nope"], exec, sw, ew);
+
+        Assert.Equal(128, exit);
+        Assert.Contains("fatal: bad revision", ew.ToString());
+        Assert.Equal(string.Empty, sw.ToString());
+    }
+
+    [Fact]
+    public async Task Show_Compact_RunsSummaryStatAndDiff()
+    {
+        var exec = new RecordingExecutor(req =>
+        {
+            if (req.Arguments.Contains("--no-patch"))
+            {
+                return Ok("abc1234 subject (2 hours ago) <Dev>");
+            }
+
+            return req.Arguments.Contains("--stat")
+                ? Ok(" f.txt | 1 +\n 1 file changed, 1 insertion(+)\n")
+                : Ok("diff --git a/f.txt b/f.txt\n@@ -0,0 +1 @@\n+hello\n");
+        });
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["show", "b315fe6"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(3, exec.Requests.Count);
+        Assert.Equal(
+            ["show", "--no-patch", "--pretty=format:%h %s (%ar) <%an>", "b315fe6"],
+            exec.Requests[0].Arguments);
+        Assert.Equal(["show", "--stat", "--pretty=format:", "b315fe6"], exec.Requests[1].Arguments);
+        Assert.Equal(["show", "--pretty=format:", "b315fe6"], exec.Requests[2].Arguments);
+
+        var output = sw.ToString();
+        Assert.StartsWith("abc1234 subject (2 hours ago) <Dev>\n", output);
+        Assert.Contains("f.txt | 1 +", output);
+        Assert.Contains("\nf.txt\n  @@ -0,0 +1 @@\n  +hello", output);
+    }
+
+    [Fact]
+    public async Task Show_StatOnly_PassesThrough()
+    {
+        var exec = new RecordingExecutor(_ => Ok(" f.txt | 1 +\n 1 file changed\n"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["show", "--stat", "HEAD"], exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["show", "--stat", "HEAD"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task Show_Blob_PassesThroughRawBytes()
+    {
+        // `git show HEAD:file` prints a blob; output is emitted verbatim (no trailing-newline trim).
+        var exec = new RecordingExecutor(_ => Ok("raw file contents\nno trailing normalization"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["show", "HEAD:src/main.rs"], exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["show", "HEAD:src/main.rs"], request.Arguments);
+        Assert.Equal("raw file contents\nno trailing normalization", sw.ToString());
+    }
+
+    // ==================== diff / show end-to-end (real git in this repo) ====================
+
+    [Fact]
+    public async Task EndToEnd_Diff_FixedShas_MatchesOracleStructure()
+    {
+        var (sw, ew) = Writers();
+        var exit = await GitCommand.RunAsync(["diff", "01d5d1f", "4e045a7"], new ProcessExecutor(), sw, ew);
+
+        Assert.Equal(0, exit);
+        var output = sw.ToString();
+        // Stat summary trimmed (leading space stripped) then the compacted diff scaffolding.
+        Assert.StartsWith(".gitignore", output);
+        Assert.Contains("4 files changed, 186 insertions(+)", output);
+        Assert.Contains("\nChanges:\n", output);
+        Assert.Contains("\n.gitignore\n  @@ -1,6 +1,9 @@\n  +# .NET pack/publish output (RtkSharp port)", output);
+        Assert.Contains("  +3 -0", output);
+    }
+
+    [Fact]
+    public async Task EndToEnd_Show_FixedSha_EmitsSummaryStatAndCompactDiff()
+    {
+        var (sw, ew) = Writers();
+        var exit = await GitCommand.RunAsync(["show", "b315fe6"], new ProcessExecutor(), sw, ew);
+
+        Assert.Equal(0, exit);
+        var lines = sw.ToString().Split('\n');
+        // Summary line: hash + subject (relative date is non-deterministic, so match only the shape).
+        Assert.Matches(LogHeaderRegex, lines[0]);
+        Assert.StartsWith("b315fe6 docs(cli): record Phase 1 dotnet pack verification", lines[0]);
+
+        var output = sw.ToString();
+        Assert.Contains("2 files changed, 65 insertions(+)", output);
+        Assert.Contains("\n.gitignore\n  @@ -1,6 +1,9 @@", output);
+        Assert.Contains("  +3 -0", output);
     }
 
     // ==================== helpers ====================
