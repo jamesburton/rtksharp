@@ -79,6 +79,9 @@ public static class DotnetCommand
     // Bound on failure-detail lines kept per test, matching truncate(detail, 320) in Rust.
     private const int TestDetailTruncate = 320;
 
+    // Rust CAP_LIST (src/core/truncate.rs) — cap on files listed in the format-report summary.
+    private const int CapFormatFiles = 20;
+
     private const string PlaceholderMessage = "diagnostic without message";
 
     // --- Regexes ported verbatim from binlog.rs's lazy_static! block ---
@@ -201,8 +204,7 @@ public static class DotnetCommand
             "build" => await RunTextFilteredAsync("build", rest, executor).ConfigureAwait(false),
             "restore" => await RunTextFilteredAsync("restore", rest, executor).ConfigureAwait(false),
             "test" => await RunTestAsync(rest, executor).ConfigureAwait(false),
-            // TODO Task 3: replace with a real run_format port (format-report parsing).
-            "format" => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
+            "format" => await RunFormatAsync(rest, executor).ConfigureAwait(false),
             _ => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
         };
     }
@@ -272,6 +274,259 @@ public static class DotnetCommand
         Console.Out.Write(result.Stdout);
         Console.Error.Write(result.Stderr);
         return result.ExitCode;
+    }
+
+    // --- format path (ported from run_format in dotnet_cmd.rs) ---
+
+    /// <summary>
+    /// Runs <c>dotnet format</c>, injects a JSON <c>--report</c> target (plus <c>--verify-no-changes</c>
+    /// unless the caller passed <c>--write</c>), then prints a compact files-needing-formatting summary
+    /// parsed from the report. Ports Rust's <c>run_format</c>.
+    /// </summary>
+    private static async Task<int> RunFormatAsync(string[] rest, IProcessExecutor executor)
+    {
+        var (reportPath, cleanupReportPath) = ResolveFormatReportPath(rest);
+
+        var invocation = new List<string> { "format" };
+        invocation.AddRange(BuildEffectiveDotnetFormatArgs(rest, reportPath));
+
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [DotnetCliUiLanguage] = DotnetCliUiLanguageValue,
+        };
+
+        var commandStartedAt = DateTime.UtcNow;
+        var result = await executor
+            .ExecuteAsync(new ExecutionRequest("dotnet", invocation, Environment: environment, CaptureMode: ExecutionCaptureMode.Separate))
+            .ConfigureAwait(false);
+
+        var raw = result.Stdout + "\n" + result.Stderr;
+        var checkMode = !HasWriteModeOverride(rest);
+
+        string filtered;
+        try
+        {
+            filtered = FormatReportSummaryOrRaw(reportPath, checkMode, raw, commandStartedAt);
+        }
+        catch (Exception ex)
+        {
+            // Mandatory fallback contract: a filter must never crash or hide output.
+            Console.Error.Write($"rtk: filter warning: {ex.Message}\n");
+            Console.Out.Write(result.Stdout);
+            Console.Error.Write(result.Stderr);
+            CleanupTempFile(cleanupReportPath, reportPath);
+            return result.ExitCode;
+        }
+
+        Console.Out.Write(filtered + "\n");
+        CleanupTempFile(cleanupReportPath, reportPath);
+        return result.ExitCode;
+    }
+
+    private static void CleanupTempFile(bool cleanup, string? path)
+    {
+        if (!cleanup || path is null)
+        {
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort cleanup — a leftover temp report file must never fail the command.
+        }
+    }
+
+    /// <summary>
+    /// Resolves the format-report JSON path: honors an explicit <c>--report</c> arg (no cleanup),
+    /// otherwise mints an isolated temp file that should be cleaned up afterwards. Ports Rust's
+    /// <c>resolve_format_report_path</c>.
+    /// </summary>
+    private static (string? Path, bool Cleanup) ResolveFormatReportPath(string[] args)
+    {
+        var userPath = ExtractReportArg(args);
+        if (userPath is not null)
+        {
+            return (userPath, false);
+        }
+
+        return (BuildFormatReportPath(), true);
+    }
+
+    private static string BuildFormatReportPath() =>
+        Path.Combine(Path.GetTempPath(), $"rtk_dotnet_format_{UniqueTempSuffix()}.json");
+
+    /// <summary>
+    /// Builds the effective <c>dotnet format</c> arguments: strips any user <c>--write</c> flag (it is
+    /// re-added only via <see cref="HasWriteModeOverride"/> semantics — check mode is the default),
+    /// injects <c>--verify-no-changes</c> unless writing was explicitly requested or the user already
+    /// supplied it, and injects <c>--report &lt;path&gt;</c> unless the user already supplied one. Ports
+    /// Rust's <c>build_effective_dotnet_format_args</c>.
+    /// </summary>
+    /// <param name="args">The user-supplied arguments (after the <c>format</c> subcommand).</param>
+    /// <param name="reportPath">The report path to inject, or null to skip injection.</param>
+    /// <returns>The effective argument list.</returns>
+    internal static List<string> BuildEffectiveDotnetFormatArgs(string[] args, string? reportPath)
+    {
+        var effective = args.Where(arg => !arg.Equals("--write", StringComparison.OrdinalIgnoreCase)).ToList();
+        var forceWriteMode = HasWriteModeOverride(args);
+
+        if (!forceWriteMode && !HasVerifyNoChangesArg(args))
+        {
+            effective.Add("--verify-no-changes");
+        }
+
+        if (!HasReportArg(args) && reportPath is not null)
+        {
+            effective.Add("--report");
+            effective.Add(reportPath);
+        }
+
+        return effective;
+    }
+
+    private static bool HasReportArg(string[] args) => args.Any(arg =>
+    {
+        var lower = arg.ToLowerInvariant();
+        return lower == "--report" || lower.StartsWith("--report=", StringComparison.Ordinal);
+    });
+
+    private static string? ExtractReportArg(string[] args)
+    {
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg.Equals("--report", StringComparison.OrdinalIgnoreCase))
+            {
+                if (i + 1 < args.Length)
+                {
+                    return args[i + 1];
+                }
+
+                continue;
+            }
+
+            var eq = arg.IndexOf('=', StringComparison.Ordinal);
+            if (eq >= 0 && arg[..eq].Equals("--report", StringComparison.OrdinalIgnoreCase))
+            {
+                return arg[(eq + 1)..];
+            }
+        }
+
+        return null;
+    }
+
+    private static bool HasVerifyNoChangesArg(string[] args) => args.Any(arg =>
+    {
+        var lower = arg.ToLowerInvariant();
+        return lower == "--verify-no-changes" || lower.StartsWith("--verify-no-changes=", StringComparison.Ordinal);
+    });
+
+    private static bool HasWriteModeOverride(string[] args) =>
+        args.Any(arg => arg.Equals("--write", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Chooses between the parsed format-report summary and raw passthrough: falls back to
+    /// <paramref name="raw"/> when there is no report path, the report file predates the command
+    /// (a stale leftover at a user-specified path), or the report fails to read/parse. Ports Rust's
+    /// <c>format_report_summary_or_raw</c>.
+    /// </summary>
+    /// <param name="reportPath">The report path used for this run, or null if none was resolved.</param>
+    /// <param name="checkMode">Whether the run was in verify/check mode (no <c>--write</c>).</param>
+    /// <param name="raw">The combined stdout+stderr from <c>dotnet format</c>, used as the fallback.</param>
+    /// <param name="commandStartedAt">When the <c>dotnet format</c> invocation started.</param>
+    /// <returns>The filtered summary, or <paramref name="raw"/> on any fallback condition.</returns>
+    internal static string FormatReportSummaryOrRaw(string? reportPath, bool checkMode, string raw, DateTime commandStartedAt)
+    {
+        if (reportPath is null)
+        {
+            return raw;
+        }
+
+        if (!IsFreshReport(reportPath, commandStartedAt))
+        {
+            return raw;
+        }
+
+        try
+        {
+            var summary = DotnetFormatReport.ParseFormatReport(reportPath);
+            return FormatDotnetFormatOutput(summary, checkMode);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            return raw;
+        }
+    }
+
+    /// <summary>
+    /// Reports whether the report file at <paramref name="path"/> was written at or after
+    /// <paramref name="commandStartedAt"/> — i.e. it is fresh output from this run rather than a stale
+    /// leftover. Ports Rust's <c>is_fresh_report</c>.
+    /// </summary>
+    private static bool IsFreshReport(string path, DateTime commandStartedAt)
+    {
+        try
+        {
+            var modifiedAt = File.GetLastWriteTimeUtc(path);
+            return modifiedAt >= commandStartedAt;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Formats a parsed format-report summary for stdout. Ports Rust's
+    /// <c>format_dotnet_format_output</c>.
+    /// </summary>
+    /// <param name="summary">The parsed format report.</param>
+    /// <param name="checkMode">Whether the run was in verify/check mode (no <c>--write</c>).</param>
+    /// <returns>The filtered summary string (no trailing newline).</returns>
+    internal static string FormatDotnetFormatOutput(FormatSummary summary, bool checkMode)
+    {
+        var changedCount = summary.FilesWithChanges.Count;
+
+        if (changedCount == 0)
+        {
+            return $"ok dotnet format: {summary.TotalFiles} files formatted correctly";
+        }
+
+        if (!checkMode)
+        {
+            return $"ok dotnet format: formatted {changedCount} files ({summary.FilesUnchanged} already formatted)";
+        }
+
+        var builder = new StringBuilder($"Format: {changedCount} files need formatting");
+
+        foreach (var (file, index) in summary.FilesWithChanges.Take(CapFormatFiles).Select((f, i) => (f, i)))
+        {
+            var firstChange = file.Changes[0];
+            var rule = firstChange.DiagnosticId.Length == 0 ? firstChange.FormatDescription : firstChange.DiagnosticId;
+            builder.Append(
+                $"\n{index + 1}. {file.Path} (line {firstChange.LineNumber}, col {firstChange.CharNumber}, {rule})");
+        }
+
+        if (changedCount > CapFormatFiles)
+        {
+            builder.Append($"\n… +{changedCount - CapFormatFiles} more files");
+            var allFiles = string.Join('\n', summary.FilesWithChanges.Select(f => f.Path));
+            var hint = Tee.ForceTeeTailHint(allFiles, "dotnet-format-files", CapFormatFiles + 1);
+            if (hint is not null)
+            {
+                builder.Append($" {hint}");
+            }
+        }
+
+        builder.Append($"\n\nok {summary.FilesUnchanged} files already formatted\nRun `dotnet format` to apply fixes");
+        return builder.ToString();
     }
 
     // --- test path (ported from run_dotnet_with_binlog's "test" arm in dotnet_cmd.rs) ---
