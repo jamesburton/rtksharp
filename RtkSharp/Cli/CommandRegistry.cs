@@ -30,6 +30,7 @@ public static class CommandRegistry
         Register("wc", WcCommand.RunAsync);
         Register("tree", TreeCommand.RunAsync);
         Register("find", FindCommand.RunAsync);
+        Register("grep", GrepCommand.RunAsync);
     }
 
     /// <summary>
