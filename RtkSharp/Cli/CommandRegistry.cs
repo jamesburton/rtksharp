@@ -1,3 +1,4 @@
+using RtkSharp.Commands.Dotnet;
 using RtkSharp.Commands.System;
 using RtkSharp.Rewrite;
 
@@ -31,6 +32,7 @@ public static class CommandRegistry
         Register("tree", TreeCommand.RunAsync);
         Register("find", FindCommand.RunAsync);
         Register("grep", GrepCommand.RunAsync);
+        Register("dotnet", DotnetCommand.RunAsync);
     }
 
     /// <summary>
