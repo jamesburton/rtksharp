@@ -189,7 +189,9 @@ public static class CommandRunner
         }
         else
         {
-            Console.Out.WriteLine(filtered);
+            // Rust's println! always terminates with "\n"; WriteLine would emit
+            // Environment.NewLine ("\r\n" on Windows) and break byte parity.
+            Console.Out.Write(filtered + "\n");
         }
 
         var rawForTracking = options.FilterStdoutOnly ? rawStdout : raw;
@@ -208,6 +210,9 @@ public static class CommandRunner
     public static void PrintWithHint(string filtered, string raw, string teeLabel, int exitCode)
     {
         var hint = Tee.TeeAndHint(raw, teeLabel, exitCode);
-        Console.Out.WriteLine(hint is not null ? $"{filtered}\n{hint}" : filtered);
+
+        // "\n" rather than WriteLine: Rust's println! always emits "\n", and WriteLine's
+        // Environment.NewLine ("\r\n" on Windows) would break byte parity with the oracle.
+        Console.Out.Write((hint is not null ? $"{filtered}\n{hint}" : filtered) + "\n");
     }
 }
