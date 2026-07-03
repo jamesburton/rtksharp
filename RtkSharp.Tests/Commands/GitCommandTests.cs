@@ -211,21 +211,6 @@ public sealed class GitCommandTests
         Assert.Equal(ExecutionCaptureMode.Inherit, seen.CaptureMode);
     }
 
-    [Fact]
-    public async Task UnportedSubcommand_Branch_PassesThroughRaw()
-    {
-        // branch/diff/show/... are not yet filtered (Tasks 2/3): they must reach raw passthrough.
-        ExecutionRequest? seen = null;
-        var exec = new RecordingExecutor(req => { seen = req; return Ok("  develop\n* main\n"); });
-        var (sw, ew) = Writers();
-
-        await GitCommand.RunAsync(["branch"], exec, sw, ew);
-
-        Assert.NotNull(seen);
-        Assert.Equal(["branch"], seen!.Arguments);
-        Assert.Equal(ExecutionCaptureMode.Inherit, seen.CaptureMode);
-    }
-
     // ==================== log filter ====================
 
     // Format-faithful RTK-injected log output (two commit blocks). The relative-date and author
@@ -780,6 +765,502 @@ public sealed class GitCommandTests
         Assert.Contains("\n.gitignore\n  @@ -1,6 +1,9 @@", output);
         Assert.Contains("  +3 -0", output);
     }
+
+    // ==================== add (Task 3) ====================
+
+    [Fact]
+    public async Task Add_NoArgs_DefaultsToDotThenQueriesStagedStat()
+    {
+        var exec = new RecordingExecutor(req =>
+            req.Arguments.Contains("--cached")
+                ? Ok(" README.md | 1 +\n a.txt     | 3 +++\n 2 files changed, 4 insertions(+)\n 2 files changed, 4 insertions(+)\n")
+                : Ok(string.Empty));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["-C", "/repo", "add"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(2, exec.Requests.Count);
+        Assert.Equal(["-C", "/repo", "add", "."], exec.Requests[0].Arguments);
+        Assert.Equal(["-C", "/repo", "diff", "--cached", "--stat", "--shortstat"], exec.Requests[1].Arguments);
+        Assert.Equal("ok 2 files changed, 4 insertions(+)\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Add_WithPaths_ThreadsThemAndStaysSilentWhenNothingStaged()
+    {
+        var exec = new RecordingExecutor(_ => Ok(string.Empty));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["add", "a.txt"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["add", "a.txt"], exec.Requests[0].Arguments);
+        // Empty shortstat → no "ok" line (git itself is silent on a no-op stage).
+        Assert.Equal(string.Empty, sw.ToString());
+    }
+
+    [Fact]
+    public async Task Add_Failure_EmitsFailedAndPropagatesExit()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult(string.Empty, "fatal: pathspec 'nope' did not match\n", 128, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["add", "nope"], exec, sw, ew);
+
+        Assert.Equal(128, exit);
+        var request = Assert.Single(exec.Requests); // no stat query on failure
+        Assert.Equal(["add", "nope"], request.Arguments);
+        Assert.Contains("FAILED: git add", ew.ToString());
+        Assert.Contains("fatal: pathspec", ew.ToString());
+    }
+
+    [Theory]
+    [InlineData(" README.md | 1 +\n a.txt     | 3 +++\n 2 files changed, 4 insertions(+)\n 2 files changed, 4 insertions(+)\n", "ok 2 files changed, 4 insertions(+)")]
+    [InlineData(" a.txt | 1 +\n 1 file changed, 1 insertion(+)\n", "ok 1 file changed, 1 insertion(+)")]
+    [InlineData("", "")]
+    [InlineData("   \n  \n", "")]
+    public void FormatAddSummary_MatchesOracle(string cachedStat, string expected) =>
+        Assert.Equal(expected, GitCommand.FormatAddSummary(cachedStat));
+
+    // ==================== commit (Task 3) ====================
+
+    [Fact]
+    public async Task Commit_Success_PrintsShortHash()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("[main e8f957d] second commit\n 1 file changed, 1 insertion(+)\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["commit", "-m", "second commit"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["commit", "-m", "second commit"], exec.Requests[0].Arguments);
+        Assert.Equal("ok e8f957d\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Commit_NothingToCommit_ReportsOk()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult("On branch main\nnothing to commit, working tree clean\n", string.Empty, 1, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["commit", "-m", "noop"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal("ok (nothing to commit)\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Commit_Failure_ForwardsOutputAndPropagatesExit()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult(string.Empty, "error: pathspec did not match\n", 1, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["commit", "-m", "x"], exec, sw, ew);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("error: pathspec did not match", ew.ToString());
+        Assert.Equal(string.Empty, sw.ToString());
+    }
+
+    [Theory]
+    [InlineData("[main (root-commit) 72749d8] initial commit", "ok 72749d8")]
+    [InlineData("[main e8f957d] second commit", "ok e8f957d")]
+    [InlineData("[feature/x abcdef1234567] msg", "ok abcdef1")]
+    [InlineData("no bracket here", "ok")]
+    [InlineData("[main abc] short hash", "ok")]
+    public void ParseCommitOutput_MatchesRust(string line, string expected) =>
+        Assert.Equal(expected, GitCommand.ParseCommitOutput(line));
+
+    // ==================== push (Task 3) ====================
+
+    [Fact]
+    public async Task Push_ThreadsGlobalArgsBeforeSubcommand()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult(string.Empty, "To ../bare\n * [new branch]      main -> main\n", 0, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["-C", "/repo", "push", "-u", "origin", "main"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["-C", "/repo", "push", "-u", "origin", "main"], exec.Requests[0].Arguments);
+        // git push writes to stderr; kept lines plus the "ok main" summary land on stderr.
+        Assert.Contains("main -> main", ew.ToString());
+        Assert.EndsWith("ok main\n", ew.ToString());
+        Assert.Equal(string.Empty, sw.ToString());
+    }
+
+    [Theory]
+    [InlineData(" * [new branch]      main -> main", "main")]
+    [InlineData("   abc1234..def5678  feature -> origin/feature", "origin/feature")]
+    [InlineData("branch 'main' set up to track 'origin/main'.", null)]
+    public void ExtractPushedRef_MatchesRust(string line, string? expected) =>
+        Assert.Equal(expected, GitCommand.ExtractPushedRef(line));
+
+    [Fact]
+    public void FilterPushOutput_NewBranch_KeepsRefsAndAppendsOkRef()
+    {
+        const string stderr =
+            "To ../gitbare\n"
+            + " * [new branch]      main -> main\n"
+            + "branch 'main' set up to track 'origin/main'.\n";
+        var filtered = GitCommand.FilterPushOutput(string.Empty, stderr, 0);
+        Assert.Equal(
+            "To ../gitbare\n"
+            + " * [new branch]      main -> main\n"
+            + "branch 'main' set up to track 'origin/main'.\n"
+            + "ok main\n",
+            filtered);
+    }
+
+    [Fact]
+    public void FilterPushOutput_UpToDate_ReportsUpToDate() =>
+        Assert.Equal(
+            "Everything up-to-date\nok (up-to-date)\n",
+            GitCommand.FilterPushOutput(string.Empty, "Everything up-to-date\n", 0));
+
+    [Fact]
+    public void FilterPushOutput_StripsProgressNoise()
+    {
+        const string stderr =
+            "Enumerating objects: 5, done.\n"
+            + "Counting objects: 100% (5/5), done.\n"
+            + "Writing objects: 100% (3/3), 300 bytes | 300.00 KiB/s, done.\n"
+            + "Total 3 (delta 0), reused 0 (delta 0)\n"
+            + "To origin\n"
+            + "   abc1234..def5678  main -> main\n";
+        var filtered = GitCommand.FilterPushOutput(string.Empty, stderr, 0);
+        Assert.DoesNotContain("Enumerating", filtered);
+        Assert.DoesNotContain("Counting", filtered);
+        Assert.DoesNotContain("Writing objects", filtered);
+        Assert.DoesNotContain("Total 3", filtered);
+        Assert.Equal("To origin\n   abc1234..def5678  main -> main\nok main\n", filtered);
+    }
+
+    [Fact]
+    public void FilterPushOutput_NonZeroExit_OmitsSummary() =>
+        Assert.Equal(
+            "error: failed to push\n",
+            GitCommand.FilterPushOutput(string.Empty, "error: failed to push\n", 1));
+
+    // ==================== pull (Task 3) ====================
+
+    [Fact]
+    public async Task Pull_ThreadsArgsAndPrintsSummary()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("Updating a1b2c3..d4e5f6\nFast-forward\n a.txt | 2 +-\n 3 files changed, 10 insertions(+), 2 deletions(-)\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["pull", "--rebase"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["pull", "--rebase"], exec.Requests[0].Arguments);
+        Assert.Equal("ok 3 files +10 -2\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Pull_Failure_EmitsFailedAndPropagatesExit()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult(string.Empty, "fatal: no remote\n", 1, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["pull"], exec, sw, ew);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("FAILED: git pull", ew.ToString());
+        Assert.Contains("fatal: no remote", ew.ToString());
+    }
+
+    [Theory]
+    [InlineData("Already up to date.\n", "ok (up-to-date)")]
+    [InlineData("Already up-to-date.\n", "ok (up-to-date)")]
+    [InlineData("Updating a..b\nFast-forward\n 3 files changed, 10 insertions(+), 2 deletions(-)\n", "ok 3 files +10 -2")]
+    [InlineData("Updating a..b\n 1 file changed, 5 insertions(+)\n", "ok 1 files +5 -0")]
+    [InlineData("Merge made by the 'ort' strategy.\n", "ok")]
+    public void FormatPullSummary_MatchesRust(string stdout, string expected) =>
+        Assert.Equal(expected, GitCommand.FormatPullSummary(stdout));
+
+    // ==================== branch (Task 3) ====================
+
+    [Fact]
+    public async Task Branch_NoArgs_ListMode_AddsAllAndNoColor()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("  develop\n* main\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/main\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["branch"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["branch", "-a", "--no-color"], exec.Requests[0].Arguments);
+        Assert.Equal("* main\n  develop\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Branch_Create_Positional_CollapsesToOk()
+    {
+        var exec = new RecordingExecutor(_ => Ok(string.Empty));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["branch", "newbranch"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        // Positional without a list flag → write path (no -a/--no-color injected).
+        Assert.Equal(["branch", "newbranch"], exec.Requests[0].Arguments);
+        Assert.Equal("ok\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Branch_Delete_ActionFlag_CollapsesToOk()
+    {
+        var exec = new RecordingExecutor(_ => Ok("Deleted branch old (was abc1234).\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["branch", "-d", "old"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["branch", "-d", "old"], exec.Requests[0].Arguments);
+        Assert.Equal("ok\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Branch_ShowCurrent_PassesRawRefThrough()
+    {
+        var exec = new RecordingExecutor(_ => Ok("main\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["branch", "--show-current"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["branch", "--show-current"], exec.Requests[0].Arguments);
+        Assert.Equal("main\n", sw.ToString());
+    }
+
+    [Fact]
+    public void FilterBranchOutput_CurrentAndLocal_NoRemoteOnly() =>
+        Assert.Equal(
+            "* main\n  develop",
+            GitCommand.FilterBranchOutput("  develop\n* main\n  remotes/origin/HEAD -> origin/main\n  remotes/origin/main\n"));
+
+    [Fact]
+    public void FilterBranchOutput_RemoteOnly_Sectioned() =>
+        Assert.Equal(
+            "* main\n  remote-only (1):\n    feature-x",
+            GitCommand.FilterBranchOutput("* main\n  remotes/origin/feature-x\n"));
+
+    [Fact]
+    public void FilterBranchOutput_RemoteOnly_CapsAtTenWithOverflow()
+    {
+        var sb = new StringBuilder("* main\n");
+        for (var i = 0; i < 13; i++)
+        {
+            sb.Append("  remotes/origin/b").Append(i).Append('\n');
+        }
+
+        var filtered = GitCommand.FilterBranchOutput(sb.ToString());
+        Assert.Contains("  remote-only (13):", filtered);
+        Assert.Contains("    b0", filtered);
+        Assert.Contains("    b9", filtered);
+        Assert.DoesNotContain("    b10", filtered);
+        Assert.Contains("    ... +3 more", filtered);
+    }
+
+    // ==================== fetch (Task 3) ====================
+
+    [Fact]
+    public async Task Fetch_ThreadsArgsAndCountsNewRefsFromStderr()
+    {
+        var exec = new RecordingExecutor(_ =>
+            new ExecutionResult(
+                string.Empty,
+                "From github.com:org/repo\n   abc1234..def5678  main       -> origin/main\n * [new branch]      feature    -> origin/feature\n",
+                0, TimeSpan.Zero, true, null, false));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["fetch", "origin"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["fetch", "origin"], exec.Requests[0].Arguments);
+        Assert.Equal("ok fetched (2 new refs)\n", sw.ToString());
+    }
+
+    [Theory]
+    [InlineData("", "ok fetched")]
+    [InlineData("From origin\n   a..b  main -> origin/main\n", "ok fetched (1 new refs)")]
+    [InlineData("From origin\n * [new tag]         v1.0 -> v1.0\n", "ok fetched (1 new refs)")]
+    public void FormatFetchSummary_MatchesRust(string stderr, string expected) =>
+        Assert.Equal(expected, GitCommand.FormatFetchSummary(stderr));
+
+    // ==================== stash (Task 3) ====================
+
+    [Fact]
+    public async Task Stash_List_Empty_ReportsNoStashes()
+    {
+        var exec = new RecordingExecutor(_ => Ok(string.Empty));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["stash", "list"], exec, sw, ew);
+
+        Assert.Equal(["stash", "list"], exec.Requests[0].Arguments);
+        Assert.Equal("No stashes\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_List_CompactsEntries()
+    {
+        var exec = new RecordingExecutor(_ => Ok("stash@{0}: WIP on main: b375c31 second\n"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["stash", "list"], exec, sw, ew);
+
+        Assert.Equal("stash@{0}: b375c31 second\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_Show_AddsPatchFlagAndCompactsDiff()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("diff --git a/a.txt b/a.txt\n@@ -2,3 +2,4 @@ l1\n+dirty\n"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["stash", "show"], exec, sw, ew);
+
+        Assert.Equal(["stash", "show", "-p"], exec.Requests[0].Arguments);
+        Assert.Contains("\na.txt\n  @@ -2,3 +2,4 @@ l1\n  +dirty", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_Show_Empty_ReportsEmptyStash()
+    {
+        var exec = new RecordingExecutor(_ => Ok(string.Empty));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["stash", "show"], exec, sw, ew);
+
+        Assert.Equal("Empty stash\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_Pop_CollapsesToOkStashPop()
+    {
+        var exec = new RecordingExecutor(_ => Ok("Dropped refs/stash@{0} (abc1234)\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["stash", "pop"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["stash", "pop"], exec.Requests[0].Arguments);
+        Assert.Equal("ok stash pop\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_Bare_RunsPushAndReportsStashed()
+    {
+        var exec = new RecordingExecutor(_ => Ok("Saved working directory and index state WIP on main: abc1234 msg\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["stash"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["stash", "push"], exec.Requests[0].Arguments);
+        Assert.Equal("ok stashed\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_PushWithMessage_ThreadsSubAndArgs()
+    {
+        var exec = new RecordingExecutor(_ => Ok("Saved working directory and index state On main: wip\n"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["stash", "push", "-m", "wip"], exec, sw, ew);
+
+        Assert.Equal(["stash", "push", "-m", "wip"], exec.Requests[0].Arguments);
+        Assert.Equal("ok stashed\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Stash_NoLocalChanges_SurfacedNotOk()
+    {
+        var exec = new RecordingExecutor(_ => Ok("No local changes to save\n"));
+        var (sw, ew) = Writers();
+
+        await GitCommand.RunAsync(["stash"], exec, sw, ew);
+
+        Assert.Equal("No local changes to save\n", sw.ToString());
+    }
+
+    [Theory]
+    [InlineData(null, "Saved working directory ...", "", "ok stashed")]
+    [InlineData("push", "Saved working directory ...", "", "ok stashed")]
+    [InlineData("save", "Saved working directory ...", "", "ok stashed")]
+    [InlineData(null, "", "No local changes to save\n", "No local changes to save")]
+    [InlineData("pop", "Dropped refs/stash@{0}", "", "ok stash pop")]
+    [InlineData("apply", "", "", "ok stash apply")]
+    [InlineData("drop", "Dropped ...", "", "ok stash drop")]
+    public void FormatStashMessage_MatchesRust(string? sub, string stdout, string stderr, string expected) =>
+        Assert.Equal(expected, GitCommand.FormatStashMessage(sub, stdout, stderr));
+
+    [Theory]
+    [InlineData("stash@{0}: WIP on main: b375c31 second\n", "stash@{0}: b375c31 second")]
+    [InlineData("stash@{0}: On main: wip changes\n", "stash@{0}: wip changes")]
+    [InlineData("no-colon-space-here\n", "no-colon-space-here")]
+    public void FilterStashList_MatchesRust(string output, string expected) =>
+        Assert.Equal(expected, GitCommand.FilterStashList(output));
+
+    // ==================== worktree (Task 3) ====================
+
+    [Fact]
+    public async Task Worktree_NoArgs_ListMode()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("/some/path/repo  abc1234 [main]\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["worktree"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["worktree", "list"], exec.Requests[0].Arguments);
+        Assert.Equal("/some/path/repo abc1234 [main]\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task Worktree_Add_ActionCollapsesToOk()
+    {
+        var exec = new RecordingExecutor(_ => Ok("Preparing worktree ...\n"));
+        var (sw, ew) = Writers();
+
+        var exit = await GitCommand.RunAsync(["worktree", "add", "../wt"], exec, sw, ew);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["worktree", "add", "../wt"], exec.Requests[0].Arguments);
+        Assert.Equal("ok\n", sw.ToString());
+    }
+
+    [Fact]
+    public void FilterWorktreeList_NormalizesColumns_NonHomePathUnchanged() =>
+        Assert.Equal(
+            "/some/path/repo abc1234 [main]",
+            GitCommand.FilterWorktreeList("/some/path/repo  abc1234 [main]\n"));
+
+    [Fact]
+    public void FilterWorktreeList_HomePrefix_RewrittenToTilde()
+    {
+        // Construct a path under the real home directory (same separators) to exercise the ~ rewrite.
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var line = home + "/wt abc1234 [feature]";
+        Assert.Equal("~/wt abc1234 [feature]", GitCommand.FilterWorktreeList(line));
+    }
+
+    [Fact]
+    public void FilterWorktreeList_ShortLine_PassedThrough() =>
+        Assert.Equal("/bare/repo (bare)", GitCommand.FilterWorktreeList("/bare/repo (bare)\n"));
 
     // ==================== helpers ====================
 
