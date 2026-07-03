@@ -78,7 +78,13 @@ public static class HookCommand
     /// <summary>Runs the Claude Code PreToolUse hook (stdin JSON → stdout decision).</summary>
     private static int RunClaude()
     {
-        if (!TryReadStdin(out var input))
+        var status = TryReadStdin(out var input);
+        if (status == StdinReadStatus.TooLarge)
+        {
+            return ReportStdinCapExceeded();
+        }
+
+        if (status != StdinReadStatus.Ok)
         {
             return 0;
         }
@@ -101,7 +107,13 @@ public static class HookCommand
     /// <summary>Runs the Cursor Agent hook. Always emits exactly one JSON line (<c>{}</c> when deferring).</summary>
     private static int RunCursor()
     {
-        var input = TryReadStdin(out var raw) ? raw : "";
+        var status = TryReadStdin(out var raw);
+        if (status == StdinReadStatus.TooLarge)
+        {
+            return ReportStdinCapExceeded();
+        }
+
+        var input = status == StdinReadStatus.Ok ? raw : "";
         WriteLine(ProcessCursor(input, PermissionRules.ForHost(PermissionHost.Cursor)));
         return 0;
     }
@@ -109,7 +121,13 @@ public static class HookCommand
     /// <summary>Runs the Gemini CLI BeforeTool hook. Exits 1 on unparseable input (mirrors Rust).</summary>
     private static int RunGemini()
     {
-        if (!TryReadStdin(out var input))
+        var status = TryReadStdin(out var input);
+        if (status == StdinReadStatus.TooLarge)
+        {
+            return ReportStdinCapExceeded();
+        }
+
+        if (status != StdinReadStatus.Ok)
         {
             return 0;
         }
@@ -126,7 +144,13 @@ public static class HookCommand
     /// <summary>Runs the Copilot preToolUse hook (auto-detects VS Code Copilot Chat vs Copilot CLI).</summary>
     private static int RunCopilot()
     {
-        if (!TryReadStdin(out var input))
+        var status = TryReadStdin(out var input);
+        if (status == StdinReadStatus.TooLarge)
+        {
+            return ReportStdinCapExceeded();
+        }
+
+        if (status != StdinReadStatus.Ok)
         {
             return 0;
         }
@@ -201,7 +225,7 @@ public static class HookCommand
     /// <returns>The response JSON string, or <see langword="null"/> to emit nothing.</returns>
     internal static string? ProcessClaude(string input, PermissionRuleSet rules)
     {
-        if (Parse(input) is not JsonObject root ||
+        if (ParseWithDiagnostic(input) is not JsonObject root ||
             root["tool_input"] is not JsonObject toolInput ||
             CommandOf(toolInput) is not { } cmd)
         {
@@ -321,7 +345,7 @@ public static class HookCommand
     /// <returns>The response JSON string, or <see langword="null"/>.</returns>
     internal static string? ProcessCopilot(string input, PermissionRuleSet rules)
     {
-        if (Parse(input) is not JsonObject root)
+        if (ParseWithDiagnostic(input) is not JsonObject root)
         {
             return null;
         }
@@ -487,6 +511,29 @@ public static class HookCommand
         }
     }
 
+    /// <summary>
+    /// Parses JSON, writing the Rust-equivalent diagnostic to stderr on failure. Port of the
+    /// explicit <c>match serde_json::from_str(input)</c> in Rust <c>run_claude</c>
+    /// (hook_cmd.rs:406-412) and <c>run_copilot</c> (hook_cmd.rs:54-60), which write
+    /// <c>[rtk hook] Failed to parse JSON input: {e}</c> to stderr before deferring silently.
+    /// Only the top-level Claude/Copilot payload parse gets this diagnostic — Cursor and the
+    /// Copilot-CLI <c>toolArgs</c> re-parse stay silent via <see cref="Parse"/>, matching Rust.
+    /// </summary>
+    /// <param name="input">The raw JSON text to parse.</param>
+    /// <returns>The parsed node, or <see langword="null"/> on failure.</returns>
+    private static JsonNode? ParseWithDiagnostic(string input)
+    {
+        try
+        {
+            return JsonNode.Parse(input);
+        }
+        catch (JsonException e)
+        {
+            Console.Error.Write($"[rtk hook] Failed to parse JSON input: {e.Message}\n");
+            return null;
+        }
+    }
+
     /// <summary>Extracts a non-empty string <c>command</c> from a <c>tool_input</c>/args object.</summary>
     private static string? CommandOf(JsonObject? toolInput)
     {
@@ -529,32 +576,75 @@ public static class HookCommand
     }
 
     /// <summary>
-    /// Reads stdin as raw UTF-8 without stripping a BOM (so BOM-aware processors can handle it).
-    /// Returns <see langword="false"/> when the read fails or the 1 MiB cap is exceeded, so the
-    /// caller can honour the never-block contract.
+    /// Outcome of a stdin read. Port of the Rust distinction between a hard cap overflow
+    /// (<c>read_stdin_limited</c>, hook_cmd.rs:16-26, which <c>bail!</c>s and propagates to
+    /// <c>main</c>'s <c>exit 1</c>) and any other read failure, which the never-block contract
+    /// tolerates as if stdin were empty.
     /// </summary>
-    private static bool TryReadStdin(out string input)
+    internal enum StdinReadStatus
+    {
+        /// <summary>Stdin was read successfully (may be empty).</summary>
+        Ok,
+
+        /// <summary>The underlying stream read failed; treated as no input (exit 0).</summary>
+        IoError,
+
+        /// <summary>Stdin exceeded <see cref="StdinCap"/> bytes; the caller must exit 1.</summary>
+        TooLarge,
+    }
+
+    /// <summary>
+    /// Writes the Rust <c>read_stdin_limited</c> overflow diagnostic to stderr and returns the
+    /// exit-1 code. Port of the <c>bail!("hook stdin exceeds {} byte limit", STDIN_CAP)</c> in
+    /// hook_cmd.rs:23, formatted by <c>main</c> (main.rs:1439) as <c>rtk: {:#}</c>.
+    /// </summary>
+    /// <returns>Always <c>1</c>.</returns>
+    internal static int ReportStdinCapExceeded()
+    {
+        Console.Error.Write($"rtk: hook stdin exceeds {StdinCap} byte limit\n");
+        return 1;
+    }
+
+    /// <summary>
+    /// Reads stdin as raw UTF-8 without stripping a BOM (so BOM-aware processors can handle it).
+    /// </summary>
+    /// <param name="input">The stdin text read so far (empty unless the status is <see cref="StdinReadStatus.Ok"/>).</param>
+    /// <returns>The read outcome; see <see cref="StdinReadStatus"/>.</returns>
+    private static StdinReadStatus TryReadStdin(out string input)
+    {
+        using var stream = Console.OpenStandardInput();
+        using var reader = new StreamReader(
+            stream,
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
+            detectEncodingFromByteOrderMarks: false);
+        return TryReadStdin(reader, out input);
+    }
+
+    /// <summary>
+    /// Reads to the end of <paramref name="reader"/>, applying the same cap/error semantics as
+    /// <see cref="TryReadStdin(out string)"/>. Split out as an internal overload so the overflow
+    /// path is unit-testable without a real stdin stream.
+    /// </summary>
+    /// <param name="reader">The text reader to consume.</param>
+    /// <param name="input">The text read (empty unless the status is <see cref="StdinReadStatus.Ok"/>).</param>
+    /// <returns>The read outcome; see <see cref="StdinReadStatus"/>.</returns>
+    internal static StdinReadStatus TryReadStdin(TextReader reader, out string input)
     {
         input = "";
         try
         {
-            using var stream = Console.OpenStandardInput();
-            using var reader = new StreamReader(
-                stream,
-                new UTF8Encoding(encoderShouldEmitUTF8Identifier: false),
-                detectEncodingFromByteOrderMarks: false);
             var text = reader.ReadToEnd();
             if (text.Length > StdinCap)
             {
-                return false;
+                return StdinReadStatus.TooLarge;
             }
 
             input = text;
-            return true;
+            return StdinReadStatus.Ok;
         }
         catch (IOException)
         {
-            return false;
+            return StdinReadStatus.IoError;
         }
     }
 }
