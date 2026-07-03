@@ -714,14 +714,14 @@ public sealed class GhCommandTests
     [Fact]
     public async Task UnfilteredSubcommand_PassesThrough()
     {
-        // repo/run/api are ported in Task 2; until then they route to raw passthrough.
-        var exec = new RecordingExecutor(_ => Ok("raw repo view"));
+        // Subcommands with no Rust filter (e.g. gist) route to raw passthrough.
+        var exec = new RecordingExecutor(_ => Ok("raw gist list"));
         var (sw, ew) = Writers();
 
-        await GhCommand.RunAsync(["repo", "view"], false, exec, sw, ew);
+        await GhCommand.RunAsync(["gist", "list"], false, exec, sw, ew);
 
         var request = Assert.Single(exec.Requests);
-        Assert.Equal(["repo", "view"], request.Arguments);
+        Assert.Equal(["gist", "list"], request.Arguments);
         Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
     }
 
@@ -748,6 +748,269 @@ public sealed class GhCommandTests
 
         Assert.Equal(0, code);
         Assert.Equal("not json at all", sw.ToString());
+    }
+
+    // ==================== should_passthrough_run_view ====================
+
+    [Theory]
+    [InlineData("--log-failed")]
+    [InlineData("--log")]
+    [InlineData("--json")]
+    public void ShouldPassthroughRunView_True(string flag) => Assert.True(GhCommand.ShouldPassthroughRunView([flag]));
+
+    [Fact]
+    public void ShouldPassthroughRunView_EmptyFalse() => Assert.False(GhCommand.ShouldPassthroughRunView([]));
+
+    [Fact]
+    public void ShouldPassthroughRunView_OtherFlagsFalse() =>
+        Assert.False(GhCommand.ShouldPassthroughRunView(["--web"]));
+
+    // ==================== format_run_list ====================
+
+    [Fact]
+    public void FormatRunList_Basic()
+    {
+        const string json = """
+        [{"databaseId":111,"name":"CI","status":"completed","conclusion":"success"},
+         {"databaseId":222,"name":"Deploy","status":"completed","conclusion":"failure"},
+         {"databaseId":333,"name":"Lint","status":"in_progress","conclusion":null},
+         {"databaseId":444,"name":"Nightly","status":"completed","conclusion":"cancelled"},
+         {"databaseId":555,"name":"Queued","status":"queued","conclusion":null}]
+        """;
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            "Workflow Runs\n  [ok] CI [111]\n  [FAIL] Deploy [222]\n  [time] Lint [333]\n  [X] Nightly [444]\n  [pending] Queued [555]\n",
+            GhCommand.FormatRunList(doc.RootElement, false));
+    }
+
+    [Fact]
+    public void FormatRunList_UltraIcons()
+    {
+        const string json = """
+        [{"databaseId":1,"name":"CI","status":"completed","conclusion":"success"},
+         {"databaseId":2,"name":"D","status":"completed","conclusion":"failure"},
+         {"databaseId":3,"name":"L","status":"in_progress","conclusion":null},
+         {"databaseId":4,"name":"N","status":"completed","conclusion":"cancelled"},
+         {"databaseId":5,"name":"Q","status":"queued","conclusion":null}]
+        """;
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            "Runs\n  [ok] CI [1]\n  [x] D [2]\n  ~ L [3]\n  X N [4]\n  ? Q [5]\n",
+            GhCommand.FormatRunList(doc.RootElement, true));
+    }
+
+    [Fact]
+    public void FormatRunList_EmptyArrayJustHeader()
+    {
+        using var doc = JsonDocument.Parse("[]");
+        Assert.Equal("Workflow Runs\n", GhCommand.FormatRunList(doc.RootElement, false));
+        Assert.Equal("Runs\n", GhCommand.FormatRunList(doc.RootElement, true));
+    }
+
+    [Fact]
+    public void FormatRunList_NonArrayReturnsEmpty()
+    {
+        using var doc = JsonDocument.Parse("""{"databaseId":1}""");
+        Assert.Equal(string.Empty, GhCommand.FormatRunList(doc.RootElement, false));
+    }
+
+    // ==================== format_run_view ====================
+
+    [Fact]
+    public void FormatRunView_WithId() =>
+        Assert.StartsWith("Workflow Run #12345\n", GhCommand.FormatRunView(string.Empty, "12345"));
+
+    [Fact]
+    public void FormatRunView_WithoutIdNoEmptyHash()
+    {
+        var output = GhCommand.FormatRunView(string.Empty, string.Empty);
+        Assert.StartsWith("Workflow Run\n", output);
+        Assert.DoesNotContain("#\n", output);
+    }
+
+    [Fact]
+    public void FormatRunView_KeepsStatusAndConclusionSkipsJobsSuccess()
+    {
+        const string stdout =
+            "X CI · 12345\nTriggered via push\n\nStatus: completed\nConclusion: failure\n\nJOBS\n✓ build in 1m\n✓ lint (success)\nX deploy failed\n";
+        var result = GhCommand.FormatRunView(stdout, "12345");
+        Assert.Equal(
+            "Workflow Run #12345\n  Status: completed\n  Conclusion: failure\n  [FAIL] X deploy failed\n",
+            result);
+    }
+
+    // ==================== format_repo_view ====================
+
+    [Fact]
+    public void FormatRepoView_PublicWithDescription()
+    {
+        const string json = """
+        {"name":"rtk","owner":{"login":"rtk-ai"},"description":"CLI proxy",
+         "url":"https://github.com/rtk-ai/rtk","stargazerCount":68000,"forkCount":4200,"isPrivate":false}
+        """;
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            "rtk-ai/rtk\n  [public]\n  CLI proxy\n  68000 stars | 4200 forks\n  https://github.com/rtk-ai/rtk\n",
+            GhCommand.FormatRepoView(doc.RootElement));
+    }
+
+    [Fact]
+    public void FormatRepoView_PrivateNoDescriptionOmitsLine()
+    {
+        const string json = """
+        {"name":"secret","owner":{"login":"me"},"description":"","url":"u",
+         "stargazerCount":0,"forkCount":0,"isPrivate":true}
+        """;
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal(
+            "me/secret\n  [private]\n  0 stars | 0 forks\n  u\n",
+            GhCommand.FormatRepoView(doc.RootElement));
+    }
+
+    // ==================== dispatch: run / repo / api (recording executor) ====================
+
+    [Fact]
+    public async Task RunList_ThreadsJsonFieldsLimitAndUserArgs()
+    {
+        var exec = new RecordingExecutor(_ => Ok("[]"));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["run", "list", "--workflow", "ci.yml"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal("gh", request.FileName);
+        Assert.Equal(
+            ["run", "list", "--json", "databaseId,name,status,conclusion,createdAt", "--limit", "10",
+             "--workflow", "ci.yml"],
+            request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Separate, request.CaptureMode);
+        Assert.Equal("Workflow Runs\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task RunView_FilteredNoJsonProjection()
+    {
+        var exec = new RecordingExecutor(_ => Ok("Status: completed\nConclusion: success\n"));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["run", "view", "12345"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        // run view filters gh's text report — no --json is added.
+        Assert.Equal(["run", "view", "12345"], request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Separate, request.CaptureMode);
+        Assert.StartsWith("Workflow Run #12345\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task RunView_LogFailedFlag_PassesThroughRaw()
+    {
+        var exec = new RecordingExecutor(_ => Ok("raw log"));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["run", "view", "12345", "--log-failed"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["run", "view", "12345", "--log-failed"], request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task RunWatch_PassesThroughRaw()
+    {
+        // watch is not a filtered arm — it streams live, so it passes through (gh_cmd.rs:715).
+        var exec = new RecordingExecutor(_ => Ok("streaming..."));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["run", "watch", "12345"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["run", "watch", "12345"], request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task RepoView_ThreadsUserArgsBeforeJsonFields()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("""{"name":"r","owner":{"login":"o"},"description":"","url":"u","stargazerCount":0,"forkCount":0,"isPrivate":false}"""));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["repo", "view", "-R", "o/r"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(
+            ["repo", "view", "-R", "o/r", "--json", "name,owner,description,url,stargazerCount,forkCount,isPrivate"],
+            request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Separate, request.CaptureMode);
+        Assert.StartsWith("o/r\n  [public]\n", sw.ToString());
+    }
+
+    [Fact]
+    public async Task RepoView_DefaultsToViewWhenNoSubcommand()
+    {
+        var exec = new RecordingExecutor(_ =>
+            Ok("""{"name":"r","owner":{"login":"o"},"description":"","url":"u","stargazerCount":0,"forkCount":0,"isPrivate":false}"""));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["repo"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(
+            ["repo", "view", "--json", "name,owner,description,url,stargazerCount,forkCount,isPrivate"],
+            request.Arguments);
+    }
+
+    [Fact]
+    public async Task RepoNonView_PassesThroughRaw()
+    {
+        var exec = new RecordingExecutor(_ => Ok("cloning..."));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["repo", "clone", "o/r"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["repo", "clone", "o/r"], request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task Api_AlwaysPassesThroughRaw()
+    {
+        // gh api is never filtered — its JSON is the payload the user asked for (gh_cmd.rs:982).
+        var exec = new RecordingExecutor(_ => Ok("""{"name":"rtk"}"""));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["api", "repos/rtk-ai/rtk"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["api", "repos/rtk-ai/rtk"], request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task Release_PassesThroughRaw()
+    {
+        // release has no Rust filter — passthrough (never corrupts output).
+        var exec = new RecordingExecutor(_ => Ok("v1.0\tLatest\tv1.0\t2026-01-01"));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["release", "list"], false, exec, sw, ew);
+
+        var request = Assert.Single(exec.Requests);
+        Assert.Equal(["release", "list"], request.Arguments);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task RunList_UltraCompactThreaded()
+    {
+        var exec = new RecordingExecutor(_ => Ok("[]"));
+        var (sw, ew) = Writers();
+
+        await GhCommand.RunAsync(["run", "list"], ultraCompact: true, exec, sw, ew);
+
+        Assert.Equal("Runs\n", sw.ToString());
     }
 
     // ==================== helpers ====================

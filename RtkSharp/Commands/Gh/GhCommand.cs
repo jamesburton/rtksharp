@@ -15,19 +15,23 @@ namespace RtkSharp.Commands.Gh;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Scope (Phase 7b, Task 1).</b> The <c>pr</c> family (<c>list</c>/<c>view</c>/<c>checks</c>/
-/// <c>status</c>/<c>diff</c>) and the <c>issue</c> family (<c>list</c>/<c>view</c>) are filtered here.
-/// The top-level <c>--json</c> structured-output guard (gh_cmd.rs:195) and the per-subcommand
-/// <c>--jq</c>/<c>--template</c>/<c>--web</c>/<c>--comments</c> guards are ported in full: when the
-/// user asks gh for structured or web output, RTK passes through raw so it is never corrupted.
+/// <b>Scope.</b> The <c>pr</c> family (<c>list</c>/<c>view</c>/<c>checks</c>/<c>status</c>/<c>diff</c>),
+/// the <c>issue</c> family (<c>list</c>/<c>view</c>), the <c>run</c> family (<c>list</c>/<c>view</c>),
+/// and <c>repo view</c> are filtered here. The top-level <c>--json</c> structured-output guard
+/// (gh_cmd.rs:195) and the per-subcommand <c>--jq</c>/<c>--template</c>/<c>--web</c>/<c>--comments</c>/
+/// <c>--log</c>/<c>--log-failed</c> guards are ported in full: when the user asks gh for structured,
+/// web, or log output, RTK passes through raw so it is never corrupted.
 /// </para>
 /// <para>
-/// <b>Deferred to Task 2 (documented divergence).</b> The <c>run</c>, <c>repo</c>, and <c>api</c>
-/// subcommand families are routed to raw passthrough until Task 2 ports their filters. Passthrough
-/// never corrupts output, so this is a safe intermediate. The <c>pr</c> write subcommands
-/// (<c>create</c>/<c>merge</c>/<c>comment</c>/<c>edit</c>) are likewise routed to passthrough: Rust's
-/// <c>pr merge</c> already passes through (gh_cmd.rs:908), and the confirmation-formatting arms for
-/// create/comment/edit are out of Task 1's read-only scope.
+/// <b>Passthrough by design (faithful to Rust).</b> <c>gh api</c> passes through unchanged
+/// (gh_cmd.rs:982): converting its JSON to a schema would destroy every value and force a re-fetch, so
+/// Rust never filters it. <c>gh run watch</c> is not a Rust <c>run</c> arm (gh_cmd.rs:712) so it falls
+/// through to passthrough — this preserves gh's live streaming output, which RTK has no filtered mode
+/// for. <c>gh release</c> has no Rust filter at all (no <c>release</c> arm in <c>run</c>,
+/// gh_cmd.rs:199-209) so it too passes through. The <c>pr</c> write subcommands
+/// (<c>create</c>/<c>merge</c>/<c>comment</c>/<c>edit</c>) route to passthrough: Rust's <c>pr merge</c>
+/// already passes through (gh_cmd.rs:908), and the confirmation-formatting arms are out of the
+/// read-only scope.
 /// </para>
 /// <para>
 /// <b>Omitted side effects.</b> Following the <see cref="GitCommand"/> precedent, Rust's token-savings
@@ -110,8 +114,13 @@ public static partial class GhCommand
         {
             "pr" => await RunPrAsync(subArgs, ultraCompact, executor, stdout, stderr).ConfigureAwait(false),
             "issue" => await RunIssueAsync(subArgs, ultraCompact, executor, stdout, stderr).ConfigureAwait(false),
+            "run" => await RunWorkflowAsync(subArgs, ultraCompact, executor, stdout, stderr).ConfigureAwait(false),
+            "repo" => await RunRepoAsync(subArgs, executor, stdout, stderr).ConfigureAwait(false),
 
-            // run/repo/api: filtered in Task 2; passthrough until then (never corrupts output).
+            // gh api passes through unchanged (gh_cmd.rs:982): filtering its JSON would destroy every value.
+            "api" => await PassthroughAsync(executor, stdout, stderr, Prepend("api", subArgs)).ConfigureAwait(false),
+
+            // release, and every other subcommand, has no Rust filter — passthrough never corrupts output.
             _ => await PassthroughAsync(executor, stdout, stderr, Prepend(subcommand, subArgs)).ConfigureAwait(false),
         };
     }
@@ -648,6 +657,209 @@ public static partial class GhCommand
         return out_.ToString();
     }
 
+    // ===================== run (workflow) =====================
+
+    /// <summary>Dispatches <c>gh run</c> subcommands. Ports <c>run_workflow</c> (gh_cmd.rs:707).</summary>
+    private static async Task<int> RunWorkflowAsync(
+        string[] args, bool ultraCompact, IProcessExecutor executor, TextWriter stdout, TextWriter stderr)
+    {
+        if (args.Length == 0)
+        {
+            return await PassthroughAsync(executor, stdout, stderr, Prepend("run", args)).ConfigureAwait(false);
+        }
+
+        var rest = args.Skip(1).ToArray();
+        return args[0] switch
+        {
+            "list" => await ListRunsAsync(rest, ultraCompact, executor, stdout, stderr).ConfigureAwait(false),
+            "view" => await ViewRunAsync(rest, executor, stdout, stderr).ConfigureAwait(false),
+
+            // watch (streaming) and every other run subcommand fall through to passthrough (gh_cmd.rs:715).
+            _ => await PassthroughAsync(executor, stdout, stderr, Prepend("run", args)).ConfigureAwait(false),
+        };
+    }
+
+    /// <summary>Runs <c>gh run list</c> with RTK's field projection and a fixed <c>--limit 10</c>. Ports <c>list_runs</c> (gh_cmd.rs:719).</summary>
+    private static Task<int> ListRunsAsync(
+        string[] args, bool ultraCompact, IProcessExecutor executor, TextWriter stdout, TextWriter stderr)
+    {
+        var ghArgs = new List<string>
+        {
+            "run", "list", "--json", "databaseId,name,status,conclusion,createdAt", "--limit", "10",
+        };
+        ghArgs.AddRange(args);
+        return RunGhJsonAsync(executor, stdout, stderr, ghArgs, root => FormatRunList(root, ultraCompact));
+    }
+
+    /// <summary>Formats <c>gh run list --json</c> output. Ports <c>format_run_list</c> (gh_cmd.rs:734).</summary>
+    internal static string FormatRunList(JsonElement json, bool ultraCompact)
+    {
+        if (json.ValueKind != JsonValueKind.Array)
+        {
+            return string.Empty;
+        }
+
+        var out_ = new StringBuilder(ultraCompact ? "Runs\n" : "Workflow Runs\n");
+        foreach (var run in json.EnumerateArray())
+        {
+            var id = JInt(run, "databaseId", 0);
+            var name = JStr(run, "name", "???");
+            var status = JStr(run, "status", "???");
+            var conclusion = JStr(run, "conclusion", string.Empty);
+            var icon = RunIcon(status, conclusion, ultraCompact);
+            out_.Append($"  {icon} {Truncate(name, 50)} [{id}]\n");
+        }
+
+        return out_.ToString();
+    }
+
+    /// <summary>Maps a workflow run's status/conclusion to its icon. Ports the match in <c>format_run_list</c> (gh_cmd.rs:750).</summary>
+    private static string RunIcon(string status, string conclusion, bool ultraCompact) => ultraCompact
+        ? conclusion switch
+        {
+            "success" => "[ok]",
+            "failure" => "[x]",
+            "cancelled" => "X",
+            _ => status == "in_progress" ? "~" : "?",
+        }
+        : conclusion switch
+        {
+            "success" => "[ok]",
+            "failure" => "[FAIL]",
+            "cancelled" => "[X]",
+            _ => status == "in_progress" ? "[time]" : "[pending]",
+        };
+
+    /// <summary>
+    /// Reports whether <c>gh run view</c> args should bypass filtering (<c>--log-failed</c>/<c>--log</c>/
+    /// <c>--json</c> produce output the filter would wrongly strip). Ports <c>should_passthrough_run_view</c>
+    /// (gh_cmd.rs:775).
+    /// </summary>
+    internal static bool ShouldPassthroughRunView(IReadOnlyList<string> extraArgs)
+    {
+        ArgumentNullException.ThrowIfNull(extraArgs);
+        return extraArgs.Any(a => a is "--log-failed" or "--log" or "--json");
+    }
+
+    /// <summary>Runs <c>gh run view</c> and prints a compact summary. Ports <c>view_run</c> (gh_cmd.rs:781).</summary>
+    private static Task<int> ViewRunAsync(
+        string[] args, IProcessExecutor executor, TextWriter stdout, TextWriter stderr)
+    {
+        var (idOpt, extra) = ParseOptionalIdentifier(args);
+        if (ShouldPassthroughRunView(extra))
+        {
+            var baseArgs = new List<string> { "run", "view" };
+            if (idOpt is not null)
+            {
+                baseArgs.Add(idOpt);
+            }
+
+            baseArgs.AddRange(extra);
+            return PassthroughAsync(executor, stdout, stderr, baseArgs);
+        }
+
+        var ghArgs = new List<string> { "run", "view" };
+        if (idOpt is not null)
+        {
+            ghArgs.Add(idOpt);
+        }
+
+        ghArgs.AddRange(extra);
+        var runId = idOpt ?? string.Empty;
+
+        // gh run view emits a text report (not --json); filter the plain text like Rust does.
+        return RunGhFilteredAsync(
+            executor, stdout, stderr, ghArgs, raw => FormatRunView(raw, runId), noTrailingNewline: true);
+    }
+
+    /// <summary>Summarizes <c>gh run view</c> text output. Ports <c>format_run_view</c> (gh_cmd.rs:815).</summary>
+    internal static string FormatRunView(string stdout, string runId)
+    {
+        ArgumentNullException.ThrowIfNull(stdout);
+        ArgumentNullException.ThrowIfNull(runId);
+
+        var out_ = new StringBuilder(runId.Length == 0 ? "Workflow Run\n" : $"Workflow Run #{runId}\n");
+        var inJobs = false;
+
+        foreach (var line in ReadCommand.SplitLines(stdout))
+        {
+            if (line.Contains("JOBS", StringComparison.Ordinal))
+            {
+                inJobs = true;
+            }
+
+            if (inJobs)
+            {
+                if (line.Contains('✓', StringComparison.Ordinal) || line.Contains("success", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (line.Contains("[x]", StringComparison.Ordinal) || line.Contains("fail", StringComparison.Ordinal))
+                {
+                    out_.Append($"  [FAIL] {line.Trim()}\n");
+                }
+            }
+            else if (line.Contains("Status:", StringComparison.Ordinal) || line.Contains("Conclusion:", StringComparison.Ordinal))
+            {
+                out_.Append($"  {line.Trim()}\n");
+            }
+        }
+
+        return out_.ToString();
+    }
+
+    // ===================== repo =====================
+
+    /// <summary>
+    /// Dispatches <c>gh repo</c>: only <c>view</c> (the default when no subcommand is given) is filtered;
+    /// anything else passes through. Ports <c>run_repo</c> (gh_cmd.rs:842).
+    /// </summary>
+    private static Task<int> RunRepoAsync(
+        string[] args, IProcessExecutor executor, TextWriter stdout, TextWriter stderr)
+    {
+        var (subcommand, restArgs) = args.Length == 0
+            ? ("view", Array.Empty<string>())
+            : (args[0], args.Skip(1).ToArray());
+
+        if (subcommand != "view")
+        {
+            return PassthroughAsync(executor, stdout, stderr, Prepend("repo", args));
+        }
+
+        // Rust threads the user's rest args BEFORE the --json projection (gh_cmd.rs:852-859).
+        var ghArgs = new List<string> { "repo", "view" };
+        ghArgs.AddRange(restArgs);
+        ghArgs.Add("--json");
+        ghArgs.Add("name,owner,description,url,stargazerCount,forkCount,isPrivate");
+        return RunGhJsonAsync(executor, stdout, stderr, ghArgs, FormatRepoView);
+    }
+
+    /// <summary>Formats <c>gh repo view --json</c> output. Ports <c>format_repo_view</c> (gh_cmd.rs:863).</summary>
+    internal static string FormatRepoView(JsonElement json)
+    {
+        var out_ = new StringBuilder();
+        var name = JStr(json, "name", "???");
+        var owner = JNestedStr(json, "owner", "login", "???");
+        var description = JStr(json, "description", string.Empty);
+        var url = JStr(json, "url", string.Empty);
+        var stars = JInt(json, "stargazerCount", 0);
+        var forks = JInt(json, "forkCount", 0);
+        var isPrivate = JBool(json, "isPrivate", false);
+        var visibility = isPrivate ? "[private]" : "[public]";
+
+        out_.Append($"{owner}/{name}\n");
+        out_.Append($"  {visibility}\n");
+        if (description.Length != 0)
+        {
+            out_.Append($"  {Truncate(description, 80)}\n");
+        }
+
+        out_.Append($"  {stars} stars | {forks} forks\n");
+        out_.Append($"  {url}\n");
+        return out_.ToString();
+    }
+
     // ===================== markdown body filter =====================
 
     /// <summary>
@@ -870,6 +1082,15 @@ public static partial class GhCommand
     /// <summary>Mirrors <c>json[prop].as_i64().unwrap_or(dflt)</c>: the value only when it is a JSON integer.</summary>
     private static long JInt(JsonElement el, string prop, long dflt) =>
         TryGetProp(el, prop, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : dflt;
+
+    /// <summary>Mirrors <c>json[prop].as_bool().unwrap_or(dflt)</c>: the value only when it is a JSON boolean.</summary>
+    private static bool JBool(JsonElement el, string prop, bool dflt) =>
+        TryGetProp(el, prop, out var v) && v.ValueKind switch
+        {
+            JsonValueKind.True => true,
+            JsonValueKind.False => true,
+            _ => false,
+        } ? v.GetBoolean() : dflt;
 
     /// <summary>A status check counts as passed when its <c>conclusion</c> or <c>state</c> is <c>SUCCESS</c> (gh_cmd.rs:400).</summary>
     private static bool CheckSucceeded(JsonElement check) =>
