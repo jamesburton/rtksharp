@@ -3,6 +3,7 @@ using System.IO;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Tests.Hooks;
+using Tomlyn;
 using Xunit;
 
 namespace RtkSharp.Tests.Core;
@@ -154,6 +155,69 @@ public sealed class ConfigTests
         Assert.False(config.Telemetry.Enabled);
         Assert.Equal(200, config.Limits.GrepMaxResults);
         Assert.Equal(2000, config.Limits.PassthroughMaxChars);
+    }
+
+    /// <summary>
+    /// Rust's <c>TrackingConfig</c>/<c>DisplayConfig</c>/<c>FilterConfig</c>/<c>LimitsConfig</c> have
+    /// no per-field <c>#[serde(default)]</c> (config.rs:56-146), so a section that is <b>present but
+    /// incomplete</b> is a hard parse failure there — unlike a wholly <b>absent</b> section, which
+    /// still defaults cleanly (see <see cref="Load_ConfigWithOnlyHooksSection_FillsRemainingSectionsWithDefaults"/>).
+    /// This pins that same fail-loud behavior for <c>[limits]</c> via the <c>TomlRequired</c>
+    /// attributes on <see cref="LimitsConfig"/>'s properties.
+    /// </summary>
+    [Fact]
+    public void Load_ConfigWithPartialLimitsSection_Throws()
+    {
+        using var tmp = new TempDir();
+        using var guard = new GlobalScopeGuard(tmp);
+
+        var path = Path.Combine(guard.ConfigDir, "rtk", "config.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "[limits]\ngrep_max_results = 5\n");
+
+        Assert.Throws<TomlException>(() => Config.Load());
+    }
+
+    /// <summary>Same partial-section fail-loud contract as <see cref="Load_ConfigWithPartialLimitsSection_Throws"/>, for <c>[tracking]</c>.</summary>
+    [Fact]
+    public void Load_ConfigWithPartialTrackingSection_Throws()
+    {
+        using var tmp = new TempDir();
+        using var guard = new GlobalScopeGuard(tmp);
+
+        var path = Path.Combine(guard.ConfigDir, "rtk", "config.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "[tracking]\nenabled = true\n");
+
+        Assert.Throws<TomlException>(() => Config.Load());
+    }
+
+    /// <summary>Same partial-section fail-loud contract as <see cref="Load_ConfigWithPartialLimitsSection_Throws"/>, for <c>[display]</c>.</summary>
+    [Fact]
+    public void Load_ConfigWithPartialDisplaySection_Throws()
+    {
+        using var tmp = new TempDir();
+        using var guard = new GlobalScopeGuard(tmp);
+
+        var path = Path.Combine(guard.ConfigDir, "rtk", "config.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "[display]\ncolors = true\n");
+
+        Assert.Throws<TomlException>(() => Config.Load());
+    }
+
+    /// <summary>Same partial-section fail-loud contract as <see cref="Load_ConfigWithPartialLimitsSection_Throws"/>, for <c>[filters]</c>.</summary>
+    [Fact]
+    public void Load_ConfigWithPartialFiltersSection_Throws()
+    {
+        using var tmp = new TempDir();
+        using var guard = new GlobalScopeGuard(tmp);
+
+        var path = Path.Combine(guard.ConfigDir, "rtk", "config.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "[filters]\nignore_dirs = [\".git\"]\n");
+
+        Assert.Throws<TomlException>(() => Config.Load());
     }
 
     /// <summary>

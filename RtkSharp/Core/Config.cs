@@ -72,10 +72,22 @@ public sealed class Config
     private const string ConfigFileName = "config.toml";
 
     /// <summary>
-    /// Loads <c>config.toml</c> from the resolved config path if it exists (missing keys within an
-    /// existing file fall back to each field's declared default, verified empirically against
-    /// Tomlyn's model binding — see the type's remarks); otherwise returns an all-defaults
-    /// <see cref="Config"/>. Faithful port of Rust <c>Config::load</c> (config.rs:154-164).
+    /// Loads <c>config.toml</c> from the resolved config path if it exists; otherwise returns an
+    /// all-defaults <see cref="Config"/>. Faithful port of Rust <c>Config::load</c>
+    /// (config.rs:154-164), including its per-section strictness: an entirely <b>absent</b>
+    /// <c>[tracking]</c>/<c>[display]</c>/<c>[filters]</c>/<c>[limits]</c> table still defaults
+    /// cleanly, but a <b>present-but-incomplete</b> one (missing one or more of that section's
+    /// required keys) is a hard failure — matching Rust's serde-derive behavior, where those four
+    /// structs have no per-field <c>#[serde(default)]</c> (config.rs:56-146) and so error on a
+    /// partial table, unlike <c>HooksConfig</c>/<c>TelemetryConfig</c> which genuinely do have
+    /// per-field defaults and so tolerate partial tables by design. See the
+    /// <see cref="Tomlyn.Serialization.TomlRequiredAttribute"/> attributes on
+    /// <see cref="TrackingConfig"/>, <see cref="DisplayConfig"/>,
+    /// <see cref="FilterConfig"/>, and <see cref="LimitsConfig"/>'s properties, which reproduce this
+    /// per-key strictness (verified empirically: Tomlyn 2.10.1's <c>TomlRequiredAttribute</c> throws a
+    /// <c>TomlException</c> when a present table is missing a required key, for both the reflection
+    /// and AOT-safe source-generated binding paths, while still allowing the table itself to be wholly
+    /// absent — see this method's tests in <c>RtkSharp.Tests/Core/ConfigTests.cs</c>).
     /// </summary>
     /// <remarks>
     /// <b>No project-local tier.</b> Unlike <c>.rtk/filters.toml</c> (a later Phase 4 task), there is
@@ -323,11 +335,11 @@ public sealed class HooksConfig
 public sealed class TrackingConfig
 {
     /// <summary>Whether command tracking is enabled at all. Defaults to <see langword="true"/>.</summary>
-    [TomlPropertyName("enabled")]
+    [TomlPropertyName("enabled"), TomlRequired]
     public bool Enabled { get; set; } = true;
 
     /// <summary>How many days of tracking history to retain. Defaults to 90.</summary>
-    [TomlPropertyName("history_days")]
+    [TomlPropertyName("history_days"), TomlRequired]
     public uint HistoryDays { get; set; } = 90;
 
     /// <summary>Override path for the tracking SQLite database, or <see langword="null"/> for the default location.</summary>
@@ -341,15 +353,15 @@ public sealed class TrackingConfig
 public sealed class DisplayConfig
 {
     /// <summary>Whether to use ANSI colors in output. Defaults to <see langword="true"/>.</summary>
-    [TomlPropertyName("colors")]
+    [TomlPropertyName("colors"), TomlRequired]
     public bool Colors { get; set; } = true;
 
     /// <summary>Whether to use emoji in output. Defaults to <see langword="true"/>.</summary>
-    [TomlPropertyName("emoji")]
+    [TomlPropertyName("emoji"), TomlRequired]
     public bool Emoji { get; set; } = true;
 
     /// <summary>Maximum display width in columns. Defaults to 120.</summary>
-    [TomlPropertyName("max_width")]
+    [TomlPropertyName("max_width"), TomlRequired]
     public int MaxWidth { get; set; } = 120;
 }
 
@@ -359,7 +371,7 @@ public sealed class DisplayConfig
 public sealed class FilterConfig
 {
     /// <summary>Directory names to ignore when walking a project tree.</summary>
-    [TomlPropertyName("ignore_dirs")]
+    [TomlPropertyName("ignore_dirs"), TomlRequired]
     public List<string> IgnoreDirs { get; set; } =
     [
         ".git",
@@ -371,7 +383,7 @@ public sealed class FilterConfig
     ];
 
     /// <summary>File glob patterns to ignore when walking a project tree.</summary>
-    [TomlPropertyName("ignore_files")]
+    [TomlPropertyName("ignore_files"), TomlRequired]
     public List<string> IgnoreFiles { get; set; } =
     [
         "*.lock",
@@ -406,23 +418,23 @@ public sealed class TelemetryConfig
 public sealed class LimitsConfig
 {
     /// <summary>Max total grep results to show. Defaults to 200.</summary>
-    [TomlPropertyName("grep_max_results")]
+    [TomlPropertyName("grep_max_results"), TomlRequired]
     public int GrepMaxResults { get; set; } = 200;
 
     /// <summary>Max matches per file in grep output. Defaults to 25.</summary>
-    [TomlPropertyName("grep_max_per_file")]
+    [TomlPropertyName("grep_max_per_file"), TomlRequired]
     public int GrepMaxPerFile { get; set; } = 25;
 
     /// <summary>Max staged/modified files shown in git status. Defaults to 15.</summary>
-    [TomlPropertyName("status_max_files")]
+    [TomlPropertyName("status_max_files"), TomlRequired]
     public int StatusMaxFiles { get; set; } = 15;
 
     /// <summary>Max untracked files shown in git status. Defaults to 10.</summary>
-    [TomlPropertyName("status_max_untracked")]
+    [TomlPropertyName("status_max_untracked"), TomlRequired]
     public int StatusMaxUntracked { get; set; } = 10;
 
     /// <summary>Max chars for parser passthrough fallback. Defaults to 2000.</summary>
-    [TomlPropertyName("passthrough_max_chars")]
+    [TomlPropertyName("passthrough_max_chars"), TomlRequired]
     public int PassthroughMaxChars { get; set; } = 2000;
 }
 
