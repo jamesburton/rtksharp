@@ -14,6 +14,59 @@ internal static class InitTestSupport
 {
     /// <summary>The single lock serializing every CWD mutation across the init test suite.</summary>
     public static readonly object CwdLock = new();
+
+    /// <summary>
+    /// The single lock serializing every <c>CLAUDE_CONFIG_DIR</c>/<c>RTK_CONFIG_DIR_OVERRIDE</c>
+    /// environment-variable mutation across the init test suite (both are process-global, like the
+    /// CWD guarded by <see cref="CwdLock"/>).
+    /// </summary>
+    public static readonly object EnvLock = new();
+}
+
+/// <summary>
+/// Redirects the two environment variables that isolate global-scope <c>rtk init</c> from the real
+/// user profile: <c>CLAUDE_CONFIG_DIR</c> (honored by <see cref="RtkSharp.Hooks.SettingsPatcher.ResolveClaudeDir"/>,
+/// the .NET equivalent of Rust's <c>resolve_claude_dir</c>) and <c>RTK_CONFIG_DIR_OVERRIDE</c>
+/// (honored by <see cref="RtkSharp.Hooks.InitArtifacts.ResolveGlobalConfigDir"/>, guarding the
+/// user-global filters template path that <c>generate_global_filters_template</c> always writes to).
+/// Without both set, global-scope init would read/write the real <c>~/.claude</c> and
+/// <c>%APPDATA%/rtk</c> (or platform equivalent) on the machine running the tests.
+/// </summary>
+internal sealed class GlobalScopeGuard : IDisposable
+{
+    private const string ClaudeConfigDirEnvVar = "CLAUDE_CONFIG_DIR";
+
+    private readonly string? _previousClaudeConfigDir;
+    private readonly string? _previousConfigDirOverride;
+
+    /// <summary>The throwaway directory standing in for <c>~/.claude</c>.</summary>
+    public string ClaudeDir { get; }
+
+    /// <summary>The throwaway directory standing in for the user-global config root (e.g. <c>%APPDATA%</c>).</summary>
+    public string ConfigDir { get; }
+
+    public GlobalScopeGuard(TempDir tmp)
+    {
+        System.Threading.Monitor.Enter(InitTestSupport.EnvLock);
+
+        ClaudeDir = Path.Combine(tmp.Root, ".claude");
+        ConfigDir = Path.Combine(tmp.Root, "config");
+        Directory.CreateDirectory(ClaudeDir);
+        Directory.CreateDirectory(ConfigDir);
+
+        _previousClaudeConfigDir = Environment.GetEnvironmentVariable(ClaudeConfigDirEnvVar);
+        _previousConfigDirOverride = Environment.GetEnvironmentVariable(RtkSharp.Hooks.InitArtifacts.ConfigDirOverrideEnvVar);
+
+        Environment.SetEnvironmentVariable(ClaudeConfigDirEnvVar, ClaudeDir);
+        Environment.SetEnvironmentVariable(RtkSharp.Hooks.InitArtifacts.ConfigDirOverrideEnvVar, ConfigDir);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(ClaudeConfigDirEnvVar, _previousClaudeConfigDir);
+        Environment.SetEnvironmentVariable(RtkSharp.Hooks.InitArtifacts.ConfigDirOverrideEnvVar, _previousConfigDirOverride);
+        System.Threading.Monitor.Exit(InitTestSupport.EnvLock);
+    }
 }
 
 /// <summary>A throwaway directory, deleted best-effort on disposal.</summary>

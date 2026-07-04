@@ -104,6 +104,10 @@ public sealed class InitCommandTests
         Assert.Contains("[dry-run] would add rtk instructions to", console.Out.ToString());
     }
 
+    // Note: "-g" (bare global default mode) and "--show" (without --codex) are no longer deferred —
+    // global-scope Claude Code init and --show are implemented; see InitGlobalCommandTests.cs. Both
+    // touch the real ~/.claude directory unless isolated via GlobalScopeGuard, which is why those
+    // cases moved rather than staying in this CLAUDE_CONFIG_DIR-agnostic theory.
     [Theory]
     [InlineData(new object[] { new[] { "--gemini" } })]
     [InlineData(new object[] { new[] { "--codex" } })]
@@ -111,8 +115,6 @@ public sealed class InitCommandTests
     [InlineData(new object[] { new[] { "--agent", "cursor" } })]
     [InlineData(new object[] { new[] { "--agent", "windsurf" } })]
     [InlineData(new object[] { new[] { "--agent", "pi" } })]
-    [InlineData(new object[] { new[] { "-g" } })]
-    [InlineData(new object[] { new[] { "--show" } })]
     public void OutOfScopeModes_FailLoudWithDeferredMessage(string[] args)
     {
         using var tmp = new TempDir();

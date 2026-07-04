@@ -832,6 +832,42 @@ public static class InitArtifacts
     }
 
     /// <summary>
+    /// Generates the user-global <c>{configDir}/rtk/filters.toml</c> template if it does not already
+    /// exist. Port of Rust <c>generate_global_filters_template</c> (init.rs:1385). Unlike
+    /// <see cref="GenerateProjectFiltersTemplate"/>'s local <c>.rtk</c>, this directory is created
+    /// eagerly (matching Rust's unconditional <c>fs::create_dir_all</c> here — the global-scope
+    /// default/hook-only modes deliberately do <b>not</b> auto-create <c>resolve_claude_dir()</c>
+    /// itself, but this sibling function does create its own directory).
+    /// </summary>
+    /// <param name="ctx">The verbosity/dry-run context.</param>
+    internal static void GenerateGlobalFiltersTemplate(InitContext ctx)
+    {
+        var rtkDir = Path.Combine(ResolveGlobalConfigDir(), "rtk");
+        var path = Path.Combine(rtkDir, "filters.toml");
+
+        if (File.Exists(path))
+        {
+            if (ctx.Verbose > 0)
+            {
+                Console.Error.Write($"{path} already exists, skipping template\n");
+            }
+
+            return;
+        }
+
+        if (ctx.DryRun)
+        {
+            Console.Out.Write($"[dry-run] would create global filters template: {path}\n");
+            return;
+        }
+
+        Directory.CreateDirectory(rtkDir);
+        File.WriteAllText(path, FiltersGlobalTemplate, Utf8NoBom);
+
+        Console.Out.Write($"  filters:   {path} (template, edit to add user-global filters)\n");
+    }
+
+    /// <summary>
     /// Prints the shared dry-run footer emitted at the end of every init sub-mode. Port of Rust
     /// <c>print_dry_run_footer</c> (init.rs:104).
     /// </summary>
@@ -865,7 +901,7 @@ public static class InitArtifacts
     /// </summary>
     /// <param name="content">The content to split.</param>
     /// <returns>The content's lines, with no trailing empty line.</returns>
-    private static string[] SplitRustLines(string content)
+    internal static string[] SplitRustLines(string content)
     {
         if (content.Length == 0)
         {
