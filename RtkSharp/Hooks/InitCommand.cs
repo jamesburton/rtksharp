@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RtkSharp.Core;
 
 namespace RtkSharp.Hooks;
 
@@ -59,7 +60,17 @@ public static class InitCommand
     private static int RunCore(string[] args)
     {
         var flags = ParseArgs(args);
-        var ctx = new InitContext(flags.Verbose, flags.DryRun);
+        // Rust's `-v`/`-vv`/`-vvv`/`--verbose` is a top-level `Cli` flag "only recognized before
+        // the subcommand" (main.rs:65-67: `Cli { verbose: u8, .. }`, threaded as `cli.verbose` into
+        // `InitContext`, main.rs:1892) — NOT an `init`-subcommand argument. `rtk init --dry-run -v`
+        // is a clap parse error on the oracle (exit 2, "unexpected argument '-v' found"); only
+        // `rtk -v init --dry-run` enables verbose diagnostics. `ParseArgs` below therefore does not
+        // recognize `-v`/`--verbose` as an init-level flag (an unrecognized-argument abort with this
+        // port's own diagnostic is the closest achievable match — see Task 4 parity report for the
+        // exit-code caveat), and verbosity is read from the ambient top-level flag instead, exactly
+        // like `RuntimeOptions.UltraCompact` is threaded into other verbs whose registry delegate
+        // cannot carry it as a parameter.
+        var ctx = new InitContext(RuntimeOptions.Verbosity, flags.DryRun);
 
         if (flags.Show)
         {
@@ -936,7 +947,6 @@ public static class InitCommand
         public bool Codex;
         public bool Copilot;
         public bool DryRun;
-        public int Verbose;
     }
 
     /// <summary>Parses the <c>init</c> verb's argument list into <see cref="InitFlags"/>.</summary>
@@ -994,10 +1004,6 @@ public static class InitCommand
                     break;
                 case "--dry-run":
                     flags.DryRun = true;
-                    break;
-                case "-v":
-                case "--verbose":
-                    flags.Verbose++;
                     break;
                 default:
                     throw new InitAbortException($"unrecognized init argument: {args[i]}");

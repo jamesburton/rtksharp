@@ -29,4 +29,12 @@ public static class RuntimeOptions
     /// delegate cannot receive it as an argument.
     /// </summary>
     public static bool UltraCompact { get; set; }
+
+    /// <summary>
+    /// The verbosity level requested via the global <c>-v</c>/<c>-vv</c>/<c>-vvv</c>/<c>--verbose</c>
+    /// flag(s) (mirrors Rust's <c>cli.verbose: u8</c>, main.rs:67 — "only recognized before the
+    /// subcommand"). Set once by <c>Program</c> before command dispatch; read by
+    /// <c>RtkSharp.Hooks.InitCommand</c>, whose registry delegate cannot receive it as an argument.
+    /// </summary>
+    public static int Verbosity { get; set; }
 }

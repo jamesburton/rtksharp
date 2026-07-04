@@ -23,6 +23,7 @@ internal static class RtkProgram
         // (Func<string[], Task<int>>) cannot carry it. Mirrors Rust threading cli.ultra_compact
         // into gh_cmd::run (main.rs:1673). See RuntimeOptions for the rationale.
         RuntimeOptions.UltraCompact = parsed.UltraCompact;
+        RuntimeOptions.Verbosity = parsed.Verbosity;
 
         if (parsed.Version)
         {

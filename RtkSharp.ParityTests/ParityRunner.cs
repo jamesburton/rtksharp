@@ -85,6 +85,12 @@ public static class ParityRunner
     /// <param name="args">Arguments to pass to the executable.</param>
     /// <param name="workingDirectory">Working directory for the child process, or null.</param>
     /// <param name="environment">Environment overrides to apply, or null to inherit.</param>
+    /// <param name="stdin">
+    /// When set, piped to the child's standard input (which is then closed so the child observes
+    /// EOF), matching <see cref="ExecutionRequest.StdinContent"/>. Pass <c>""</c> to force
+    /// non-interactive stdin (no data, immediate EOF) without inheriting the test runner's own
+    /// console handle.
+    /// </param>
     /// <param name="cancellationToken">Token to cancel the execution.</param>
     /// <returns>A tuple of the captured stdout and the process exit code.</returns>
     public static async Task<(string Stdout, int ExitCode)> RunAsync(
@@ -92,12 +98,13 @@ public static class ParityRunner
         string[] args,
         string? workingDirectory = null,
         IReadOnlyDictionary<string, string?>? environment = null,
+        string? stdin = null,
         CancellationToken cancellationToken = default
     )
     {
         var executor = new ProcessExecutor();
         var result = await executor.ExecuteAsync(
-            new ExecutionRequest(fileName, args, workingDirectory, environment),
+            new ExecutionRequest(fileName, args, workingDirectory, environment, StdinContent: stdin),
             cancellationToken
         ).ConfigureAwait(false);
 
