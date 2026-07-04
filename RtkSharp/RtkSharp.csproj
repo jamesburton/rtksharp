@@ -14,6 +14,19 @@
 
   <ItemGroup>
     <PackageReference Include="Spectre.Console" Version="0.57.1" />
+    <!--
+      TOML parser/serializer for config.toml (RtkSharp/Core/Config.cs) and, in later Phase 4 tasks,
+      the .rtk/filters.toml TOML filter DSL. No TOML support exists in the .NET BCL. Version 2.10.1
+      is the latest stable release as of this writing; it ships an STJ-style TomlSerializer with an
+      AOT-safe source-generation mode (TomlSerializerContext + [TomlSerializable]), which Config.cs
+      uses for Config.Load() so PublishAot=true does not depend on reflection. Its built-in pretty
+      printer does not reproduce Rust's `toml::to_string_pretty` shape (it writes arrays inline with
+      no line wrapping and omits the blank line Rust inserts between top-level tables), so
+      Config.cs's Save()/ShowConfig() write TOML via a small hand-rolled formatter targeting exactly
+      Config's fixed 6-section shape instead of Tomlyn's generic serializer; see Config.cs's remarks
+      for the verified oracle comparison.
+    -->
+    <PackageReference Include="Tomlyn" Version="2.10.1" />
     <InternalsVisibleTo Include="RtkSharp.Tests" />
   </ItemGroup>
 
