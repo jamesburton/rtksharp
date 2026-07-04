@@ -500,11 +500,14 @@ public sealed class TomlFilterEngineTests
         var filter = Assert.Single(filters);
         Assert.Equal("my-git-filter", filter.Name);
 
-        // ...but a warning is emitted because "git" is in RUST_HANDLED_COMMANDS.
+        // ...but a warning is emitted because "git" is in RUST_HANDLED_COMMANDS. Assert the full
+        // exact message (byte-for-byte parity with Rust's toml_filter.rs:330-334 eprintln!) rather
+        // than loose substrings, so an accidental rewording is caught immediately.
         var warningText = warnings.ToString();
-        Assert.Contains("my-git-filter", warningText);
-        Assert.Contains("git", warningText);
-        Assert.Contains("never activate", warningText);
+        Assert.Equal(
+            "[rtk] warning: filter 'my-git-filter' match_command matches 'git' which is already " +
+            "handled by a Rust module — this filter will never activate for that command\n",
+            warningText);
     }
 
     // -----------------------------------------------------------------

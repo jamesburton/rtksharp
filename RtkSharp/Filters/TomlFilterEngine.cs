@@ -544,7 +544,7 @@ public static class TomlFilterCompiler
             {
                 warnings.Write(
                     $"[rtk] warning: filter '{name}' match_command matches '{cmd}' which is already " +
-                    "handled by a dedicated command module — this filter will never activate for that command\n");
+                    "handled by a Rust module — this filter will never activate for that command\n");
                 break;
             }
         }
