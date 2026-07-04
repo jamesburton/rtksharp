@@ -84,7 +84,19 @@ namespace RtkSharp.ParityTests;
 /// directory after all steps) is compared too, so both installers must write identical files with
 /// identical bytes, not just print the same thing.
 /// </para>
+/// <para>
+/// <b>Collection isolation from <see cref="ConfigFilterParityTests"/>.</b> Phase 4 Task 6's
+/// <c>ConfigFilterParityTests</c> independently manages a junction at this exact same real path
+/// (<c>%APPDATA%\rtk</c>) for its own <c>rtk config</c>/TOML-fallback entries, via its own
+/// <c>HostRealDirGuard</c> class (a separate marker file, so neither guard's self-heal can
+/// misidentify the other's leftover junction). xUnit does not guarantee two different test classes
+/// run sequentially by default, and a concurrent junction create/teardown race at the same real path
+/// is exactly the class of bug both guards exist to prevent — so both classes are pinned to the same
+/// named <c>[Collection]</c>, which xUnit never runs in parallel with itself, eliminating the race by
+/// construction.
+/// </para>
 /// </remarks>
+[Collection("HostRealDirGuard")]
 public class InitParityTests
 {
     private const double ParityThresholdPercent = 95.0;
