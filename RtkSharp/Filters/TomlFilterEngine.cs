@@ -395,6 +395,14 @@ public static class TomlFilterCompiler
     {
         warnings ??= Console.Error;
 
+        // Normalize CRLF -> LF before parsing: unlike Rust's toml crate (which normalizes newlines
+        // inside multi-line strings during parsing), Tomlyn preserves \r\n verbatim. Without this,
+        // a filters.toml checked out with CRLF line endings (e.g. Windows + core.autocrlf=true, as
+        // with this repo's embedded builtin filters) would embed literal \r characters into every
+        // multi-line string value, silently diverging from the oracle everywhere those strings are
+        // compared (most visibly in `rtk verify`'s inline-test battery).
+        content = NormalizeNewlines(content);
+
         TomlFilterFile file;
         try
         {
@@ -435,12 +443,23 @@ public static class TomlFilterCompiler
     }
 
     /// <summary>
+    /// Normalizes CRLF line endings to LF, matching the TOML spec's permitted (and, for the Rust
+    /// <c>toml</c> crate, actual) newline normalization inside multi-line strings. Tomlyn does not
+    /// normalize, so any content read from a CRLF-terminated file (e.g. this repo's builtin filters,
+    /// checked out with <c>core.autocrlf=true</c> on Windows) would otherwise embed literal <c>\r</c>
+    /// bytes into multi-line string values, diverging from the oracle.
+    /// </summary>
+    /// <param name="content">The raw TOML document text.</param>
+    /// <returns><paramref name="content"/> with every <c>\r\n</c> replaced by <c>\n</c>.</returns>
+    internal static string NormalizeNewlines(string content) => content.Replace("\r\n", "\n");
+
+    /// <summary>
     /// Walks a second, untyped parse of <paramref name="content"/> to detect fields that
     /// <see cref="TomlFilterDef"/>, <see cref="ReplaceRule"/>, <see cref="MatchOutputRule"/>, or
     /// <see cref="TomlFilterTestDef"/> do not recognize — the manual equivalent of serde's
     /// <c>#[serde(deny_unknown_fields)]</c>, which Tomlyn does not provide.
     /// </summary>
-    private static void ValidateNoUnknownFields(string content, string source)
+    internal static void ValidateNoUnknownFields(string content, string source)
     {
         // Deserializes into the untyped TomlTable model via the AOT-safe context overload (rather
         // than the TomlSerializerOptions overload, which is unconditionally annotated
@@ -525,7 +544,7 @@ public static class TomlFilterCompiler
         }
     }
 
-    private static CompiledFilter CompileFilter(string name, TomlFilterDef def, TextWriter warnings)
+    internal static CompiledFilter CompileFilter(string name, TomlFilterDef def, TextWriter warnings)
     {
         // Mutual exclusion: strip and keep cannot both be set.
         if (def.StripLinesMatching.Count > 0 && def.KeepLinesMatching.Count > 0)
@@ -678,12 +697,185 @@ public static class TomlFilterBuiltins
 // ---------------------------------------------------------------------------
 
 /// <summary>
+/// Outcome of running a single inline <c>[[tests.&lt;filter&gt;]]</c> case. Faithful port of Rust
+/// <c>TestOutcome</c> (<c>toml_filter.rs:160-167</c>). <see cref="Actual"/> and <see cref="Expected"/>
+/// are already trailing-newline-trimmed (matching Rust's <c>trim_end_matches('\n')</c>).
+/// </summary>
+/// <param name="FilterName">The filter the test exercises.</param>
+/// <param name="TestName">The test case's <c>name</c>.</param>
+/// <param name="Passed">Whether <see cref="Actual"/> equals <see cref="Expected"/> after trimming.</param>
+/// <param name="Actual">The (trimmed) output <see cref="TomlFilterEngine.ApplyFilter"/> produced.</param>
+/// <param name="Expected">The (trimmed) expected output declared in the test.</param>
+public sealed record VerifyTestOutcome(string FilterName, string TestName, bool Passed, string Actual, string Expected);
+
+/// <summary>
+/// Aggregated results from <see cref="TomlFilterEngine.RunFilterTests"/>. Faithful port of Rust
+/// <c>VerifyResults</c> (<c>toml_filter.rs:169-175</c>).
+/// </summary>
+public sealed class VerifyResults
+{
+    /// <summary>Individual test outcomes (all filters, or just the requested one), builtin-then-project order.</summary>
+    public required IReadOnlyList<VerifyTestOutcome> Outcomes { get; init; }
+
+    /// <summary>Filter names that declared no inline tests (used by <c>--require-all</c>), in declaration order.</summary>
+    public required IReadOnlyList<string> FiltersWithoutTests { get; init; }
+}
+
+/// <summary>
 /// Finds a matching filter and applies its 8-stage pipeline. Pure, stateless functions — this type
 /// holds no registry state and does not know about the project/global/builtin precedence tiers (a
 /// later task) or command dispatch (also a later task).
 /// </summary>
 public static class TomlFilterEngine
 {
+    private const string ProjectFilterRelativePath = ".rtk/filters.toml";
+
+    /// <summary>
+    /// Runs the inline <c>[[tests.*]]</c> battery for the built-in filters and (trust-gated) the
+    /// project-local <c>.rtk/filters.toml</c>, comparing each test's expected output against the
+    /// result of <see cref="ApplyFilter"/> (both trailing-newline-trimmed). Faithful port of Rust
+    /// <c>run_filter_tests</c> (<c>toml_filter.rs:545-598</c>).
+    /// </summary>
+    /// <remarks>
+    /// <b>Sources match the oracle, not the 3-tier registry.</b> Like Rust's <c>run_filter_tests</c>,
+    /// this checks the built-in blob and the project-local file only — the user-global
+    /// <c>~/.config/rtk/filters.toml</c> tier that <see cref="TomlFilterRegistry.Load"/> also loads is
+    /// deliberately <b>not</b> consulted here, because the Rust oracle's verify battery does not load
+    /// it either. Filter and test iteration is alphabetical by name (Rust uses <c>BTreeMap</c>).
+    /// </remarks>
+    /// <param name="filterName">If non-<see langword="null"/>, only run tests for that filter name.</param>
+    /// <param name="trustChecker">The project-local trust gate (see <see cref="TrustChecker"/>).</param>
+    /// <param name="warnings">Where per-source/per-filter diagnostics are written.</param>
+    /// <returns>The aggregated test outcomes and missing-test filter names.</returns>
+    public static VerifyResults RunFilterTests(string? filterName, TrustChecker trustChecker, TextWriter warnings)
+    {
+        ArgumentNullException.ThrowIfNull(trustChecker);
+        ArgumentNullException.ThrowIfNull(warnings);
+
+        var outcomes = new List<VerifyTestOutcome>();
+        var allFilterNames = new List<string>();
+        var testedFilterNames = new HashSet<string>(StringComparer.Ordinal);
+
+        // Built-in filters (always).
+        CollectTestOutcomes(
+            TomlFilterBuiltins.LoadConcatenated(), filterName, outcomes, allFilterNames, testedFilterNames, warnings);
+
+        // Trust-gated: only verify project-local filters if trusted (SA-2025-RTK-002).
+        if (File.Exists(ProjectFilterRelativePath))
+        {
+            var result = trustChecker(ProjectFilterRelativePath);
+            switch (result.Status)
+            {
+                case FilterTrustStatus.Trusted:
+                case FilterTrustStatus.EnvOverride:
+                    if (result.Content is { } content)
+                    {
+                        CollectTestOutcomes(
+                            content, filterName, outcomes, allFilterNames, testedFilterNames, warnings);
+                    }
+
+                    break;
+
+                default:
+                    warnings.Write("[rtk] WARNING: untrusted project filters skipped in verify\n");
+                    break;
+            }
+        }
+
+        var filtersWithoutTests = allFilterNames
+            // When a specific filter is requested, only report that one as missing tests.
+            .Where(name => filterName is null || name == filterName)
+            .Where(name => !testedFilterNames.Contains(name))
+            .ToList();
+
+        return new VerifyResults { Outcomes = outcomes, FiltersWithoutTests = filtersWithoutTests };
+    }
+
+    /// <summary>
+    /// Parses one filters document, compiles its filters, and appends each filter's inline-test
+    /// outcomes to <paramref name="outcomes"/>. Faithful port of Rust <c>collect_test_outcomes</c>
+    /// (<c>toml_filter.rs:600-662</c>). A whole-document parse/unknown-field failure warns and skips
+    /// the source (does not abort the whole battery), mirroring Rust's <c>toml::from_str</c> error arm.
+    /// </summary>
+    private static void CollectTestOutcomes(
+        string content,
+        string? filterName,
+        List<VerifyTestOutcome> outcomes,
+        List<string> allFilterNames,
+        HashSet<string> testedFilterNames,
+        TextWriter warnings)
+    {
+        // See TomlFilterCompiler.NormalizeNewlines: Tomlyn preserves \r\n verbatim in multi-line
+        // strings, unlike Rust's toml crate, so a CRLF-terminated source must be normalized before
+        // parsing or every multi-line `input`/`expected` test literal would carry stray \r bytes.
+        content = TomlFilterCompiler.NormalizeNewlines(content);
+
+        TomlFilterFile file;
+        try
+        {
+            file = TomlSerializer.Deserialize(content, TomlFilterFileContext.Default.TomlFilterFile)
+                ?? new TomlFilterFile();
+
+            // serde's deny_unknown_fields fails the whole parse on an unknown key; reproduce that so a
+            // malformed source is skipped (warned) rather than silently tolerated.
+            TomlFilterCompiler.ValidateNoUnknownFields(content, "verify");
+        }
+        catch (TomlException e)
+        {
+            warnings.Write($"[rtk] warning: TOML parse error during verify: {e.Message}\n");
+            return;
+        }
+        catch (TomlFilterParseException e)
+        {
+            warnings.Write($"[rtk] warning: TOML parse error during verify: {e.Message}\n");
+            return;
+        }
+
+        // Compile all filters and track their names (alphabetical, matching Rust's BTreeMap). A
+        // filter that fails to compile is still recorded in all_filter_names (Rust pushes the name
+        // before compiling), so --require-all still reports it if it also lacks tests.
+        var compiledFilters = new Dictionary<string, CompiledFilter>(StringComparer.Ordinal);
+        foreach (var name in file.Filters.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            allFilterNames.Add(name);
+            try
+            {
+                compiledFilters[name] = TomlFilterCompiler.CompileFilter(name, file.Filters[name], warnings);
+            }
+            catch (FilterCompileException e)
+            {
+                warnings.Write($"[rtk] warning: filter '{name}' compilation error: {e.Message}\n");
+            }
+        }
+
+        // Run tests (alphabetical by filter name).
+        foreach (var testFilterName in file.Tests.Keys.OrderBy(k => k, StringComparer.Ordinal))
+        {
+            if (filterName is not null && testFilterName != filterName)
+            {
+                continue;
+            }
+
+            testedFilterNames.Add(testFilterName);
+
+            if (!compiledFilters.TryGetValue(testFilterName, out var compiled))
+            {
+                warnings.Write($"[rtk] warning: [[tests.{testFilterName}]] references unknown filter\n");
+                continue;
+            }
+
+            foreach (var test in file.Tests[testFilterName])
+            {
+                var actual = ApplyFilter(compiled, test.Input);
+                // Trim trailing newlines: TOML multiline strings end with a newline.
+                var actualCmp = actual.TrimEnd('\n');
+                var expectedCmp = test.Expected.TrimEnd('\n');
+                outcomes.Add(new VerifyTestOutcome(
+                    testFilterName, test.Name, actualCmp == expectedCmp, actualCmp, expectedCmp));
+            }
+        }
+    }
+
     /// <summary>
     /// Finds the first filter in <paramref name="filters"/> whose <c>match_command</c> regex matches
     /// <paramref name="command"/>. O(N) on the number of filters. Faithful port of Rust

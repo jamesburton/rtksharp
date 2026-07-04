@@ -1,7 +1,10 @@
+using System.IO;
 using System.Text;
 using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Execution;
+using RtkSharp.Filters;
+using RtkSharp.Hooks;
 
 return await RtkProgram.RunAsync(args);
 
@@ -42,6 +45,23 @@ internal static class RtkProgram
             return await handler(parsed.CommandArgs).ConfigureAwait(false);
         }
 
+        // Last-resort TOML filter fallback for commands with no dedicated module (mirrors Rust's
+        // run_fallback TOML branch, main.rs:1213-1292). Strictly after the registry lookup, so a
+        // dedicated module's behavior is never changed. Runtime hot path: any lookup failure returns
+        // null and degrades to the raw passthrough below; RTK_NO_TOML=1 also bypasses it.
+        var tomlExit = await TryTomlFallbackAsync(
+            parsed.CommandName,
+            parsed.CommandArgs,
+            Console.Out,
+            Console.Error,
+            new ProcessExecutor(),
+            TrustCommand.AsTrustChecker(),
+            cancellationToken).ConfigureAwait(false);
+        if (tomlExit is { } handledExit)
+        {
+            return handledExit;
+        }
+
         var executor = new ProcessExecutor();
         var result = await executor.ExecuteAsync(
             new ExecutionRequest(parsed.CommandName, parsed.CommandArgs),
@@ -63,6 +83,115 @@ internal static class RtkProgram
             Console.Error.WriteLine(result.Failure);
         }
 
+        return result.ExitCode;
+    }
+
+    /// <summary>
+    /// Applies the last-resort TOML filter fallback for a command that no dedicated module handled:
+    /// looks up a matching filter across the built-in/user-global/project tiers, and if one matches,
+    /// runs the command, applies the filter to its output, and prints the filtered result. Faithful
+    /// port of the TOML branch of Rust <c>run_fallback</c> (<c>main.rs:1213-1292</c>).
+    /// </summary>
+    /// <remarks>
+    /// Returns <see langword="null"/> — signaling the caller to fall through to the unchanged raw
+    /// passthrough — when <c>RTK_NO_TOML=1</c> is set, no filter matches, the command could not be
+    /// started, or the lookup itself failed (fallback pattern: a bad filter/registry never blocks the
+    /// command). The lookup uses the <em>basename</em> of the verb so absolute paths
+    /// (<c>/usr/bin/make</c>) still match anchored patterns like <c>^make\b</c>. Tee/raw-recovery
+    /// hinting on failure (Rust's <c>tee_and_hint</c>) is out of scope this phase (the tee store is
+    /// unported), so it is deliberately omitted.
+    /// </remarks>
+    /// <param name="commandName">The unrecognized verb (may be an absolute path).</param>
+    /// <param name="commandArgs">The verb's arguments.</param>
+    /// <param name="stdout">The destination for the filtered output.</param>
+    /// <param name="stderr">The destination for the child's stderr (when not merged).</param>
+    /// <param name="executor">The process executor used to run the command.</param>
+    /// <param name="trustChecker">The project-local trust gate for the filter registry.</param>
+    /// <param name="cancellationToken">A token to cancel command execution.</param>
+    /// <returns>The command's exit code when a filter handled it; otherwise <see langword="null"/>.</returns>
+    internal static async Task<int?> TryTomlFallbackAsync(
+        string commandName,
+        string[] commandArgs,
+        TextWriter stdout,
+        TextWriter stderr,
+        IProcessExecutor executor,
+        TrustChecker trustChecker,
+        CancellationToken cancellationToken)
+    {
+        CompiledFilter? filter;
+        try
+        {
+            // RTK_NO_TOML=1 bypasses the whole engine (also short-circuited in FindMatchingFilter).
+            if (Environment.GetEnvironmentVariable("RTK_NO_TOML") == "1")
+            {
+                return null;
+            }
+
+            var basename = Path.GetFileName(commandName);
+            if (string.IsNullOrEmpty(basename))
+            {
+                basename = commandName;
+            }
+
+            var lookupCmd = commandArgs.Length > 0
+                ? basename + " " + string.Join(' ', commandArgs)
+                : basename;
+
+            var registry = TomlFilterRegistry.Load(trustChecker);
+            filter = registry.FindMatchingFilter(lookupCmd);
+        }
+        catch (Exception)
+        {
+            // Fallback pattern: a registry/lookup failure must never block command execution.
+            return null;
+        }
+
+        if (filter is null)
+        {
+            // No filter matched — fall through to the raw passthrough, byte-for-byte unchanged.
+            return null;
+        }
+
+        var result = await executor.ExecuteAsync(
+            new ExecutionRequest(commandName, commandArgs, CaptureMode: ExecutionCaptureMode.Separate),
+            cancellationToken).ConfigureAwait(false);
+
+        if (!result.WasStarted)
+        {
+            // Command not found: nothing ran (no side effects), so let the raw passthrough handle the
+            // not-found path exactly as today.
+            return null;
+        }
+
+        // filter_stderr merges stderr into the text to filter; otherwise stderr is emitted directly so
+        // it stays visible (mirrors main.rs:1233-1262).
+        string combinedRaw;
+        if (filter.FilterStderr)
+        {
+            combinedRaw = result.Stdout + result.Stderr;
+        }
+        else
+        {
+            combinedRaw = result.Stdout;
+            if (!string.IsNullOrEmpty(result.Stderr))
+            {
+                stderr.Write(result.Stderr);
+            }
+        }
+
+        string filtered;
+        try
+        {
+            filtered = TomlFilterEngine.ApplyFilter(filter, combinedRaw);
+        }
+        catch (Exception)
+        {
+            // Never hide the command's output over a filter bug: emit it unfiltered.
+            filtered = combinedRaw;
+        }
+
+        stdout.Write(filtered);
+        stdout.Write('\n'); // Rust prints via println! (adds a trailing newline).
         return result.ExitCode;
     }
 

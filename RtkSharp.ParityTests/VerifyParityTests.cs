@@ -5,24 +5,22 @@ using Xunit;
 namespace RtkSharp.ParityTests;
 
 /// <summary>
-/// Final-review acceptance gate: an oracle parity battery for <c>rtk verify</c>'s hook-integrity
-/// stdout surface, comparing stdout and exit code against the real Rust oracle. Follows the exact
-/// hermetic pattern established in <see cref="InitParityTests"/> (temp CWD, <c>CLAUDE_CONFIG_DIR</c>
-/// environment overlay, <c>StdinContent = ""</c>, oracle-vs-port comparison, auto-written Markdown
-/// report) — this file adds no new plumbing, it reuses that entry's approach for a distinct verb.
+/// Final-review acceptance gate: an oracle parity battery for <c>rtk verify</c>'s full stdout
+/// surface (hook-integrity check plus the TOML inline-test battery), comparing stdout and exit code
+/// against the real Rust oracle. Follows the exact hermetic pattern established in
+/// <see cref="InitParityTests"/> (temp CWD, <c>CLAUDE_CONFIG_DIR</c> environment overlay,
+/// <c>StdinContent = ""</c>, oracle-vs-port comparison, auto-written Markdown report) — this file
+/// adds no new plumbing, it reuses that entry's approach for a distinct verb.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Scope.</b> <c>rtk verify</c>'s no-<c>--filter</c> stdout diverges from the oracle for a
-/// documented, out-of-scope reason (see <c>VerifyCommand</c>'s remarks): the oracle additionally and
-/// unconditionally runs <c>hooks::verify_cmd::run(None, require_all)</c> (TOML inline-filter
-/// self-tests) after the integrity check, appending a trailing "N/M tests passed" or "No inline
-/// tests found." block that this port does not yet produce. Both battery entries below therefore
-/// compare only the <b>integrity-check</b> portion of stdout — the lines this port's
-/// <see cref="Hooks.Integrity.RunVerify"/> actually emits — by trimming the oracle's stdout to just
-/// the recognized integrity-status prefixes before comparing. This is a narrower comparison than
-/// <see cref="InitParityTests"/>'s byte-exact stdout match, reflecting the documented, ledgered
-/// parity gap rather than silently working around an unexpected divergence.
+/// <b>Scope.</b> Phase 4 Task 5 closed the previously-ledgered gap where bare <c>rtk verify</c>
+/// omitted the oracle's unconditional <c>hooks::verify_cmd::run(None, require_all)</c> inline-test
+/// battery (see <c>docs/parity/compatibility-ledger.md</c>). Both battery entries below now compare
+/// the <b>full</b> stdout byte-for-byte (after masking the sandbox temp path), matching
+/// <see cref="InitParityTests"/>'s comparison strictness — there is no longer a documented
+/// divergence to work around. Neither entry seeds a project-local <c>.rtk/filters.toml</c>, so both
+/// sides run only the built-in inline-test battery (deterministic count on both sides).
 /// </para>
 /// <para>
 /// <b>Battery.</b> (a) "native binary hook registered": <c>settings.json</c> contains
@@ -133,57 +131,17 @@ public class VerifyParityTests
             var (portStdout, portExit) =
                 await ParityRunner.RunAsync(portFileName, portArgs, portTemp, portEnv, stdin: "");
 
-            var oracleIntegrityLines = ExtractIntegrityLines(oracleStdout);
-            var portIntegrityLines = Normalize(MaskPaths(portStdout, portTemp));
-            var maskedOracleIntegrityLines = Normalize(MaskPaths(oracleIntegrityLines, oracleTemp));
+            var maskedOracleStdout = Normalize(MaskPaths(oracleStdout, oracleTemp));
+            var maskedPortStdout = Normalize(MaskPaths(portStdout, portTemp));
 
             return new VerifyResult(
-                entry.Label, maskedOracleIntegrityLines, portIntegrityLines, oracleExit, portExit);
+                entry.Label, maskedOracleStdout, maskedPortStdout, oracleExit, portExit);
         }
         finally
         {
             TryDeleteDirectory(oracleTemp);
             TryDeleteDirectory(portTemp);
         }
-    }
-
-    /// <summary>
-    /// Trims the oracle's full <c>rtk verify</c> stdout down to just the integrity-check block this
-    /// port actually implements, discarding the trailing TOML inline-filter self-test block the
-    /// oracle unconditionally appends (see class remarks — a documented, ledgered parity gap, not
-    /// something this battery silently papers over). Recognized integrity-status line prefixes:
-    /// <c>PASS</c>, <c>SKIP</c>, <c>WARN</c>, <c>FAIL</c>, and their indented continuation lines
-    /// (leading whitespace, e.g. the "command: rtk hook claude" detail line).
-    /// </summary>
-    private static string ExtractIntegrityLines(string stdout)
-    {
-        var lines = stdout.Replace("\r\n", "\n").Split('\n');
-        var kept = new List<string>();
-        var inIntegrityBlock = false;
-
-        foreach (var line in lines)
-        {
-            var isStatusLine = line.StartsWith("PASS", StringComparison.Ordinal)
-                || line.StartsWith("SKIP", StringComparison.Ordinal)
-                || line.StartsWith("WARN", StringComparison.Ordinal)
-                || line.StartsWith("FAIL", StringComparison.Ordinal);
-
-            if (isStatusLine)
-            {
-                inIntegrityBlock = true;
-                kept.Add(line);
-            }
-            else if (inIntegrityBlock && (line.Length == 0 || char.IsWhiteSpace(line[0])))
-            {
-                kept.Add(line);
-            }
-            else
-            {
-                inIntegrityBlock = false;
-            }
-        }
-
-        return string.Join('\n', kept);
     }
 
     // ===================== helpers (mirrors InitParityTests' hermeticity plumbing) =====================
@@ -291,11 +249,10 @@ public class VerifyParityTests
         sb.AppendLine();
         sb.AppendLine("Comparison method: each entry runs both binaries in a fresh, isolated temp directory " +
                       "with `CLAUDE_CONFIG_DIR` redirected for both sides and `StdinContent = \"\"` (forced " +
-                      "non-interactive stdin). Only the integrity-check portion of stdout is compared (`PASS`/" +
-                      "`SKIP`/`WARN`/`FAIL` lines and their indented continuations) — the oracle's trailing TOML " +
-                      "inline-filter self-test block is excluded on both sides, since this port does not " +
-                      "implement that subsystem yet (a distinct, already-ledgered parity gap; see " +
-                      "`VerifyCommand`'s remarks and `docs/parity/compatibility-ledger.md`).");
+                      "non-interactive stdin). Full stdout is compared byte-for-byte (after masking the " +
+                      "sandbox temp path) — the oracle's TOML inline-filter self-test block is included on " +
+                      "both sides now that Phase 4 Task 5 closed the previously-ledgered gap (see " +
+                      "`docs/parity/compatibility-ledger.md`).");
         sb.AppendLine();
         sb.AppendLine("## Summary");
         sb.AppendLine();
@@ -321,7 +278,7 @@ public class VerifyParityTests
         sb.AppendLine();
         if (mismatches.Count == 0)
         {
-            sb.AppendLine("None — every battery entry matched on the integrity-check portion of stdout and exit code.");
+            sb.AppendLine("None — every battery entry matched on full stdout and exit code.");
         }
         else
         {
@@ -331,7 +288,7 @@ public class VerifyParityTests
                 sb.AppendLine();
                 sb.AppendLine($"- Verdict: **{r.Verdict}**");
                 sb.AppendLine($"- Rust exit: `{r.RustExit}`, .NET exit: `{r.PortExit}`");
-                sb.AppendLine($"- Rust stdout (integrity lines only): {Md(r.RustStdout)}");
+                sb.AppendLine($"- Rust stdout: {Md(r.RustStdout)}");
                 sb.AppendLine($"- .NET stdout: {Md(r.PortStdout)}");
                 sb.AppendLine();
             }

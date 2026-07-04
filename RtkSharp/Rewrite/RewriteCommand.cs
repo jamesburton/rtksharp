@@ -1,3 +1,5 @@
+using RtkSharp.Core;
+
 namespace RtkSharp.Rewrite;
 
 /// <summary>
@@ -7,8 +9,10 @@ namespace RtkSharp.Rewrite;
 /// <c>evaluate</c> (<c>src/hooks/rewrite_cmd.rs:48</c>). The public <see cref="Evaluate(string)"/>
 /// loads the user's Claude Code permission rules via <see cref="PermissionRules.Default"/>, so an
 /// allowed command (e.g. <c>Bash(git:*)</c>) resolves to <see cref="PermissionVerdict.Allow"/>
-/// (exit 0). <c>~/.config/rtk/config.toml</c> exclude/prefix lists remain out of scope, so
-/// <see cref="RewriteEngine.RewriteCommand"/> is still invoked with empty exclude/prefix lists.
+/// (exit 0). The user's <c>~/.config/rtk/config.toml</c> <c>hooks.exclude_commands</c> /
+/// <c>hooks.transparent_prefixes</c> lists are loaded via <see cref="Config.LoadOrDefault"/> and
+/// passed into <see cref="RewriteEngine.RewriteCommand"/>; a missing or corrupt config falls back
+/// to empty lists (today's behavior) rather than failing this hot path.
 /// </summary>
 public static class RewriteCommand
 {
@@ -59,7 +63,10 @@ public static class RewriteCommand
             return (1, "");
         }
 
-        var rewritten = RewriteEngine.RewriteCommand(cmd, [], []);
+        // Runtime hot path: honor the user's config exclude/transparent-prefix lists, but never let a
+        // corrupt config.toml crash the rewrite pipeline — LoadOrDefault falls back to empty lists.
+        var config = Config.LoadOrDefault();
+        var rewritten = RewriteEngine.RewriteCommand(cmd, config.Hooks.ExcludeCommands, config.Hooks.TransparentPrefixes);
         if (rewritten is null)
         {
             return (1, "");

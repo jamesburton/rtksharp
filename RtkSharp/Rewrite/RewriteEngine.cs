@@ -11,7 +11,20 @@ namespace RtkSharp.Rewrite;
 /// </summary>
 public static class RewriteEngine
 {
-    /// <summary>Built-in transparent wrappers that use the strip/recurse/re-prepend contract.</summary>
+    /// <summary>
+    /// Built-in transparent wrappers that use the strip/recurse/re-prepend contract. Faithful port of
+    /// the rewrite engine's <c>BUILTIN_TRANSPARENT_PREFIXES</c> (<c>src/discover/registry.rs:656-663</c>):
+    /// <c>uv run</c>, <c>noglob</c>, <c>command</c>, <c>builtin</c>, <c>exec</c>, <c>nocorrect</c>.
+    /// </summary>
+    /// <remarks>
+    /// This is <b>not</b> the config layer's five-entry <c>SHELL_PREFIX_BUILTINS</c>
+    /// (<c>src/core/config.rs:47</c> — <c>noglob</c>/<c>command</c>/<c>builtin</c>/<c>exec</c>/<c>nocorrect</c>,
+    /// the list that user <c>transparent_prefixes</c> "extend"). The rewrite engine's own list
+    /// additionally includes <c>uv run</c> as its first entry, so keeping <c>uv run</c> here is
+    /// required for parity — dropping it to match the config-layer list would diverge from the oracle
+    /// (verified: <c>rtk rewrite "uv run pytest"</c> → <c>uv run rtk pytest</c>, exercised by
+    /// <c>RewriteEngineTests.RewriteCommand_OracleVerified</c>).
+    /// </remarks>
     private static readonly string[] BuiltinTransparentPrefixes =
         ["uv run", "noglob", "command", "builtin", "exec", "nocorrect"];
 

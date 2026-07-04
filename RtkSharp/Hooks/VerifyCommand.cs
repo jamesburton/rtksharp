@@ -1,20 +1,27 @@
 using System;
+using System.IO;
+using System.Linq;
+using System.Text;
 using RtkSharp.Core;
+using RtkSharp.Filters;
 
 namespace RtkSharp.Hooks;
 
 /// <summary>
-/// Implements the <c>rtk verify</c> CLI verb. Faithful port of the hook-integrity subset of Rust
-/// <c>Commands::Verify</c>'s dispatch arm (<c>main.rs</c>:2521-2535): when invoked with no
-/// <c>--filter</c>, it runs <see cref="Integrity.RunVerify"/>.
+/// Implements the <c>rtk verify</c> CLI verb. Faithful port of Rust <c>Commands::Verify</c>'s
+/// dispatch arm (<c>main.rs</c>:2523-2536): it runs the hook-integrity check and the TOML filter
+/// inline-test battery, and honors <c>--filter &lt;name&gt;</c> / <c>--require-all</c>.
 /// </summary>
 /// <remarks>
 /// <para>
-/// Rust's <c>Commands::Verify</c> also accepts <c>--filter &lt;name&gt;</c> and <c>--require-all</c>,
-/// which run TOML filter inline tests via <c>hooks::verify_cmd::run</c> — a distinct feature with no
-/// counterpart in this port yet. Those flags are recognized (so the CLI surface matches Rust's
-/// <c>clap</c> definition) but rejected with a clear "not yet implemented" diagnostic, consistent
-/// with <see cref="InitCommand"/>'s handling of not-yet-ported <c>init</c> modes.
+/// <b>Dispatch shape (matches the oracle exactly).</b> With a <c>--filter &lt;name&gt;</c>, only that
+/// filter's inline tests run (no integrity check), via <c>hooks::verify_cmd::run(Some(name), require_all)</c>.
+/// Without <c>--filter</c>, the integrity check runs first (<c>hooks::integrity::run_verify</c>), then
+/// the full inline-test battery (<c>hooks::verify_cmd::run(None, require_all)</c>). The battery is a
+/// faithful port of <c>src/hooks/verify_cmd.rs:11-49</c>: it prints per-failure detail to stderr, a
+/// <c>"{passed}/{total} tests passed"</c> (or <c>"No inline tests found."</c>) summary to stdout, and
+/// bails loudly (non-zero exit) on any test failure or — with <c>--require-all</c> — any filter that
+/// declared no inline tests.
 /// </para>
 /// <para>
 /// <b>Verbosity is a top-level flag, not a <c>verify</c>-subcommand flag.</b> Rust's <c>-v</c>/
@@ -22,22 +29,17 @@ namespace RtkSharp.Hooks;
 /// (<c>main.rs</c>:67), only recognized <b>before</b> the subcommand (e.g. <c>rtk -v verify</c>),
 /// and threaded as <c>cli.verbose</c> into <c>hooks::integrity::run_verify(cli.verbose)</c>
 /// (<c>main.rs</c>:2532). <c>rtk verify -v</c> is a clap parse error on the oracle, not a
-/// verify-level flag. This mirrors <see cref="InitCommand"/>'s identical top-level-verbose model
-/// exactly: <see cref="RunCore"/> does not recognize <c>-v</c>/<c>--verbose</c> as a
-/// <c>verify</c>-level argument (it falls through to the same "unrecognized verify argument"
-/// abort as any other unknown flag), and verbosity is instead read from the ambient
-/// <see cref="RuntimeOptions.Verbosity"/>, set once by <c>Program</c> from the top-level flag
-/// before dispatch.
+/// verify-level flag: <see cref="RunCore"/> does not recognize <c>-v</c>/<c>--verbose</c> as a
+/// <c>verify</c>-level argument (it falls through to the same "unrecognized verify argument" abort as
+/// any other unknown flag), and verbosity is instead read from the ambient
+/// <see cref="RuntimeOptions.Verbosity"/>, set once by <c>Program</c> from the top-level flag.
 /// </para>
 /// <para>
-/// <b>Known parity gap (deferred, out of Phase 9b Task 3 scope):</b> this port implements
-/// <c>hooks::integrity::run_verify</c> only. The oracle's <c>Commands::Verify</c> handler
-/// (<c>main.rs</c>:2523-2536) additionally and unconditionally runs
-/// <c>hooks::verify_cmd::run(None, require_all)</c> (TOML inline-filter self-tests) for every
-/// no-<c>--filter</c> invocation — that call is NOT yet ported, so bare <c>rtk verify</c> output
-/// diverges from the oracle (missing the trailing "N/M tests passed" or "No inline tests found."
-/// block). Tracked as a deferred gap, out of Phase 9b Task 3 scope (belongs with the Phase 4 TOML
-/// filter system). See <c>docs/parity/compatibility-ledger.md</c> for the ledgered entry.
+/// <b>Fail-loud contract.</b> A test failure or missing-tests condition is surfaced as a non-zero
+/// exit via a thrown bail exception whose message <see cref="Run"/> renders as <c>rtk: {message}</c>
+/// on stderr, matching Rust's top-level <c>eprintln!("rtk: {:#}", e)</c> (<c>main.rs</c>:1439) for an
+/// <c>anyhow::bail!</c>. This is a user-invoked one-shot command, so unlike the runtime hot paths it
+/// deliberately fails loud rather than falling back.
 /// </para>
 /// </remarks>
 public static class VerifyCommand
@@ -62,30 +64,183 @@ public static class VerifyCommand
 
     private static int RunCore(string[] args)
     {
-        if (args.Length > 0)
+        var (filterName, requireAll) = ParseArgs(args);
+
+        if (filterName is not null)
         {
-            switch (args[0])
+            // Filter-specific mode: run only that filter's tests, no integrity check (main.rs:2527-2529).
+            return RunInlineTests(filterName, requireAll);
+        }
+
+        // Default / --require-all: integrity check first, then the full inline-test battery
+        // (main.rs:2531-2533). The integrity exit code is preserved when non-zero (e.g. a tampered
+        // hook → 1); otherwise the battery's success (0) is returned.
+        var integrityExit = Integrity.RunVerify(RuntimeOptions.Verbosity);
+        var inlineExit = RunInlineTests(null, requireAll);
+        return integrityExit != 0 ? integrityExit : inlineExit;
+    }
+
+    /// <summary>
+    /// Parses <c>--filter &lt;name&gt;</c> / <c>--filter=&lt;name&gt;</c> and <c>--require-all</c> off
+    /// the <c>verify</c> argument remainder. Any other token (including a subcommand-level
+    /// <c>-v</c>/<c>--verbose</c>, which is a top-level flag on the oracle) is an
+    /// <see cref="InitAbortException"/> "unrecognized verify argument", mirroring
+    /// <see cref="InitCommand"/>'s handling of unknown flags.
+    /// </summary>
+    /// <param name="args">The arguments following the <c>verify</c> verb.</param>
+    /// <returns>The parsed filter name (or <see langword="null"/>) and require-all flag.</returns>
+    private static (string? FilterName, bool RequireAll) ParseArgs(string[] args)
+    {
+        string? filterName = null;
+        var requireAll = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var arg = args[i];
+            if (arg == "--require-all")
             {
-                case "--filter":
-                    throw Deferred("--filter (TOML filter inline tests)");
-                case "--require-all":
-                    throw Deferred("--require-all (TOML filter inline tests)");
-                default:
-                    // Rust's `-v`/`--verbose` is a top-level `Cli` flag only recognized before the
-                    // subcommand — `rtk verify -v` is a clap parse error on the oracle, not a
-                    // verify-level argument. It is deliberately not special-cased here, so it falls
-                    // through to this same "unrecognized" abort, matching InitCommand's handling of
-                    // the identical case.
-                    throw new InitAbortException($"unrecognized verify argument: {args[0]}");
+                requireAll = true;
+            }
+            else if (arg == "--filter")
+            {
+                if (i + 1 >= args.Length)
+                {
+                    throw new InitAbortException("--filter requires a value");
+                }
+
+                filterName = args[++i];
+            }
+            else if (arg.StartsWith("--filter=", StringComparison.Ordinal))
+            {
+                filterName = arg["--filter=".Length..];
+            }
+            else
+            {
+                throw new InitAbortException($"unrecognized verify argument: {arg}");
             }
         }
 
-        return Integrity.RunVerify(RuntimeOptions.Verbosity);
+        return (filterName, requireAll);
     }
 
-    /// <summary>Builds the "not yet implemented" abort for a mode deferred to a follow-up task.</summary>
-    /// <param name="feature">The flag/mode name, e.g. <c>"--filter"</c>.</param>
-    /// <returns>An <see cref="InitAbortException"/> carrying the deferred-mode diagnostic.</returns>
-    private static InitAbortException Deferred(string feature) =>
-        new($"{feature} is not yet implemented in this port (tracked for a follow-up task)");
+    /// <summary>
+    /// Runs the inline-test battery for <paramref name="filterName"/> (or all filters) against the
+    /// currently loaded built-in and trust-gated project filters, then formats the outcome. See
+    /// <see cref="RunInlineTestsCore"/> for the exact stdout/stderr contract.
+    /// </summary>
+    /// <param name="filterName">The filter to test, or <see langword="null"/> for all.</param>
+    /// <param name="requireAll">Whether to bail if any filter declared no inline tests.</param>
+    /// <returns>0 when all tests passed (and no missing-tests bail); the call throws otherwise.</returns>
+    private static int RunInlineTests(string? filterName, bool requireAll)
+    {
+        var results = TomlFilterEngine.RunFilterTests(filterName, TrustCommand.AsTrustChecker(), Console.Error);
+        return RunInlineTestsCore(results, requireAll, Console.Out, Console.Error);
+    }
+
+    /// <summary>
+    /// Formats a <see cref="VerifyResults"/> into the exact stdout/stderr contract of Rust
+    /// <c>hooks::verify_cmd::run</c> (<c>verify_cmd.rs:11-49</c>) and returns the success exit code,
+    /// throwing on a bail. Exposed (internal) so the formatting can be tested with synthetic results.
+    /// </summary>
+    /// <param name="results">The aggregated inline-test outcomes.</param>
+    /// <param name="requireAll">Whether a filter lacking inline tests is a fatal condition.</param>
+    /// <param name="stdout">The destination for the summary line.</param>
+    /// <param name="stderr">The destination for per-failure detail and missing-tests lines.</param>
+    /// <returns>0 when everything passed.</returns>
+    /// <exception cref="VerifyBailException">
+    /// Thrown (fail-loud) when <paramref name="requireAll"/> is set and one or more filters lack tests,
+    /// or when one or more tests failed — carrying Rust's exact <c>anyhow::bail!</c> message text.
+    /// </exception>
+    internal static int RunInlineTestsCore(VerifyResults results, bool requireAll, TextWriter stdout, TextWriter stderr)
+    {
+        var total = results.Outcomes.Count;
+        var passed = results.Outcomes.Count(o => o.Passed);
+        var failed = total - passed;
+
+        // Print failures with details (verify_cmd.rs:19-26).
+        foreach (var outcome in results.Outcomes)
+        {
+            if (!outcome.Passed)
+            {
+                stderr.Write(
+                    $"FAIL [{outcome.FilterName}] {outcome.TestName}\n" +
+                    $"  expected: {DebugString(outcome.Expected)}\n" +
+                    $"  actual:   {DebugString(outcome.Actual)}\n");
+            }
+        }
+
+        if (total == 0)
+        {
+            stdout.Write("No inline tests found.\n");
+        }
+        else
+        {
+            stdout.Write($"{passed}/{total} tests passed\n");
+        }
+
+        if (requireAll && results.FiltersWithoutTests.Count > 0)
+        {
+            foreach (var name in results.FiltersWithoutTests)
+            {
+                stderr.Write($"MISSING tests for filter: {name}\n");
+            }
+
+            throw new VerifyBailException(
+                $"{results.FiltersWithoutTests.Count} filter(s) have no inline tests (use --require-all in CI)");
+        }
+
+        if (failed > 0)
+        {
+            throw new VerifyBailException($"{failed} test(s) failed");
+        }
+
+        return 0;
+    }
+
+    /// <summary>
+    /// Renders <paramref name="s"/> the way Rust's <c>{:?}</c> (<c>Debug</c>) formatter renders a
+    /// <c>&amp;str</c>: double-quoted, with <c>"</c>, <c>\</c>, and the common control characters
+    /// escaped — matching how <c>verify_cmd.rs</c> prints <c>expected</c>/<c>actual</c> via <c>{:?}</c>.
+    /// </summary>
+    /// <param name="s">The string to debug-format.</param>
+    /// <returns>The quoted, escaped representation.</returns>
+    private static string DebugString(string s)
+    {
+        var sb = new StringBuilder(s.Length + 2);
+        sb.Append('"');
+        foreach (var c in s)
+        {
+            switch (c)
+            {
+                case '"':
+                    sb.Append("\\\"");
+                    break;
+                case '\\':
+                    sb.Append("\\\\");
+                    break;
+                case '\n':
+                    sb.Append("\\n");
+                    break;
+                case '\r':
+                    sb.Append("\\r");
+                    break;
+                case '\t':
+                    sb.Append("\\t");
+                    break;
+                default:
+                    sb.Append(c);
+                    break;
+            }
+        }
+
+        sb.Append('"');
+        return sb.ToString();
+    }
 }
+
+/// <summary>
+/// A fail-loud bail from the <c>rtk verify</c> inline-test battery, carrying Rust's exact
+/// <c>anyhow::bail!</c> message. <see cref="VerifyCommand.Run"/> renders it as <c>rtk: {message}</c>
+/// on stderr and returns exit code 1, matching the oracle's top-level error handling.
+/// </summary>
+internal sealed class VerifyBailException(string message) : Exception(message);

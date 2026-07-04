@@ -43,10 +43,13 @@ public static class GrepCommand
     private const int DefaultMaxResults = 200;
 
     /// <summary>
-    /// Maximum lines displayed per file before the remainder is suppressed
-    /// (<c>config::limits().grep_max_per_file</c> default).
+    /// Maximum lines displayed per file before the remainder is suppressed. Loaded from
+    /// <c>limits.grep_max_per_file</c> in the user's <c>config.toml</c> (<c>config::limits()</c> in
+    /// Rust), defaulting to 25 when unset. This is a runtime hot path, so a missing or corrupt
+    /// config falls back to the default via <see cref="Config.LoadOrDefault"/> rather than throwing.
     /// </summary>
-    private const int GrepMaxPerFile = 25;
+    /// <returns>The configured per-file cap, or 25 on any config-load failure.</returns>
+    private static int GrepMaxPerFile() => Config.LoadOrDefault().Limits.GrepMaxPerFile;
 
     /// <summary>
     /// Short single-char flags that consume one following token (or inline remainder) as their
@@ -391,6 +394,7 @@ public static class GrepCommand
         sb.Append($"{totalMatches} matches in {byFile.Count} files:\n\n");
 
         var shown = 0;
+        var grepMaxPerFile = GrepMaxPerFile();
         var files = byFile.OrderBy(kv => kv.Key, StringComparer.Ordinal).ToList();
 
         foreach (var (file, entries) in files)
@@ -401,7 +405,7 @@ public static class GrepCommand
             }
 
             var fileDisplay = CompactPath(file);
-            foreach (var (lineNum, isMatch, content) in entries.Take(GrepMaxPerFile))
+            foreach (var (lineNum, isMatch, content) in entries.Take(grepMaxPerFile))
             {
                 if (shown >= maxResults)
                 {

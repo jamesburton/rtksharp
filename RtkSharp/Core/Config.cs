@@ -122,6 +122,28 @@ public sealed class Config
     }
 
     /// <summary>
+    /// Loads config like <see cref="Load"/> but never throws: on any failure (missing, unreadable,
+    /// or corrupt <c>config.toml</c>) it returns an all-defaults <see cref="Config"/> instead of
+    /// propagating the exception. Intended for the <b>runtime hot paths</b> (the rewrite-engine
+    /// exclude/transparent-prefix wiring and the grep per-file cap) that must degrade to today's
+    /// default behavior rather than crash the command pipeline over a bad config file — per this
+    /// phase's fallback-pattern Global Constraint. User-invoked one-shot commands (<c>rtk config</c>)
+    /// keep calling <see cref="Load"/> directly so they still fail loud on a corrupt file.
+    /// </summary>
+    /// <returns>The loaded <see cref="Config"/>, or an all-defaults one if loading failed.</returns>
+    public static Config LoadOrDefault()
+    {
+        try
+        {
+            return Load();
+        }
+        catch (Exception)
+        {
+            return new Config();
+        }
+    }
+
+    /// <summary>
     /// Writes this <see cref="Config"/> to the resolved config path as pretty-printed TOML (see
     /// <see cref="ToPrettyToml"/>), creating parent directories as needed. Faithful port of Rust
     /// <c>Config::save</c> (config.rs:166-176).

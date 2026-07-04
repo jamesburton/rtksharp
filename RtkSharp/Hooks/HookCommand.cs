@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RtkSharp.Core;
 using RtkSharp.Rewrite;
 
 namespace RtkSharp.Hooks;
@@ -181,7 +182,9 @@ public static class HookCommand
     private static int RunCheck(string[] args)
     {
         var raw = string.Join(' ', StripAgentFlag(args));
-        var rewritten = RewriteEngine.RewriteCommand(raw, [], []);
+        // Runtime hot path: honor config exclude/transparent-prefix lists with fallback-on-failure.
+        var config = Config.LoadOrDefault();
+        var rewritten = RewriteEngine.RewriteCommand(raw, config.Hooks.ExcludeCommands, config.Hooks.TransparentPrefixes);
         if (rewritten is not null)
         {
             Console.Out.Write(rewritten);
@@ -473,12 +476,14 @@ public static class HookCommand
 
     /// <summary>
     /// Returns the rewritten command, or <see langword="null"/> when no rewrite applies (or the
-    /// rewrite is a no-op). Port of Rust <c>get_rewritten</c> (hook_cmd.rs:110); config-driven
-    /// exclude/transparent-prefix lists remain out of scope so empty lists are passed.
+    /// rewrite is a no-op). Port of Rust <c>get_rewritten</c> (hook_cmd.rs:110). The user's
+    /// config-driven exclude/transparent-prefix lists are loaded via <see cref="Config.LoadOrDefault"/>;
+    /// a corrupt config falls back to empty lists rather than crashing this hot path.
     /// </summary>
     private static string? GetRewritten(string cmd)
     {
-        var rewritten = RewriteEngine.RewriteCommand(cmd, [], []);
+        var config = Config.LoadOrDefault();
+        var rewritten = RewriteEngine.RewriteCommand(cmd, config.Hooks.ExcludeCommands, config.Hooks.TransparentPrefixes);
         return rewritten is null || rewritten == cmd ? null : rewritten;
     }
 
