@@ -104,13 +104,13 @@ public sealed class InitCommandTests
         Assert.Contains("[dry-run] would add rtk instructions to", console.Out.ToString());
     }
 
-    // Note: "-g" (bare global default mode) and "--show" (without --codex) are no longer deferred —
-    // global-scope Claude Code init and --show are implemented; see InitGlobalCommandTests.cs. Both
-    // touch the real ~/.claude directory unless isolated via GlobalScopeGuard, which is why those
-    // cases moved rather than staying in this CLAUDE_CONFIG_DIR-agnostic theory.
+    // Note: "-g" (bare global default mode), "--show" (without --codex), and "--codex" are no longer
+    // deferred — global-scope Claude Code init/--show and the full Codex CLI path are implemented;
+    // see InitGlobalCommandTests.cs and CodexInitTests.cs. All three touch either the real ~/.claude
+    // or ~/.codex directory unless isolated via GlobalScopeGuard/CodexScopeGuard, which is why those
+    // cases moved rather than staying in this env-agnostic theory.
     [Theory]
     [InlineData(new object[] { new[] { "--gemini" } })]
-    [InlineData(new object[] { new[] { "--codex" } })]
     [InlineData(new object[] { new[] { "--copilot" } })]
     [InlineData(new object[] { new[] { "--agent", "cursor" } })]
     [InlineData(new object[] { new[] { "--agent", "windsurf" } })]
@@ -140,23 +140,6 @@ public sealed class InitCommandTests
         Assert.Equal(
             "rtk: Uninstall only works with --global flag. For local projects, manually remove RTK from CLAUDE.md\n",
             console.Error.ToString());
-    }
-
-    [Fact]
-    public void Uninstall_WithCodex_FailsWithHonestNotImplementedMessage()
-    {
-        using var tmp = new TempDir();
-        using var cwd = new CwdGuard(tmp.Root);
-        using var console = new ConsoleCapture();
-
-        // Rust's uninstall() dispatches --codex into uninstall_codex(global, ctx) unconditionally
-        // (init.rs:629-635, checked before the generic !global bail), regardless of --global. That
-        // agent-specific uninstall body isn't ported yet, so this must fail loud with an honest
-        // "not yet implemented" diagnostic rather than a fabricated Rust-lookalike message.
-        var exit = InitCommand.Run(["--uninstall", "--codex"]);
-
-        Assert.Equal(1, exit);
-        Assert.Contains("not yet implemented", console.Error.ToString());
     }
 
     [Fact]

@@ -319,16 +319,5 @@ public sealed class InitGlobalCommandTests
         Assert.Contains("[--] Cursor hook: not found", stdout);
     }
 
-    [Fact]
-    public void Show_CodexCombo_FailsLoudAsNotYetImplemented()
-    {
-        using var tmp = new TempDir();
-        using var env = new GlobalScopeGuard(tmp);
-        using var console = new ConsoleCapture();
-
-        var exit = InitCommand.Run(["--show", "--codex"]);
-
-        Assert.Equal(1, exit);
-        Assert.Contains("not yet implemented", console.Error.ToString());
-    }
+    // Note: "--show --codex" is no longer deferred — see CodexInitTests.cs.
 }

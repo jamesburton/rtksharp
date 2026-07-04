@@ -69,6 +69,42 @@ internal sealed class GlobalScopeGuard : IDisposable
     }
 }
 
+/// <summary>
+/// Redirects <c>CODEX_HOME</c> so Codex-mode global-scope tests never touch the real
+/// <c>~/.codex</c> directory on the machine running the tests. Unlike
+/// <see cref="GlobalScopeGuard"/>'s <c>RTK_CONFIG_DIR_OVERRIDE</c> escape hatch (needed because
+/// Rust's <c>dirs::config_dir()</c> ignores environment variables on Windows), Codex's
+/// <c>resolve_codex_dir</c> reads <c>$CODEX_HOME</c> directly via a plain <c>std::env::var_os</c>
+/// call — honored identically on every platform — so no platform-specific redirection machinery is
+/// needed here.
+/// </summary>
+internal sealed class CodexScopeGuard : IDisposable
+{
+    private const string CodexHomeEnvVar = "CODEX_HOME";
+
+    private readonly string? _previousCodexHome;
+
+    /// <summary>The throwaway directory standing in for <c>$CODEX_HOME</c> (i.e. <c>~/.codex</c>).</summary>
+    public string CodexDir { get; }
+
+    public CodexScopeGuard(TempDir tmp)
+    {
+        System.Threading.Monitor.Enter(InitTestSupport.EnvLock);
+
+        CodexDir = Path.Combine(tmp.Root, ".codex");
+        Directory.CreateDirectory(CodexDir);
+
+        _previousCodexHome = Environment.GetEnvironmentVariable(CodexHomeEnvVar);
+        Environment.SetEnvironmentVariable(CodexHomeEnvVar, CodexDir);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(CodexHomeEnvVar, _previousCodexHome);
+        System.Threading.Monitor.Exit(InitTestSupport.EnvLock);
+    }
+}
+
 /// <summary>A throwaway directory, deleted best-effort on disposal.</summary>
 internal sealed class TempDir : IDisposable
 {

@@ -92,6 +92,9 @@ public class InitParityTests
     /// <summary>Relative subdirectory (within each entry's temp dir) standing in for the global config root.</summary>
     private const string ConfigRtkSubdir = ".config-rtk";
 
+    /// <summary>Relative subdirectory (within each entry's temp dir) standing in for <c>$CODEX_HOME</c>.</summary>
+    private const string CodexHomeSubdir = ".codex-home";
+
     /// <summary>
     /// The one relative path excluded from the Windows global-scope tree-diff, but only in the
     /// narrow <see cref="WindowsGlobalFiltersGuard.RedirectMode.SafeNoOp"/> fallback — see the class
@@ -104,11 +107,20 @@ public class InitParityTests
     private sealed record Step(string[] Args);
 
     /// <summary>
-    /// A battery entry: a label, whether it exercises global scope (so the config-dir override env
-    /// vars are applied), whether the produced file tree should be compared, and the ordered steps to
-    /// run sequentially against the same temp directory.
+    /// A battery entry: a label, whether it exercises global scope (so the Claude-specific config-dir
+    /// override env vars and the Windows filters-template guard are applied), whether it exercises
+    /// Codex mode (so <c>CODEX_HOME</c> is redirected instead), whether the produced file tree should
+    /// be compared, and the ordered steps to run sequentially against the same temp directory.
     /// </summary>
-    private sealed record Entry(string Label, bool Global, bool CompareTree, IReadOnlyList<Step> Steps);
+    /// <remarks>
+    /// <c>Global</c> and <c>Codex</c> are independent: Codex entries always set <c>Global: false</c>
+    /// here regardless of whether their <see cref="Step.Args"/> include <c>-g</c>, since Codex's
+    /// global-vs-project scope is entirely determined by that CLI flag and <c>CODEX_HOME</c>'s
+    /// resolution (a plain env var, honored identically on every platform) — it needs none of the
+    /// Claude-specific <c>CLAUDE_CONFIG_DIR</c>/<c>RTK_CONFIG_DIR_OVERRIDE</c>/<see cref="WindowsGlobalFiltersGuard"/>
+    /// machinery that <c>Global: true</c> triggers for Claude Code entries.
+    /// </remarks>
+    private sealed record Entry(string Label, bool Global, bool CompareTree, IReadOnlyList<Step> Steps, bool Codex = false);
 
     [Fact]
     public async Task InitVerb_MatchesRustOracle_AcrossBattery()
@@ -200,6 +212,30 @@ public class InitParityTests
                 [new(["init", "-g", "--show"])]),
             new("global: re-run idempotency", Global: true, CompareTree: true,
                 [new(["init", "-g"]), new(["init", "-g"])]),
+
+            // ── Codex project scope (fully hermetic on every platform: no runtime hook, no
+            //    settings.json patch — just RTK.md + AGENTS.md reference writes under the CWD) ──
+            new("codex: default init", Global: false, CompareTree: true,
+                [new(["init", "--codex"])], Codex: true),
+            new("codex: init --dry-run", Global: false, CompareTree: true,
+                [new(["init", "--codex", "--dry-run"])], Codex: true),
+            new("codex: re-run idempotency", Global: false, CompareTree: true,
+                [new(["init", "--codex"]), new(["init", "--codex"])], Codex: true),
+            new("codex: uninstall without --global (error path)", Global: false, CompareTree: false,
+                [new(["init", "--codex", "--uninstall"])], Codex: true),
+
+            // ── Codex global scope (hermetic on every platform via CODEX_HOME — a plain env var
+            //    read by resolve_codex_dir, unlike Claude's dirs::config_dir() Win32 API call) ──
+            new("codex: global default init -g --codex", Global: false, CompareTree: true,
+                [new(["init", "-g", "--codex"])], Codex: true),
+            new("codex: global init -g --codex --dry-run", Global: false, CompareTree: true,
+                [new(["init", "-g", "--codex", "--dry-run"])], Codex: true),
+            new("codex: global uninstall (after default install)", Global: false, CompareTree: true,
+                [new(["init", "-g", "--codex"]), new(["init", "-g", "--codex", "--uninstall"])], Codex: true),
+            new("codex: global re-run idempotency", Global: false, CompareTree: true,
+                [new(["init", "-g", "--codex"]), new(["init", "-g", "--codex"])], Codex: true),
+            new("codex: --show --codex", Global: false, CompareTree: true,
+                [new(["init", "--codex", "--show"])], Codex: true),
         };
 
         return entries;
@@ -241,6 +277,22 @@ public class InitParityTests
                     // same relative path as the port's override for a clean tree-diff.
                     oracleEnv["XDG_CONFIG_HOME"] = Path.Combine(oracleTemp, ConfigRtkSubdir);
                 }
+            }
+
+            if (entry.Codex)
+            {
+                // Codex's resolve_codex_dir reads $CODEX_HOME via a plain std::env::var_os call —
+                // honored identically on every platform (unlike dirs::config_dir()'s Win32
+                // known-folder API for the Claude filters-template path) — so a single env var
+                // redirection is fully hermetic here with no WindowsGlobalFiltersGuard needed, for
+                // both the --codex project-scope entries (which never consult CODEX_HOME at all,
+                // so this is simply unused/harmless) and the -g --codex global-scope entries.
+                var oracleCodexHome = Path.Combine(oracleTemp, CodexHomeSubdir);
+                var portCodexHome = Path.Combine(portTemp, CodexHomeSubdir);
+                Directory.CreateDirectory(oracleCodexHome);
+                Directory.CreateDirectory(portCodexHome);
+                oracleEnv["CODEX_HOME"] = oracleCodexHome;
+                portEnv["CODEX_HOME"] = portCodexHome;
             }
 
             // On Windows global-scope entries, redirect %APPDATA%\rtk to a directory inside this
@@ -604,7 +656,17 @@ public class InitParityTests
 
     // ===================== tree manifest =====================
 
-    /// <summary>Builds a relative-path -&gt; lowercase-hex-SHA-256 manifest of every file under <paramref name="root"/>.</summary>
+    /// <summary>
+    /// Builds a relative-path -&gt; lowercase-hex-SHA-256 manifest of every file under
+    /// <paramref name="root"/>. Each file's text content has <paramref name="root"/>'s own absolute
+    /// path masked out to a fixed placeholder before hashing — needed because Codex's global-scope
+    /// <c>AGENTS.md</c> reference embeds an <b>absolute</b> path to <c>RTK.md</c> (issue #892: Codex
+    /// resolves <c>@</c> references relative to CWD, not the file's location), and the oracle/port
+    /// each run in their own independently-named temp directory, so that one file would otherwise
+    /// never byte-match between the two sides even when the installer behaved identically — the same
+    /// masking already applied to captured stdout via <see cref="MaskPaths"/>, extended to on-disk
+    /// file content for this one structural case.
+    /// </summary>
     private static Dictionary<string, string> BuildManifest(string root)
     {
         var manifest = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -616,8 +678,9 @@ public class InitParityTests
         foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
         {
             var relative = Path.GetRelativePath(root, file).Replace('\\', '/');
-            using var stream = File.OpenRead(file);
-            var hash = Convert.ToHexStringLower(SHA256.HashData(stream));
+            var content = File.ReadAllText(file);
+            var masked = content.Replace(root, "{ROOT}", StringComparison.Ordinal);
+            var hash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(masked)));
             manifest[relative] = hash;
         }
 
@@ -781,16 +844,19 @@ public class InitParityTests
             ? portFileName
             : $"{portFileName} {string.Join(' ', portPrefixArgs)}";
         sb.AppendLine($"- **RtkSharp:** `{portInvoke}`");
-        sb.AppendLine($"- **Battery size:** {results.Count} entries (6 project-scope + 7 global-scope)");
+        sb.AppendLine($"- **Battery size:** {results.Count} entries (6 Claude project-scope + 7 Claude " +
+                      "global-scope + 4 Codex project-scope + 5 Codex global-scope)");
         sb.AppendLine();
         sb.AppendLine("Comparison method: each entry runs both binaries in a fresh, isolated temp directory " +
-                      "(`CLAUDE_CONFIG_DIR` redirected for both; global-scope entries also redirect the " +
-                      "global filters-template path via `RTK_CONFIG_DIR_OVERRIDE` for the port and " +
-                      "`XDG_CONFIG_HOME` for the oracle on Linux/macOS) with `StdinContent = \"\"` (forced " +
-                      "non-interactive stdin). Multi-step entries (install-then-uninstall, repeated-run " +
-                      "idempotency) compare only the final step's stdout (CRLF/LF normalized) and exit code. " +
-                      "Write entries additionally compare a full relative-path -> SHA-256 manifest of the " +
-                      "temp directory after all steps.");
+                      "(`CLAUDE_CONFIG_DIR` redirected for both; Claude global-scope entries also redirect " +
+                      "the global filters-template path via `RTK_CONFIG_DIR_OVERRIDE` for the port and " +
+                      "`XDG_CONFIG_HOME` for the oracle on Linux/macOS; Codex entries redirect `CODEX_HOME` " +
+                      "for both binaries, which — being a plain environment-variable read on every platform, " +
+                      "unlike `dirs::config_dir()`'s Win32 known-folder API — needs no Windows-specific " +
+                      "junction guard) with `StdinContent = \"\"` (forced non-interactive stdin). Multi-step " +
+                      "entries (install-then-uninstall, repeated-run idempotency) compare only the final " +
+                      "step's stdout (CRLF/LF normalized) and exit code. Write entries additionally compare " +
+                      "a full relative-path -> SHA-256 manifest of the temp directory after all steps.");
         sb.AppendLine();
         if (OperatingSystem.IsWindows())
         {

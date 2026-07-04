@@ -21,12 +21,13 @@ namespace RtkSharp.Hooks;
 /// <c>--hook-only</c> (a no-op warning, since it only makes sense with <c>--global</c>), and the
 /// global-scope default/<c>--claude-md</c>/<c>--hook-only</c> modes (RTK.md, <c>@RTK.md</c>,
 /// <c>settings.json</c> deep-merge patching via <see cref="SettingsPatcher"/>, and the user-global
-/// filters template), plus global-scope <c>--uninstall</c> and <c>--show</c> for Claude Code. Every
-/// other mode — Codex, Gemini, Copilot, OpenCode, Cursor, Windsurf, Cline, Kilocode, Antigravity,
-/// Pi, and Hermes — is parsed (so the CLI surface matches Rust's <c>clap</c> definition) but
-/// rejected with a clear "not yet implemented" diagnostic rather than silently doing nothing or
-/// guessing at behavior. Those modes land in follow-up tasks; see
-/// <c>docs/superpowers/plans/2026-07-03-phase9b-init-hooks.md</c>.
+/// filters template), plus global-scope <c>--uninstall</c> and <c>--show</c> for Claude Code. It also
+/// implements the full <b>Codex CLI</b> path (project- and global-scope <c>--codex</c>, its own
+/// <c>--uninstall --codex</c> and <c>--show --codex</c>) via <see cref="CodexInit"/>. Every other
+/// mode — Gemini, Copilot, OpenCode, Cursor, Windsurf, Cline, Kilocode, Antigravity, Pi, and Hermes —
+/// is parsed (so the CLI surface matches Rust's <c>clap</c> definition) but rejected with a clear
+/// "not yet implemented" diagnostic rather than silently doing nothing or guessing at behavior. Those
+/// modes land in follow-up tasks; see <c>docs/superpowers/plans/2026-07-03-phase9b-init-hooks.md</c>.
 /// </para>
 /// <para>
 /// <b>Fail-loud, not never-block.</b> <c>init</c> is a user command, not a runtime hook — the
@@ -75,11 +76,11 @@ public static class InitCommand
         if (flags.Show)
         {
             // Rust's show_config(codex) (init.rs:3292) only branches on --codex; every other flag
-            // (including --global, which --show implies for Claude Code) is ignored. Codex's own
-            // show_codex_config isn't ported (Task 5 territory).
+            // (including --global, which --show implies for Claude Code) is ignored.
             if (flags.Codex)
             {
-                throw Deferred("--show --codex");
+                CodexInit.ShowConfig();
+                return 0;
             }
 
             ShowClaudeConfig();
@@ -94,15 +95,23 @@ public static class InitCommand
             }
 
             // Rust's uninstall() (init.rs:620) checks codex/cursor/pi BEFORE the generic
-            // !global bail, in that order. Codex and Pi dispatch unconditionally into their
-            // own uninstall bodies (uninstall_codex/uninstall_pi) regardless of --global —
-            // those bodies aren't ported yet (Task 2/3/5 territory), so we fail loud with an
-            // honest "not yet implemented" message rather than fabricating their behavior.
+            // !global bail, in that order. Codex dispatches unconditionally into its own
+            // uninstall body (uninstall_codex, init.rs:629-635) regardless of --global — that
+            // body itself bails with a Codex-specific message when !global (init.rs:851-855).
+            // Pi is not ported yet (Task 3+ territory), so it still fails loud with an honest
+            // "not yet implemented" message rather than fabricating its behavior.
             // Cursor, however, bails right here in Rust (init.rs:637-640) when !global with
             // its own distinct message, so that exact text is reproduced below.
             if (flags.Codex)
             {
-                throw Deferred("--uninstall --codex");
+                CodexInit.Uninstall(flags.Global, ctx);
+
+                if (ctx.DryRun)
+                {
+                    InitArtifacts.PrintDryRunFooter();
+                }
+
+                return 0;
             }
 
             if (flags.Agent == "cursor")
@@ -165,11 +174,44 @@ public static class InitCommand
 
         if (flags.Codex)
         {
-            // Rust's own combination-validation bails (--codex cannot be combined with
-            // --opencode/--claude-md/--hook-only/--auto-patch/--no-patch) are not replicated here
-            // since full Codex support (run_codex_mode) is not implemented yet — see Task 5 of the
-            // phase-9b plan, which flips this branch to a real dispatch.
-            throw Deferred("--codex");
+            // Rust's own combination-validation bails, replicated exactly (init.rs:266-282).
+            if (flags.Opencode)
+            {
+                throw new InitAbortException("--codex cannot be combined with --opencode");
+            }
+
+            if (flags.ClaudeMd)
+            {
+                throw new InitAbortException("--codex cannot be combined with --claude-md");
+            }
+
+            if (flags.HookOnly)
+            {
+                throw new InitAbortException("--codex cannot be combined with --hook-only");
+            }
+
+            if (flags.AutoPatch)
+            {
+                throw new InitAbortException("--codex cannot be combined with --auto-patch");
+            }
+
+            if (flags.NoPatch)
+            {
+                throw new InitAbortException("--codex cannot be combined with --no-patch");
+            }
+
+            CodexInit.Run(flags.Global, ctx);
+
+            if (ctx.DryRun)
+            {
+                InitArtifacts.PrintDryRunFooter();
+            }
+            else
+            {
+                Console.Out.Write("\n");
+            }
+
+            return 0;
         }
 
         if (flags.Opencode && !flags.Global)

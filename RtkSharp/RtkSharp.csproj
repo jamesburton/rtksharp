@@ -28,6 +28,14 @@
     <EmbeddedResource Include="../hooks/claude/rtk-awareness.md">
       <LogicalName>RtkSharp.Hooks.rtk-awareness.md</LogicalName>
     </EmbeddedResource>
+    <!--
+      Embeds the exact bytes of the Rust oracle's `include_str!("../../hooks/codex/rtk-awareness.md")`
+      source file (src/hooks/init.rs RTK_SLIM_CODEX constant), the same way as the Claude Code
+      template above.
+    -->
+    <EmbeddedResource Include="../hooks/codex/rtk-awareness.md">
+      <LogicalName>RtkSharp.Hooks.rtk-awareness-codex.md</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
