@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using RtkSharp.Execution;
@@ -30,16 +31,48 @@ namespace RtkSharp.ParityTests;
 /// equivalent</b>: the Rust binary has no config-dir override, and <c>dirs::config_dir()</c> resolves
 /// via <c>SHGetKnownFolderPath(FOLDERID_RoamingAppData)</c>, which ignores environment variables
 /// entirely — confirmed in Task 1/2's parity work. So on Windows, a global-scope entry that reaches
-/// <c>generate_global_filters_template</c> makes the *oracle* write to the real
+/// <c>generate_global_filters_template</c> would otherwise make the *oracle* write to the real
 /// <c>%APPDATA%\rtk\filters.toml</c> on the host machine (outside the temp sandbox), while the *port*
-/// writes to the redirected <c>{temp}/.config-rtk/rtk/filters.toml</c>. This harness (a) wraps every
-/// oracle invocation on a Windows global-scope entry in <see cref="WindowsGlobalFiltersGuard"/>, which
-/// snapshots the real file before the run and restores it (or deletes it, if it did not exist) after —
-/// so the battery never leaves a permanent mark on the host — and (b) excludes the
-/// <c>.config-rtk/rtk/filters.toml</c> relative path from the Windows tree-diff (both binaries still
-/// have to write byte-identical content everywhere else) rather than claim unachievable full
-/// hermetic-tree parity for that one file on that one platform. This is the "own judgment" resolution
-/// the Task 4 brief calls for; see <c>docs/parity/compatibility-ledger.md</c> for the ledgered entry.
+/// writes to the redirected <c>{temp}/.config-rtk/rtk/filters.toml</c>.
+/// </para>
+/// <para>
+/// <b>Resolution: the real path is never written to at all (Option A), not written-then-restored.</b>
+/// A Task 4 safety review found the original approach (snapshot the real file, run the oracle
+/// unprotected, restore-in-<c>Dispose</c>) unacceptable: the restore only ran on a normal
+/// <c>using</c>-block exit, so a crashed test host or a killed CI job could leave a developer's real
+/// file mutated with zero restoration, and a freshly-created <c>%APPDATA%\rtk</c> directory was never
+/// cleaned up even on the happy path. <see cref="WindowsGlobalFiltersGuard"/> replaces that with an
+/// NTFS directory junction: when <c>%APPDATA%\rtk</c> does not already exist (the expected case on a
+/// clean dev machine or CI runner — see the constructor's host-state checks for the two narrow
+/// fallbacks below), the guard creates the *target* directory inside the entry's own oracle temp
+/// sandbox and links <c>%APPDATA%\rtk</c> to it via <c>mklink /J</c>. The genuine Win32 known-folder
+/// text the oracle prints is unaffected (junctions are link-transparent to <c>dirs::config_dir()</c>),
+/// but every byte the oracle actually writes physically lands inside the temp sandbox — the real host
+/// profile's backing store is never touched, so there is nothing to restore and nothing that can be
+/// corrupted, even by a hard process kill. Tearing down the junction (<c>rmdir</c>, no <c>/s</c>) only
+/// ever removes the reparse point itself, never the (sandboxed) target's content, so cleanup can never
+/// destroy real data either. A marker file plus a static self-heal check (run once, before the first
+/// Windows global-scope entry) detects and removes any dangling junction left behind by a prior crash,
+/// and <c>AppDomain.ProcessExit</c>/<c>UnhandledException</c> handlers add a second cleanup layer for
+/// an unhandled-exception crash (an OS-level <c>kill -9</c> is the one scenario no managed handler can
+/// observe — but because a junction never itself holds real content, the worst case is a harmless
+/// dangling link that self-heals on the next run, never data loss). Restore/cleanup failures throw
+/// (loud) rather than being swallowed.
+/// </para>
+/// <para>
+/// <b>Two narrow, defensive fallbacks — still zero-touch.</b> If <c>%APPDATA%\rtk\filters.toml</c>
+/// already exists on the host (pre-dating this test run for an unrelated reason), the guard does
+/// nothing at all: the oracle's own "already exists, skip" branch means it never attempts a write, so
+/// there is no risk and nothing to redirect; the harness instead strips the filters-template success
+/// line from both sides' stdout and excludes that one relative path from the tree-diff for that entry
+/// (a real, pre-existing file it correctly refuses to overwrite is not something a parity battery
+/// should be comparing against a fresh sandbox anyway). If <c>%APPDATA%\rtk</c> exists as a real
+/// directory *without* <c>filters.toml</c> (so the oracle would perform a genuine, un-redirectable
+/// write into real host state), the guard refuses to run that entry's oracle invocation at all — the
+/// whole entry is marked "SKIPPED (host-safety)" in the report rather than ever risking the write. Both
+/// fallbacks leave the host in the exact state it was already in; neither has been observed on the
+/// verification machine used for this fix (a fresh <c>%APPDATA%\rtk</c> takes the common, fully
+/// redirected path). See <c>docs/parity/compatibility-ledger.md</c> for the ledgered entry.
 /// </para>
 /// <para>
 /// <b>Stdout only, last step, exit code.</b> Some entries are multi-step (e.g. install then
@@ -60,8 +93,10 @@ public class InitParityTests
     private const string ConfigRtkSubdir = ".config-rtk";
 
     /// <summary>
-    /// The one relative path excluded from the Windows global-scope tree-diff — see the class
-    /// remarks' "Windows asymmetry" section.
+    /// The one relative path excluded from the Windows global-scope tree-diff, but only in the
+    /// narrow <see cref="WindowsGlobalFiltersGuard.RedirectMode.SafeNoOp"/> fallback — see the class
+    /// remarks' "Windows asymmetry" section. In the common, fully-redirected case this path is
+    /// compared like every other file.
     /// </summary>
     private const string WindowsAsymmetricPath = ".config-rtk/rtk/filters.toml";
 
@@ -208,13 +243,31 @@ public class InitParityTests
                 }
             }
 
-            (string Stdout, int Exit) oracleLast = ("", 0);
-            using (OperatingSystem.IsWindows() && entry.Global ? new WindowsGlobalFiltersGuard() : null)
+            // On Windows global-scope entries, redirect %APPDATA%\rtk to a directory inside this
+            // entry's own oracle temp sandbox via an NTFS junction *before* the oracle ever runs,
+            // so its filters-template write can never reach the real host profile — see the class
+            // remarks' "Windows asymmetry" section. `using` guarantees Dispose (junction teardown)
+            // runs on every normal exit path, including the early-return skip below.
+            using var guard = OperatingSystem.IsWindows() && entry.Global
+                ? new WindowsGlobalFiltersGuard(Path.Combine(oracleTemp, ConfigRtkSubdir, "rtk"))
+                : null;
+
+            if (guard is { Mode: WindowsGlobalFiltersGuard.RedirectMode.RefuseUnsafe })
             {
-                foreach (var step in entry.Steps)
-                {
-                    oracleLast = await ParityRunner.RunAsync(oraclePath, step.Args, oracleTemp, oracleEnv, stdin: "");
-                }
+                // %APPDATA%\rtk exists as a real directory without filters.toml: the oracle would
+                // perform a genuine, un-redirectable write into real host state. Refuse to run this
+                // entry's oracle invocation at all rather than risk it — see the class remarks.
+                return InitResult.SkippedForHostSafety(
+                    entry.Label,
+                    "%APPDATA%\\rtk exists on this host without filters.toml; refusing to risk a " +
+                    "real write there. Remove/rename that directory (or pre-create filters.toml) " +
+                    "to exercise this entry, or accept the reduced coverage.");
+            }
+
+            (string Stdout, int Exit) oracleLast = ("", 0);
+            foreach (var step in entry.Steps)
+            {
+                oracleLast = await ParityRunner.RunAsync(oraclePath, step.Args, oracleTemp, oracleEnv, stdin: "");
             }
 
             (string Stdout, int Exit) portLast = ("", 0);
@@ -224,6 +277,8 @@ public class InitParityTests
                 portLast = await ParityRunner.RunAsync(portFileName, portArgs, portTemp, portEnv, stdin: "");
             }
 
+            bool guardSafeNoOp = guard is { Mode: WindowsGlobalFiltersGuard.RedirectMode.SafeNoOp };
+
             bool treeMatches = true;
             string? treeDiff = null;
             if (entry.CompareTree)
@@ -231,8 +286,13 @@ public class InitParityTests
                 var oracleManifest = BuildManifest(oracleTemp);
                 var portManifest = BuildManifest(portTemp);
 
-                if (OperatingSystem.IsWindows() && entry.Global)
+                if (guardSafeNoOp)
                 {
+                    // The real filters.toml already existed before this run, so the oracle's own
+                    // "already exists, skip" branch means it never wrote anything for it, while the
+                    // port always writes a fresh template into its redirected sandbox. Exclude that
+                    // one relative path rather than claim unachievable parity for pre-existing,
+                    // host-specific state the guard correctly refused to touch.
                     oracleManifest.Remove(WindowsAsymmetricPath);
                     portManifest.Remove(WindowsAsymmetricPath);
                 }
@@ -242,6 +302,15 @@ public class InitParityTests
 
             var oracleStdout = MaskPaths(oracleLast.Stdout, oracleTemp, entry.Global);
             var portStdout = MaskPaths(portLast.Stdout, portTemp, entry.Global);
+
+            if (guardSafeNoOp)
+            {
+                // Strip the filters-template success line the port prints (and the oracle does not,
+                // per the tree-diff comment above) so this pre-existing host state doesn't register
+                // as a stdout mismatch.
+                oracleStdout = StripFiltersTemplateLine(oracleStdout);
+                portStdout = StripFiltersTemplateLine(portStdout);
+            }
 
             return new InitResult(
                 entry.Label, Normalize(oracleStdout), Normalize(portStdout),
@@ -254,46 +323,191 @@ public class InitParityTests
         }
     }
 
+    /// <summary>Removes the filters-template success line printed by <c>rtk init -g</c>, used only for the guard's narrow "already exists" fallback (see class remarks).</summary>
+    private static string StripFiltersTemplateLine(string stdout) =>
+        string.Join('\n', stdout.Split('\n')
+            .Where(line => !line.Contains("template, edit to add user-global filters", StringComparison.Ordinal)));
+
     /// <summary>
-    /// Snapshots the real, unredirectable Windows global filters-template target
-    /// (<c>%APPDATA%\rtk\filters.toml</c>) before an oracle invocation and restores it (or deletes
-    /// it, if it did not previously exist) afterward — see the class remarks' "Windows asymmetry"
-    /// section for why the oracle can touch this real path at all under a global-scope entry.
+    /// Redirects the real, unredirectable Windows global filters-template target
+    /// (<c>%APPDATA%\rtk</c>) to a directory inside the current entry's own temp sandbox via an NTFS
+    /// directory junction, so the oracle's write during a global-scope entry can never reach real host
+    /// state at all — see the class remarks' "Windows asymmetry" section for the full rationale and
+    /// the two narrow, still zero-touch fallbacks (<see cref="RedirectMode.SafeNoOp"/> and
+    /// <see cref="RedirectMode.RefuseUnsafe"/>) this guard falls back to when <c>%APPDATA%\rtk</c>
+    /// already has real content.
     /// </summary>
     private sealed class WindowsGlobalFiltersGuard : IDisposable
     {
-        private readonly string _path;
-        private readonly bool _existed;
-        private readonly byte[]? _backup;
-
-        public WindowsGlobalFiltersGuard()
+        /// <summary>The outcome of trying to make <c>%APPDATA%\rtk</c> safe for the oracle to write into.</summary>
+        public enum RedirectMode
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            _path = Path.Combine(appData, "rtk", "filters.toml");
-            _existed = File.Exists(_path);
-            _backup = _existed ? File.ReadAllBytes(_path) : null;
+            /// <summary><c>%APPDATA%\rtk</c> was junctioned into this entry's own temp sandbox; the oracle's write never reaches real host state.</summary>
+            Redirected,
+
+            /// <summary><c>%APPDATA%\rtk\filters.toml</c> already existed; the oracle's own "already exists, skip" branch means it never writes, so nothing was touched.</summary>
+            SafeNoOp,
+
+            /// <summary><c>%APPDATA%\rtk</c> exists as a real directory without <c>filters.toml</c>; running the oracle would risk a genuine write, so the caller must refuse to run it.</summary>
+            RefuseUnsafe,
+        }
+
+        private static readonly string AppDataDir =
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+
+        private static readonly string RtkDir = Path.Combine(AppDataDir, "rtk");
+
+        private static readonly string FiltersPath = Path.Combine(RtkDir, "filters.toml");
+
+        /// <summary>
+        /// Marks an in-progress redirect. Written just before the junction is created and deleted
+        /// right after it is torn down, so a leftover marker after a crash unambiguously means "a
+        /// junction (never real data) may still be sitting at <see cref="RtkDir"/>" — safe for the
+        /// static self-heal check below to act on unconditionally.
+        /// </summary>
+        private static readonly string MarkerPath =
+            Path.Combine(AppDataDir, ".rtk-init-parity-redirect-marker");
+
+        public RedirectMode Mode { get; }
+
+        static WindowsGlobalFiltersGuard()
+        {
+            // Runs once, before the first Windows global-scope entry in this test process touches
+            // anything: if a previous run crashed between creating the junction and removing it,
+            // self-heal by removing the dangling junction now. This only ever acts on an actual NTFS
+            // reparse point at RtkDir (checked inside RemoveJunctionIfPresent) — a real directory is
+            // never touched, marker or not.
+            RemoveJunctionIfPresent(throwOnFailure: false);
+
+            // Second-layer cleanup for the common "unhandled exception kills the test process"
+            // failure mode (does not cover an OS-level kill -9, which no managed handler can
+            // observe — but a dangling junction never itself holds real data, so that residual risk
+            // is a harmless, self-healing leftover rather than data loss).
+            AppDomain.CurrentDomain.ProcessExit += (_, _) => RemoveJunctionIfPresent(throwOnFailure: false);
+            AppDomain.CurrentDomain.UnhandledException += (_, _) => RemoveJunctionIfPresent(throwOnFailure: false);
+        }
+
+        public WindowsGlobalFiltersGuard(string redirectTargetDir)
+        {
+            if (File.Exists(FiltersPath))
+            {
+                // The oracle will take its own "already exists, skip" branch — zero risk, nothing to do.
+                Mode = RedirectMode.SafeNoOp;
+                return;
+            }
+
+            if (Directory.Exists(RtkDir))
+            {
+                // A real directory without filters.toml: writing here would be a genuine,
+                // un-redirectable host mutation. Refuse — the caller skips this entry entirely.
+                Mode = RedirectMode.RefuseUnsafe;
+                return;
+            }
+
+            // Common case: nothing real exists at RtkDir yet. Redirect it wholesale into this
+            // entry's own temp sandbox so the oracle's write can only ever land there.
+            Directory.CreateDirectory(redirectTargetDir);
+            File.WriteAllText(MarkerPath, redirectTargetDir);
+            CreateJunction(RtkDir, redirectTargetDir);
+            Mode = RedirectMode.Redirected;
         }
 
         public void Dispose()
         {
+            if (Mode != RedirectMode.Redirected)
+            {
+                return;
+            }
+
+            // A failed teardown must never be swallowed: it means a junction is still sitting at a
+            // real path in the developer's profile, and the developer needs to know.
+            RemoveJunctionIfPresent(throwOnFailure: true);
+        }
+
+        private static bool IsReparsePoint(string path) =>
+            Directory.Exists(path) && (new DirectoryInfo(path).Attributes & FileAttributes.ReparsePoint) != 0;
+
+        private static void CreateJunction(string link, string target)
+        {
+            var psi = new ProcessStartInfo("cmd.exe", $"/c mklink /J \"{link}\" \"{target}\"")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start mklink process for junction creation.");
+            proc.WaitForExit();
+
+            if (proc.ExitCode != 0 || !IsReparsePoint(link))
+            {
+                var stderr = proc.StandardError.ReadToEnd();
+                throw new InvalidOperationException(
+                    $"Failed to create the WindowsGlobalFiltersGuard junction '{link}' -> '{target}' " +
+                    $"(exit {proc.ExitCode}): {stderr}");
+            }
+        }
+
+        /// <summary>
+        /// Removes the junction at <see cref="RtkDir"/> if (and only if) it is actually still an NTFS
+        /// reparse point — never a real directory, marker or no marker. <c>rmdir</c> without
+        /// <c>/s</c> removes only the reparse point itself; it can never recurse into (and therefore
+        /// can never delete) the sandboxed target's content.
+        /// </summary>
+        private static void RemoveJunctionIfPresent(bool throwOnFailure)
+        {
+            if (!IsReparsePoint(RtkDir))
+            {
+                TryDeleteMarker();
+                return;
+            }
+
+            var psi = new ProcessStartInfo("cmd.exe", $"/c rmdir \"{RtkDir}\"")
+            {
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true,
+            };
+            using var proc = Process.Start(psi)
+                ?? throw new InvalidOperationException("Failed to start rmdir process for junction cleanup.");
+            proc.WaitForExit();
+
+            if (proc.ExitCode != 0 || Directory.Exists(RtkDir))
+            {
+                var stderr = proc.StandardError.ReadToEnd();
+                var message =
+                    $"CRITICAL: failed to remove the WindowsGlobalFiltersGuard junction at '{RtkDir}' " +
+                    $"(exit {proc.ExitCode}): {stderr}. This path is an NTFS junction the test harness " +
+                    "created and never contains real host data, but it must be removed manually " +
+                    $"(run `rmdir \"{RtkDir}\"` from a shell) before the next `rtk init -g` on this machine.";
+                if (throwOnFailure)
+                {
+                    throw new InvalidOperationException(message);
+                }
+
+                Console.Error.WriteLine(message);
+                return;
+            }
+
+            TryDeleteMarker();
+        }
+
+        private static void TryDeleteMarker()
+        {
             try
             {
-                if (_existed)
+                if (File.Exists(MarkerPath))
                 {
-                    File.WriteAllBytes(_path, _backup!);
-                }
-                else if (File.Exists(_path))
-                {
-                    File.Delete(_path);
+                    File.Delete(MarkerPath);
                 }
             }
             catch (IOException)
             {
-                // Best-effort restoration; never fail the test on cleanup.
             }
             catch (UnauthorizedAccessException)
             {
-                // Best-effort restoration; never fail the test on cleanup.
             }
         }
     }
@@ -493,12 +707,21 @@ public class InitParityTests
             sb.AppendLine("> **Windows global-filters-template asymmetry.** The Rust oracle has no config-dir " +
                           "override; `dirs::config_dir()` resolves via a Win32 known-folder API that ignores " +
                           "environment variables, so on Windows the oracle's `generate_global_filters_template` " +
-                          "writes to the real `%APPDATA%\\rtk\\filters.toml` (outside the temp sandbox) while " +
-                          "the port writes to the redirected `.config-rtk/rtk/filters.toml` inside the temp " +
-                          "sandbox. This harness backs up/restores the real file around every affected oracle " +
-                          "run (see `WindowsGlobalFiltersGuard`) and excludes that one relative path from the " +
-                          "Windows tree-diff — every other file in the tree is still compared byte-exact. See " +
-                          "`docs/parity/compatibility-ledger.md` for the ledgered entry.");
+                          "would otherwise write to the real `%APPDATA%\\rtk\\filters.toml` (outside the temp " +
+                          "sandbox) while the port writes to the redirected `.config-rtk/rtk/filters.toml` " +
+                          "inside its own temp sandbox. `WindowsGlobalFiltersGuard` eliminates the real-write " +
+                          "risk entirely rather than backing up and restoring the real file: it redirects " +
+                          "`%APPDATA%\\rtk` into the oracle's own temp sandbox via an NTFS directory junction " +
+                          "*before* the oracle ever runs, so its write physically lands inside the sandbox and " +
+                          "never touches the real host profile — every file in the tree, including the " +
+                          "filters template, is compared byte-exact. Two narrow fallbacks apply only if " +
+                          "`%APPDATA%\\rtk` already has real content on this host (never observed on the " +
+                          "verification machine): if `filters.toml` already exists, the guard is a no-op " +
+                          "(the oracle's own \"already exists\" branch means it never writes) and only that " +
+                          "one relative path plus its stdout line are excluded from comparison; if the " +
+                          "directory exists without `filters.toml`, the entire entry is skipped rather than " +
+                          "risking a real write. See `docs/parity/compatibility-ledger.md` for the ledgered " +
+                          "entry.");
             sb.AppendLine();
         }
 
@@ -522,7 +745,7 @@ public class InitParityTests
         }
 
         sb.AppendLine();
-        var mismatches = results.Where(r => !r.IsMatch).ToList();
+        var mismatches = results.Where(r => !r.IsMatch || r.Skipped).ToList();
         sb.AppendLine("## Mismatch details");
         sb.AppendLine();
         if (mismatches.Count == 0)
@@ -543,6 +766,11 @@ public class InitParityTests
                 if (r.TreeDiff is not null)
                 {
                     sb.AppendLine($"- Tree diff: {Md(r.TreeDiff)}");
+                }
+
+                if (r.SkipReason is not null)
+                {
+                    sb.AppendLine($"- Skip reason: {Md(r.SkipReason)}");
                 }
 
                 sb.AppendLine();
@@ -566,20 +794,30 @@ public class InitParityTests
     /// <summary>The parity outcome for a single init battery entry.</summary>
     private sealed record InitResult(
         string Label, string RustStdout, string PortStdout, int RustExit, int PortExit,
-        bool TreeMatches, string? TreeDiff)
+        bool TreeMatches, string? TreeDiff, bool Skipped = false, string? SkipReason = null)
     {
-        public bool StdoutMatches => RustStdout == PortStdout;
+        /// <summary>
+        /// Builds a result for an entry the harness deliberately refused to run against the oracle
+        /// for host-safety reasons (see <see cref="WindowsGlobalFiltersGuard.RedirectMode.RefuseUnsafe"/>).
+        /// Counted as matched so it never fails the gate, but clearly labeled in the report.
+        /// </summary>
+        public static InitResult SkippedForHostSafety(string label, string reason) =>
+            new(label, "", "", 0, 0, TreeMatches: true, TreeDiff: null, Skipped: true, SkipReason: reason);
 
-        public bool ExitsMatch => RustExit == PortExit;
+        public bool StdoutMatches => Skipped || RustStdout == PortStdout;
 
-        public bool IsMatch => StdoutMatches && ExitsMatch && TreeMatches;
+        public bool ExitsMatch => Skipped || RustExit == PortExit;
 
-        public string Verdict => IsMatch
-            ? "MATCH"
-            : !StdoutMatches
-                ? "MISMATCH (stdout)"
-                : !ExitsMatch
-                    ? "MISMATCH (exit)"
-                    : "MISMATCH (tree)";
+        public bool IsMatch => Skipped || (StdoutMatches && ExitsMatch && TreeMatches);
+
+        public string Verdict => Skipped
+            ? "SKIPPED (host-safety)"
+            : IsMatch
+                ? "MATCH"
+                : !StdoutMatches
+                    ? "MISMATCH (stdout)"
+                    : !ExitsMatch
+                        ? "MISMATCH (exit)"
+                        : "MISMATCH (tree)";
     }
 }
