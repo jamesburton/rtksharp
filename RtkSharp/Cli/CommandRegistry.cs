@@ -33,6 +33,8 @@ public static class CommandRegistry
         Register("init", args => Task.FromResult(InitCommand.Run(args)));
         Register("verify", args => Task.FromResult(VerifyCommand.Run(args)));
         Register("config", args => Task.FromResult(ConfigCommand.Run(args)));
+        Register("trust", args => Task.FromResult(TrustCommand.RunTrust(args)));
+        Register("untrust", args => Task.FromResult(TrustCommand.RunUntrust(args)));
 
         Register("ls", LsCommand.RunAsync);
         Register("read", ReadCommand.RunAsync);
