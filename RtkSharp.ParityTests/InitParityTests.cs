@@ -368,6 +368,16 @@ public class InitParityTests
         private static readonly string MarkerPath =
             Path.Combine(AppDataDir, ".rtk-init-parity-redirect-marker");
 
+        /// <summary>
+        /// Prefix used by <c>CreateTempDir("rtk-init-parity-oracle-")</c> for the oracle temp
+        /// sandbox whose subdirectory becomes the junction target. The marker's recorded content
+        /// (the redirect target path) is checked for a path segment carrying this prefix before any
+        /// cleanup path is allowed to touch <see cref="RtkDir"/> — this is what actually makes the
+        /// marker trustworthy evidence "this reparse point is one our test harness created", rather
+        /// than merely a file whose *presence* is asserted but never read.
+        /// </summary>
+        private const string OracleTempPrefix = "rtk-init-parity-oracle-";
+
         public RedirectMode Mode { get; }
 
         static WindowsGlobalFiltersGuard()
@@ -405,10 +415,23 @@ public class InitParityTests
             }
 
             // Common case: nothing real exists at RtkDir yet. Redirect it wholesale into this
-            // entry's own temp sandbox so the oracle's write can only ever land there.
+            // entry's own temp sandbox so the oracle's write can only ever land there. The marker is
+            // written first (so a crash *during* junction creation still leaves evidence a redirect
+            // was in flight for the self-heal check to reason about) but is deleted again if junction
+            // creation itself throws, so a failed `mklink` never leaves an orphaned marker sitting in
+            // the real %APPDATA% root for this run.
             Directory.CreateDirectory(redirectTargetDir);
             File.WriteAllText(MarkerPath, redirectTargetDir);
-            CreateJunction(RtkDir, redirectTargetDir);
+            try
+            {
+                CreateJunction(RtkDir, redirectTargetDir);
+            }
+            catch
+            {
+                TryDeleteMarker();
+                throw;
+            }
+
             Mode = RedirectMode.Redirected;
         }
 
@@ -451,15 +474,29 @@ public class InitParityTests
 
         /// <summary>
         /// Removes the junction at <see cref="RtkDir"/> if (and only if) it is actually still an NTFS
-        /// reparse point — never a real directory, marker or no marker. <c>rmdir</c> without
-        /// <c>/s</c> removes only the reparse point itself; it can never recurse into (and therefore
-        /// can never delete) the sandboxed target's content.
+        /// reparse point — never a real directory, marker or no marker — <b>and</b>
+        /// <see cref="MarkerPath"/> exists with content that itself looks like one of this harness's
+        /// own oracle temp sandboxes (see <see cref="TryReadValidMarker"/>). A reparse point at
+        /// <see cref="RtkDir"/> with no such marker is left completely untouched: it might be a real
+        /// junction/symlink a developer created independently at this exact path for unrelated
+        /// reasons, and this class has no way to distinguish that from one of its own without the
+        /// marker, so the safe default is to no-op rather than guess. <c>rmdir</c> without <c>/s</c>
+        /// removes only the reparse point itself; it can never recurse into (and therefore can never
+        /// delete) the sandboxed target's content.
         /// </summary>
         private static void RemoveJunctionIfPresent(bool throwOnFailure)
         {
             if (!IsReparsePoint(RtkDir))
             {
                 TryDeleteMarker();
+                return;
+            }
+
+            if (!TryReadValidMarker(out _))
+            {
+                // A reparse point exists at RtkDir, but there is no marker (or its content doesn't
+                // look like one of this harness's own sandboxes) proving this harness created it.
+                // Leave it alone — see the remarks above and the class-level XML doc.
                 return;
             }
 
@@ -508,6 +545,59 @@ public class InitParityTests
             }
             catch (UnauthorizedAccessException)
             {
+            }
+        }
+
+        /// <summary>
+        /// Reads <see cref="MarkerPath"/> and validates its recorded content — the redirect target
+        /// directory written in the constructor — actually looks like one of this harness's own
+        /// oracle temp sandboxes, not merely that the marker file happens to exist. Requires the
+        /// recorded path to be rooted, to resolve under <see cref="Path.GetTempPath"/>, and to
+        /// contain a path segment starting with <see cref="OracleTempPrefix"/> (the
+        /// <c>CreateTempDir("rtk-init-parity-oracle-")</c> naming convention). Any I/O failure, empty
+        /// content, or content that fails those checks is treated as "not a valid marker" — the safe
+        /// default when we cannot prove the reparse point is ours.
+        /// </summary>
+        private static bool TryReadValidMarker(out string? recordedTarget)
+        {
+            recordedTarget = null;
+
+            if (!File.Exists(MarkerPath))
+            {
+                return false;
+            }
+
+            try
+            {
+                var content = File.ReadAllText(MarkerPath).Trim();
+                if (string.IsNullOrEmpty(content) || !Path.IsPathRooted(content))
+                {
+                    return false;
+                }
+
+                var tempRoot = Path.GetFullPath(Path.GetTempPath());
+                var full = Path.GetFullPath(content);
+                if (!full.StartsWith(tempRoot, StringComparison.OrdinalIgnoreCase))
+                {
+                    return false;
+                }
+
+                var segments = full.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (!segments.Any(s => s.StartsWith(OracleTempPrefix, StringComparison.Ordinal)))
+                {
+                    return false;
+                }
+
+                recordedTarget = full;
+                return true;
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
             }
         }
     }
