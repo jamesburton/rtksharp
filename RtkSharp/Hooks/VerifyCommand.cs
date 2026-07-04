@@ -73,11 +73,23 @@ public static class VerifyCommand
         }
 
         // Default / --require-all: integrity check first, then the full inline-test battery
-        // (main.rs:2531-2533). The integrity exit code is preserved when non-zero (e.g. a tampered
-        // hook → 1); otherwise the battery's success (0) is returned.
+        // (main.rs:2531-2533). On the oracle, `hooks::integrity::run_verify` only fails to return
+        // control to its caller in the Tampered arm, which calls `std::process::exit(1)` directly
+        // (integrity.rs:247) — terminating the process before `hooks::verify_cmd::run` is ever
+        // reached. Every other status (Verified, NoBaseline, NotInstalled, OrphanedHash, and the
+        // native-binary-registered PASS case) returns normally and falls through to the inline-test
+        // battery at main.rs:2533. `Integrity.RunVerify` mirrors this exactly: it returns 1 only for
+        // Tampered and 0 for every other status, so `integrityExit != 0` is precisely the Tampered
+        // condition — not a general "non-zero skips" heuristic.
         var integrityExit = Integrity.RunVerify(RuntimeOptions.Verbosity);
-        var inlineExit = RunInlineTests(null, requireAll);
-        return integrityExit != 0 ? integrityExit : inlineExit;
+        if (integrityExit != 0)
+        {
+            // Tampered: the oracle's process would have already exited here, so stop before
+            // printing the inline-test battery's stdout summary.
+            return integrityExit;
+        }
+
+        return RunInlineTests(null, requireAll);
     }
 
     /// <summary>

