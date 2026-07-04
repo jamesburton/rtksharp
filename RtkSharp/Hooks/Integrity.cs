@@ -166,14 +166,7 @@ public static class Integrity
         if (!OperatingSystem.IsWindows() && File.Exists(hashFile))
         {
             // If the hash file exists and is read-only, make it writable first (best-effort).
-            try
-            {
-                File.SetUnixFileMode(hashFile, WritableMode);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Best-effort: Rust discards this error too (`let _ = ...`).
-            }
+            TryMakeWritable(hashFile);
         }
 
         try
@@ -216,14 +209,7 @@ public static class Integrity
         if (!OperatingSystem.IsWindows())
         {
             // Make writable before removing (best-effort).
-            try
-            {
-                File.SetUnixFileMode(hashFile, WritableMode);
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            {
-                // Best-effort: Rust discards this error too (`let _ = ...`).
-            }
+            TryMakeWritable(hashFile);
         }
 
         try
@@ -236,6 +222,27 @@ public static class Integrity
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Best-effort attempt to make a file writable (Unix mode <c>rw-r--r--</c>) before a subsequent
+    /// write or delete. Shared by <see cref="StoreHash"/> and <see cref="RemoveHash"/>, both of which
+    /// need to clear the read-only mode <see cref="StoreHash"/> sets after writing. Mirrors Rust's
+    /// discarded-result <c>let _ = ...</c> idiom: any failure here is swallowed since it is only a
+    /// speed bump, not a security boundary — the subsequent write/delete will surface its own error
+    /// if permissions truly block it.
+    /// </summary>
+    /// <param name="path">The file to make writable.</param>
+    private static void TryMakeWritable(string path)
+    {
+        try
+        {
+            File.SetUnixFileMode(path, WritableMode);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort: Rust discards this error too (`let _ = ...`).
+        }
     }
 
     /// <summary>

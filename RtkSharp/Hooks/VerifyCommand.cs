@@ -8,11 +8,23 @@ namespace RtkSharp.Hooks;
 /// <c>--filter</c>, it runs <see cref="Integrity.RunVerify"/>.
 /// </summary>
 /// <remarks>
+/// <para>
 /// Rust's <c>Commands::Verify</c> also accepts <c>--filter &lt;name&gt;</c> and <c>--require-all</c>,
 /// which run TOML filter inline tests via <c>hooks::verify_cmd::run</c> — a distinct feature with no
 /// counterpart in this port yet. Those flags are recognized (so the CLI surface matches Rust's
 /// <c>clap</c> definition) but rejected with a clear "not yet implemented" diagnostic, consistent
 /// with <see cref="InitCommand"/>'s handling of not-yet-ported <c>init</c> modes.
+/// </para>
+/// <para>
+/// <b>Known parity gap (deferred, out of Phase 9b Task 3 scope):</b> this port implements
+/// <c>hooks::integrity::run_verify</c> only. The oracle's <c>Commands::Verify</c> handler
+/// (<c>main.rs</c>:2523-2536) additionally and unconditionally runs
+/// <c>hooks::verify_cmd::run(None, require_all)</c> (TOML inline-filter self-tests) for every
+/// no-<c>--filter</c> invocation — that call is NOT yet ported, so bare <c>rtk verify</c> output
+/// diverges from the oracle (missing the trailing "N/M tests passed" or "No inline tests found."
+/// block). Tracked as a deferred gap, out of Phase 9b Task 3 scope (belongs with the Phase 4 TOML
+/// filter system). See <c>docs/parity/compatibility-ledger.md</c> for the ledgered entry.
+/// </para>
 /// </remarks>
 public static class VerifyCommand
 {
