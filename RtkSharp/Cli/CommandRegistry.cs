@@ -30,6 +30,7 @@ public static class CommandRegistry
         });
 
         Register("hook", args => Task.FromResult(HookCommand.Run(args)));
+        Register("init", args => Task.FromResult(InitCommand.Run(args)));
 
         Register("ls", LsCommand.RunAsync);
         Register("read", ReadCommand.RunAsync);

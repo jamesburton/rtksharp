@@ -17,4 +17,17 @@
     <InternalsVisibleTo Include="RtkSharp.Tests" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!--
+      Embeds the exact bytes of the Rust oracle's `include_str!("../../hooks/claude/rtk-awareness.md")`
+      source file (src/hooks/init.rs RTK_SLIM constant). Loaded verbatim (no line-ending
+      normalization) via GetManifestResourceStream so both builds pick up whatever CRLF/LF the
+      current git checkout produced for this un-gitattributes-protected file, keeping the two
+      binaries byte-exact on any given machine/checkout.
+    -->
+    <EmbeddedResource Include="../hooks/claude/rtk-awareness.md">
+      <LogicalName>RtkSharp.Hooks.rtk-awareness.md</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>
