@@ -1,4 +1,5 @@
 using System;
+using RtkSharp.Core;
 
 namespace RtkSharp.Hooks;
 
@@ -14,6 +15,19 @@ namespace RtkSharp.Hooks;
 /// counterpart in this port yet. Those flags are recognized (so the CLI surface matches Rust's
 /// <c>clap</c> definition) but rejected with a clear "not yet implemented" diagnostic, consistent
 /// with <see cref="InitCommand"/>'s handling of not-yet-ported <c>init</c> modes.
+/// </para>
+/// <para>
+/// <b>Verbosity is a top-level flag, not a <c>verify</c>-subcommand flag.</b> Rust's <c>-v</c>/
+/// <c>-vv</c>/<c>-vvv</c>/<c>--verbose</c> is the top-level <c>Cli.verbose: u8</c> field
+/// (<c>main.rs</c>:67), only recognized <b>before</b> the subcommand (e.g. <c>rtk -v verify</c>),
+/// and threaded as <c>cli.verbose</c> into <c>hooks::integrity::run_verify(cli.verbose)</c>
+/// (<c>main.rs</c>:2532). <c>rtk verify -v</c> is a clap parse error on the oracle, not a
+/// verify-level flag. This mirrors <see cref="InitCommand"/>'s identical top-level-verbose model
+/// exactly: <see cref="RunCore"/> does not recognize <c>-v</c>/<c>--verbose</c> as a
+/// <c>verify</c>-level argument (it falls through to the same "unrecognized verify argument"
+/// abort as any other unknown flag), and verbosity is instead read from the ambient
+/// <see cref="RuntimeOptions.Verbosity"/>, set once by <c>Program</c> from the top-level flag
+/// before dispatch.
 /// </para>
 /// <para>
 /// <b>Known parity gap (deferred, out of Phase 9b Task 3 scope):</b> this port implements
@@ -48,26 +62,25 @@ public static class VerifyCommand
 
     private static int RunCore(string[] args)
     {
-        var verbose = 0;
-
-        for (var i = 0; i < args.Length; i++)
+        if (args.Length > 0)
         {
-            switch (args[i])
+            switch (args[0])
             {
-                case "-v":
-                case "--verbose":
-                    verbose++;
-                    break;
                 case "--filter":
                     throw Deferred("--filter (TOML filter inline tests)");
                 case "--require-all":
                     throw Deferred("--require-all (TOML filter inline tests)");
                 default:
-                    throw new InitAbortException($"unrecognized verify argument: {args[i]}");
+                    // Rust's `-v`/`--verbose` is a top-level `Cli` flag only recognized before the
+                    // subcommand — `rtk verify -v` is a clap parse error on the oracle, not a
+                    // verify-level argument. It is deliberately not special-cased here, so it falls
+                    // through to this same "unrecognized" abort, matching InitCommand's handling of
+                    // the identical case.
+                    throw new InitAbortException($"unrecognized verify argument: {args[0]}");
             }
         }
 
-        return Integrity.RunVerify(verbose);
+        return Integrity.RunVerify(RuntimeOptions.Verbosity);
     }
 
     /// <summary>Builds the "not yet implemented" abort for a mode deferred to a follow-up task.</summary>
