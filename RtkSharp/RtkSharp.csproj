@@ -49,6 +49,20 @@
     <EmbeddedResource Include="../hooks/codex/rtk-awareness.md">
       <LogicalName>RtkSharp.Hooks.rtk-awareness-codex.md</LogicalName>
     </EmbeddedResource>
+    <!--
+      Embeds all 63 built-in TOML filter definitions (src/filters/*.toml) byte-for-byte, one
+      embedded resource per file. Mirrors Rust's build.rs, which concatenates the same directory's
+      *.toml files (sorted alphabetically by file name) into a single builtin_filters.toml blob at
+      compile time via include_str!. RtkSharp.Filters.TomlFilterBuiltins.LoadConcatenated() performs
+      the equivalent concatenation at load time instead (sorting these resource names, which embed
+      the original file name via %(Filename)%(Extension)), so both builds parse the same 63 files as
+      one TOML document rather than as 63 independent ones — this matters because Rust's
+      cross-file behavior (e.g. a duplicate match_command key colliding across files) only manifests
+      under a single parse pass.
+    -->
+    <EmbeddedResource Include="../src/filters/*.toml">
+      <LogicalName>RtkSharp.Filters.Builtin.%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
