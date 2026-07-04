@@ -79,15 +79,20 @@ public sealed class Config
     /// cleanly, but a <b>present-but-incomplete</b> one (missing one or more of that section's
     /// required keys) is a hard failure — matching Rust's serde-derive behavior, where those four
     /// structs have no per-field <c>#[serde(default)]</c> (config.rs:56-146) and so error on a
-    /// partial table, unlike <c>HooksConfig</c>/<c>TelemetryConfig</c> which genuinely do have
-    /// per-field defaults and so tolerate partial tables by design. See the
+    /// partial table, unlike <c>HooksConfig</c> (both fields) and
+    /// <c>TelemetryConfig.consent_given</c>/<c>consent_date</c>, which genuinely do have per-field
+    /// <c>#[serde(default)]</c> and so tolerate partial tables by design —
+    /// <c>TelemetryConfig.enabled</c> does <b>not</b> have <c>#[serde(default)]</c> in Rust
+    /// (config.rs:115) and so is required whenever a <c>[telemetry]</c> table is present, exactly like
+    /// the four all-required structs below. See the
     /// <see cref="Tomlyn.Serialization.TomlRequiredAttribute"/> attributes on
     /// <see cref="TrackingConfig"/>, <see cref="DisplayConfig"/>,
-    /// <see cref="FilterConfig"/>, and <see cref="LimitsConfig"/>'s properties, which reproduce this
-    /// per-key strictness (verified empirically: Tomlyn 2.10.1's <c>TomlRequiredAttribute</c> throws a
-    /// <c>TomlException</c> when a present table is missing a required key, for both the reflection
-    /// and AOT-safe source-generated binding paths, while still allowing the table itself to be wholly
-    /// absent — see this method's tests in <c>RtkSharp.Tests/Core/ConfigTests.cs</c>).
+    /// <see cref="FilterConfig"/>, and <see cref="LimitsConfig"/>'s properties, plus
+    /// <see cref="TelemetryConfig.Enabled"/>, which reproduce this per-key strictness (verified
+    /// empirically: Tomlyn 2.10.1's <c>TomlRequiredAttribute</c> throws a <c>TomlException</c> when a
+    /// present table is missing a required key, for both the reflection and AOT-safe
+    /// source-generated binding paths, while still allowing the table itself to be wholly absent —
+    /// see this method's tests in <c>RtkSharp.Tests/Core/ConfigTests.cs</c>).
     /// </summary>
     /// <remarks>
     /// <b>No project-local tier.</b> Unlike <c>.rtk/filters.toml</c> (a later Phase 4 task), there is
@@ -399,7 +404,7 @@ public sealed class FilterConfig
 public sealed class TelemetryConfig
 {
     /// <summary>Whether telemetry is enabled. Defaults to <see langword="false"/> (opt-in).</summary>
-    [TomlPropertyName("enabled")]
+    [TomlPropertyName("enabled"), TomlRequired]
     public bool Enabled { get; set; }
 
     /// <summary>Whether the user has explicitly answered the telemetry consent prompt.</summary>

@@ -221,6 +221,25 @@ public sealed class ConfigTests
     }
 
     /// <summary>
+    /// <c>TelemetryConfig.enabled</c> lacks <c>#[serde(default)]</c> in Rust (config.rs:115), unlike its
+    /// sibling fields <c>consent_given</c>/<c>consent_date</c> (config.rs:117-119), which do have it. So a
+    /// <c>[telemetry]</c> table present but missing <c>enabled</c> must fail loud, exactly like the
+    /// all-required sections above — even though <see cref="TelemetryConfig"/> is otherwise lenient.
+    /// </summary>
+    [Fact]
+    public void Load_ConfigWithPartialTelemetrySection_Throws()
+    {
+        using var tmp = new TempDir();
+        using var guard = new GlobalScopeGuard(tmp);
+
+        var path = Path.Combine(guard.ConfigDir, "rtk", "config.toml");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "[telemetry]\nconsent_given = true\n");
+
+        Assert.Throws<TomlException>(() => Config.Load());
+    }
+
+    /// <summary>
     /// Proves <see cref="Config.Load"/> never consults a project-local <c>.rtk/config.toml</c> — an
     /// easy assumption to get backwards by analogy with the (genuinely two-tier) filters system. A
     /// project-local file with non-default content must be completely ignored: the loaded config
