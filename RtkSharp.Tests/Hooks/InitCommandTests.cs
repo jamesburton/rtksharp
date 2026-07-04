@@ -141,6 +141,57 @@ public sealed class InitCommandTests
     }
 
     [Fact]
+    public void Uninstall_WithCodex_FailsWithHonestNotImplementedMessage()
+    {
+        using var tmp = new TempDir();
+        using var cwd = new CwdGuard(tmp.Root);
+        using var console = new ConsoleCapture();
+
+        // Rust's uninstall() dispatches --codex into uninstall_codex(global, ctx) unconditionally
+        // (init.rs:629-635, checked before the generic !global bail), regardless of --global. That
+        // agent-specific uninstall body isn't ported yet, so this must fail loud with an honest
+        // "not yet implemented" diagnostic rather than a fabricated Rust-lookalike message.
+        var exit = InitCommand.Run(["--uninstall", "--codex"]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("not yet implemented", console.Error.ToString());
+    }
+
+    [Fact]
+    public void Uninstall_WithAgentCursor_WithoutGlobal_FailsWithExactRustMessage()
+    {
+        using var tmp = new TempDir();
+        using var cwd = new CwdGuard(tmp.Root);
+        using var console = new ConsoleCapture();
+
+        // Rust's uninstall() checks cursor before the generic !global bail (init.rs:637-640) and
+        // bails there with its own distinct message when !global (rather than dispatching into an
+        // unimplemented body), so the exact Rust text is reproduced here.
+        var exit = InitCommand.Run(["--uninstall", "--agent", "cursor"]);
+
+        Assert.Equal(1, exit);
+        Assert.Equal(
+            "rtk: Cursor uninstall only works with --global flag\n",
+            console.Error.ToString());
+    }
+
+    [Fact]
+    public void Uninstall_WithAgentPi_FailsWithHonestNotImplementedMessage()
+    {
+        using var tmp = new TempDir();
+        using var cwd = new CwdGuard(tmp.Root);
+        using var console = new ConsoleCapture();
+
+        // Rust dispatches --agent pi into uninstall_pi(global, ctx) unconditionally (init.rs:664-667),
+        // regardless of --global. That agent-specific uninstall body isn't ported yet, so this must
+        // fail loud with an honest "not yet implemented" diagnostic.
+        var exit = InitCommand.Run(["--uninstall", "--agent", "pi"]);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("not yet implemented", console.Error.ToString());
+    }
+
+    [Fact]
     public void OpencodeWithoutGlobal_FailsWithExactRustMessage()
     {
         using var tmp = new TempDir();

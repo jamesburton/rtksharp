@@ -65,6 +65,33 @@ public static class InitCommand
                 throw Deferred("--uninstall --copilot");
             }
 
+            // Rust's uninstall() (init.rs:620) checks codex/cursor/pi BEFORE the generic
+            // !global bail, in that order. Codex and Pi dispatch unconditionally into their
+            // own uninstall bodies (uninstall_codex/uninstall_pi) regardless of --global —
+            // those bodies aren't ported yet (Task 2/3/5 territory), so we fail loud with an
+            // honest "not yet implemented" message rather than fabricating their behavior.
+            // Cursor, however, bails right here in Rust (init.rs:637-640) when !global with
+            // its own distinct message, so that exact text is reproduced below.
+            if (flags.Codex)
+            {
+                throw Deferred("--uninstall --codex");
+            }
+
+            if (flags.Agent == "cursor")
+            {
+                if (!flags.Global)
+                {
+                    throw new InitAbortException("Cursor uninstall only works with --global flag");
+                }
+
+                throw Deferred("--uninstall --agent cursor --global");
+            }
+
+            if (flags.Agent == "pi")
+            {
+                throw Deferred("--uninstall --agent pi");
+            }
+
             if (!flags.Global)
             {
                 throw new InitAbortException(
