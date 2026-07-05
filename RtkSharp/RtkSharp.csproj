@@ -13,6 +13,22 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!--
+      SQLite provider for the Phase 5 tracking database (RtkSharp/Core/Tracking/Tracker.cs), porting
+      Rust's `rusqlite` (src/core/tracking.rs). Version 10.0.9 is the latest stable release as of this
+      writing and is confirmed AOT/trim-compatible (PublishAot=true): it is a thin ADO.NET wrapper
+      over SQLitePCLRaw's native e_sqlite3 binary via P/Invoke, not reflection-based ORM mapping, so
+      Native AOT trimming does not touch its query/marshalling path. Verified with a real
+      `dotnet publish -c Release -r win-x64` smoke test that opens a file-backed DB, creates the
+      Tracker schema, and round-trips a row through the published native executable (not just that
+      the build succeeds) — see Task 1's report for the exact run.
+      Explicitly pins the transitive SQLitePCLRaw.bundle_e_sqlite3 dependency to 3.0.3 (newer than the
+      2.1.11 Microsoft.Data.Sqlite 10.0.9 would otherwise resolve) because 2.1.11 trips NU1903 (a
+      known high-severity advisory, GHSA-2m69-gcr7-jv3q, in the bundled native e_sqlite3 library);
+      3.0.3 resolves cleanly against Microsoft.Data.Sqlite 10.0.9 with no restore warnings.
+    -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.3" />
     <PackageReference Include="Spectre.Console" Version="0.57.1" />
     <!--
       TOML parser/serializer for config.toml (RtkSharp/Core/Config.cs) and, in later Phase 4 tasks,
