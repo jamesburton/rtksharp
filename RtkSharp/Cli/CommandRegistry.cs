@@ -77,6 +77,12 @@ public static class CommandRegistry
         // not "fixed" for consistency with the meta-commands above.
         Register("err", ErrCommand.RunAsync);
         Register("test", TestCommand.RunAsync);
+
+        // "env" is registered the same way "err"/"test" are: a normal dispatch entry, not the
+        // meta-command-style guarantee "run"/"proxy"/"pipe"/"gain" get above - Rust's own
+        // RTK_META_COMMANDS list doesn't include "env" either, but the registry-hit-always-wins
+        // behavior already gives it the sufficient substitute established in Phase 6.
+        Register("env", EnvCommand.RunAsync);
     }
 
     /// <summary>

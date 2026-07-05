@@ -1,0 +1,576 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using Microsoft.Data.Sqlite;
+using RtkSharp.Commands.System;
+using RtkSharp.Core.Tracking;
+using Xunit;
+
+namespace RtkSharp.Tests.Commands.System;
+
+/// <summary>
+/// Tests for <see cref="EnvCommand"/>, the <c>rtk env</c> categorized/masked/truncated environment
+/// variable display. Faithful-port target: Rust <c>src/cmds/system/env_cmd.rs</c> (305 lines
+/// including its own inline <c>#[cfg(test)]</c> module, ported below plus additional integration
+/// coverage for the full <see cref="EnvCommand.Run"/> flow).
+/// </summary>
+public sealed class EnvCommandTests
+{
+    // -----------------------------------------------------------------------
+    // MaskValue - ported from env_cmd.rs's test_mask_value_* (lines 219-243)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void MaskValue_ShortValue_ReturnsAllAsterisks()
+    {
+        Assert.Equal("****", EnvCommand.MaskValue("abc"));
+        Assert.Equal("****", EnvCommand.MaskValue(""));
+    }
+
+    [Fact]
+    public void MaskValue_LongValue_PreservesPrefixAndSuffix()
+    {
+        var result = EnvCommand.MaskValue("supersecrettoken");
+        Assert.Contains("****", result, StringComparison.Ordinal);
+        Assert.StartsWith("su", result, StringComparison.Ordinal);
+        Assert.EndsWith("en", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MaskValue_ExactlyFourChars_ReturnsAllAsterisks()
+    {
+        Assert.Equal("****", EnvCommand.MaskValue("abcd"));
+    }
+
+    [Fact]
+    public void MaskValue_FiveChars_PreservesPrefixAndSuffix()
+    {
+        var result = EnvCommand.MaskValue("abcde");
+        Assert.StartsWith("ab", result, StringComparison.Ordinal);
+        Assert.EndsWith("de", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void MaskValue_SurrogatePairCharacters_MaskedByUnicodeScalarValue_NotUtf16CodeUnit()
+    {
+        // "😀" (U+1F600) is one Rust `char` / one .NET Rune but two UTF-16 code units. A value made
+        // of 5 such emoji is > 4 Rune-counted "chars", so it must mask to prefix+****+suffix using
+        // whole emoji, not split a surrogate pair the way naive string.Length indexing would.
+        const string value = "😀😀😀😀😀";
+        var result = EnvCommand.MaskValue(value);
+        Assert.Equal("😀😀****😀😀", result);
+    }
+
+    // -----------------------------------------------------------------------
+    // IsLangVar / IsCloudVar / IsToolVar / IsInterestingVar - ported from env_cmd.rs (lines 245-295)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void IsLangVar_PositiveCases()
+    {
+        Assert.True(EnvCommand.IsLangVar("RUST_LOG"));
+        Assert.True(EnvCommand.IsLangVar("CARGO_HOME"));
+        Assert.True(EnvCommand.IsLangVar("GOPATH"));
+        Assert.True(EnvCommand.IsLangVar("NODE_ENV"));
+    }
+
+    [Fact]
+    public void IsLangVar_NegativeCases()
+    {
+        Assert.False(EnvCommand.IsLangVar("HOME"));
+        Assert.False(EnvCommand.IsLangVar("PATH"));
+        Assert.False(EnvCommand.IsLangVar("USER"));
+    }
+
+    [Fact]
+    public void IsCloudVar_PositiveCases()
+    {
+        Assert.True(EnvCommand.IsCloudVar("AWS_ACCESS_KEY_ID"));
+        Assert.True(EnvCommand.IsCloudVar("AZURE_CLIENT_ID"));
+        Assert.True(EnvCommand.IsCloudVar("DOCKER_HOST"));
+        Assert.True(EnvCommand.IsCloudVar("KUBERNETES_SERVICE_HOST"));
+    }
+
+    [Fact]
+    public void IsCloudVar_NegativeCases()
+    {
+        Assert.False(EnvCommand.IsCloudVar("HOME"));
+        Assert.False(EnvCommand.IsCloudVar("RUST_LOG"));
+    }
+
+    [Fact]
+    public void IsToolVar_PositiveCases()
+    {
+        Assert.True(EnvCommand.IsToolVar("EDITOR"));
+        Assert.True(EnvCommand.IsToolVar("GIT_AUTHOR_NAME"));
+        Assert.True(EnvCommand.IsToolVar("SSH_AUTH_SOCK"));
+        Assert.True(EnvCommand.IsToolVar("CLAUDE_API_KEY"));
+    }
+
+    [Fact]
+    public void IsInterestingVar_PositiveCases()
+    {
+        Assert.True(EnvCommand.IsInterestingVar("HOME"));
+        Assert.True(EnvCommand.IsInterestingVar("USER"));
+        Assert.True(EnvCommand.IsInterestingVar("LANG"));
+        Assert.True(EnvCommand.IsInterestingVar("TZ"));
+        Assert.True(EnvCommand.IsInterestingVar("PWD"));
+    }
+
+    [Fact]
+    public void IsInterestingVar_NegativeCases()
+    {
+        Assert.False(EnvCommand.IsInterestingVar("RANDOM_VAR"));
+        Assert.False(EnvCommand.IsInterestingVar("MY_CUSTOM_VAR"));
+    }
+
+    [Fact]
+    public void IsInterestingVar_UsesStartsWith_NotContains_UnlikeTheOtherThreeHelpers()
+    {
+        // "MY_HOME_DIR" contains "HOME" as a substring but does not START with it - the deliberate
+        // Contains-vs-StartsWith asymmetry documented in the phase plan and class remarks.
+        Assert.False(EnvCommand.IsInterestingVar("MY_HOME_DIR"));
+        Assert.True(EnvCommand.IsInterestingVar("HOME_DIR"));
+    }
+
+    [Fact]
+    public void GetSensitivePatterns_ContainsExpectedKeys()
+    {
+        var patterns = EnvCommand.GetSensitivePatterns();
+        Assert.Contains("key", patterns);
+        Assert.Contains("secret", patterns);
+        Assert.Contains("password", patterns);
+        Assert.Contains("token", patterns);
+        Assert.Contains("credential", patterns);
+        Assert.Contains("auth", patterns);
+        Assert.Contains("private", patterns);
+        Assert.Contains("api_key", patterns);
+        Assert.Contains("apikey", patterns);
+        Assert.Contains("access_key", patterns);
+        Assert.Contains("jwt", patterns);
+        Assert.Equal(11, patterns.Count);
+    }
+
+    // -----------------------------------------------------------------------
+    // ParseArgs
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ParseArgs_DashFFlag_SetsFilter()
+    {
+        var (filter, showAll) = EnvCommand.ParseArgs(["-f", "CARGO"]);
+        Assert.Equal("CARGO", filter);
+        Assert.False(showAll);
+    }
+
+    [Fact]
+    public void ParseArgs_LongFilterEquals_SetsFilter()
+    {
+        var (filter, _) = EnvCommand.ParseArgs(["--filter=CARGO"]);
+        Assert.Equal("CARGO", filter);
+    }
+
+    [Fact]
+    public void ParseArgs_ShowAllFlag_SetsShowAll()
+    {
+        var (filter, showAll) = EnvCommand.ParseArgs(["--show-all"]);
+        Assert.Null(filter);
+        Assert.True(showAll);
+    }
+
+    // -----------------------------------------------------------------------
+    // Run - full flow, integration-style, against an injectable env var dictionary
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Run_BucketCategorization_IsPriorityOrdered_AndMutuallyExclusive()
+    {
+        // CARGO_HOME contains no "PATH" substring, so it should land in lang, not path/other. A key
+        // that would match BOTH a lang pattern and a cloud pattern (if such existed) should only ever
+        // appear in the first bucket checked - here we prove each seeded var lands in exactly one
+        // bucket by checking the rendered sections.
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["CARGO_HOME"] = "/home/user/.cargo",
+            ["AWS_REGION"] = "us-east-1",
+            ["EDITOR"] = "vim",
+            ["HOME"] = "/home/user",
+        };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("Language/Runtime:", output, StringComparison.Ordinal);
+        Assert.Contains("  CARGO_HOME=/home/user/.cargo", output, StringComparison.Ordinal);
+        Assert.Contains("Cloud/Services:", output, StringComparison.Ordinal);
+        Assert.Contains("  AWS_REGION=us-east-1", output, StringComparison.Ordinal);
+        Assert.Contains("Tools:", output, StringComparison.Ordinal);
+        Assert.Contains("  EDITOR=vim", output, StringComparison.Ordinal);
+        Assert.Contains("Other:", output, StringComparison.Ordinal);
+        Assert.Contains("  HOME=/home/user", output, StringComparison.Ordinal);
+
+        // Mutual exclusivity: CARGO_HOME's line must appear exactly once across the whole output.
+        Assert.Single(SplitOccurrences(output, "CARGO_HOME=/home/user/.cargo"));
+    }
+
+    [Fact]
+    public void Run_PathBucket_TakesPriorityOverLangVar()
+    {
+        // GOPATH contains both "PATH" (path bucket, checked first) and would otherwise match
+        // is_lang_var's "GO"/"GOPATH" pattern (checked after path) - PATH-containment wins because
+        // it's checked FIRST in the strict priority order.
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["GOPATH"] = "/home/user/go" };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("PATH Variables:", output, StringComparison.Ordinal);
+        Assert.Contains("  GOPATH=/home/user/go", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("Language/Runtime:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_ExactPathKey_SplitsOnColon_WithOverflowMarker()
+    {
+        var segments = new List<string>();
+        for (var i = 0; i < 15; i++)
+        {
+            segments.Add($"/seg{i}");
+        }
+
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["PATH"] = string.Join(':', segments) };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("  PATH (15 entries):", output, StringComparison.Ordinal);
+        Assert.Contains("    /seg0", output, StringComparison.Ordinal);
+        Assert.Contains("    /seg9", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("    /seg10", output, StringComparison.Ordinal);
+        Assert.Contains("    ... +5 more", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_KeyContainsPathButIsNotExactlyPath_PrintedAsNormalLine_NotSplit()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["MY_PATH_THING"] = "a:b:c",
+        };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("  MY_PATH_THING=a:b:c", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("entries):", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_SensitiveKey_IsMaskedByDefault()
+    {
+        // AWS_SECRET_ACCESS_KEY both matches is_cloud_var's "AWS" pattern (so it lands in the Cloud
+        // bucket and is actually printed) and is sensitive (contains "secret"/"access_key"/"key").
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["AWS_SECRET_ACCESS_KEY"] = "supersecretvalue123" };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.DoesNotContain("supersecretvalue123", output, StringComparison.Ordinal);
+        Assert.Contains("****", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_ShowAllFlag_DisplaysSensitiveValueUnmasked()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["AWS_SECRET_ACCESS_KEY"] = "supersecretvalue123" };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun(["--show-all"], vars, verbosity: 0);
+
+        Assert.Contains("supersecretvalue123", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_LongValue_IsTruncatedWithCharCount()
+    {
+        var longValue = new string('x', 150);
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["EDITOR"] = longValue };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains(new string('x', 50) + "... (150 chars)", output, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('x', 150), output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_ShortValue_IsNeitherMaskedNorTruncated()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["EDITOR"] = "vim" };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("  EDITOR=vim", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_Filter_CaseInsensitiveSubstringMatch_OnKeyOnly()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["CARGO_HOME"] = "/home/user/.cargo",
+            ["EDITOR"] = "vim",
+        };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun(["-f", "cargo"], vars, verbosity: 0);
+
+        Assert.Contains("CARGO_HOME", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("EDITOR", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_FilterSet_SuppressesSummaryLine()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["CARGO_HOME"] = "/x" };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun(["-f", "CARGO"], vars, verbosity: 0);
+
+        Assert.DoesNotContain("Total:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_NoFilter_PrintsSummaryLine()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["EDITOR"] = "vim" };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("\nTotal: 1 vars (showing 1 relevant)\n", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_EmptyFilter_MatchesEveryKey()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["EDITOR"] = "vim",
+            ["HOME"] = "/home/user",
+        };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun(["-f", ""], vars, verbosity: 0);
+
+        Assert.Contains("EDITOR", output, StringComparison.Ordinal);
+        Assert.Contains("HOME", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_ZeroMatchFilter_ExitsZero_WithNoBucketHeaders()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["EDITOR"] = "vim" };
+
+        using var db = new TempTrackingDb();
+        var originalOut = Console.Out;
+        var capture = new StringWriter();
+        int exitCode;
+        try
+        {
+            Console.SetOut(capture);
+            exitCode = EnvCommand.Run([ "-f", "zzz_no_such_match_zzz" ], vars, verbosity: 0);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("PATH Variables:", capture.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Other:", capture.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Total:", capture.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_VerboseFlag_WritesHeaderToStderr_NotStdout()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["EDITOR"] = "vim" };
+
+        using var db = new TempTrackingDb();
+        var originalOut = Console.Out;
+        var originalErr = Console.Error;
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        try
+        {
+            Console.SetOut(stdout);
+            Console.SetError(stderr);
+            EnvCommand.Run([], vars, verbosity: 1);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalErr);
+        }
+
+        Assert.Contains("Environment variables:\n", stderr.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("Environment variables:", stdout.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_OtherBucket_CapsAtTwenty_WithOverflowMarker()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var i = 0; i < 25; i++)
+        {
+            // "-f" empty-string-equivalent isn't used here; instead each key starts with "HOME" so
+            // is_interesting_var's StartsWith("HOME") gate lets every one land in "Other" without a
+            // filter, exercising the CAP_LIST=20 overflow path.
+            vars[$"HOME_LIKE_{i:D2}"] = $"v{i}";
+        }
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.Contains("  ... +5 more", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_UninterestingUnfilteredVar_IsDropped_ButStillCountedTowardTotal()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["SOME_RANDOM_APP_SETTING"] = "value",
+            ["EDITOR"] = "vim",
+        };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        Assert.DoesNotContain("SOME_RANDOM_APP_SETTING", output, StringComparison.Ordinal);
+        // total=2 (both vars counted), shown=1 (only EDITOR landed in a bucket).
+        Assert.Contains("\nTotal: 2 vars (showing 1 relevant)\n", output, StringComparison.Ordinal);
+    }
+
+    // -----------------------------------------------------------------------
+    // Tracking - the unmasked `raw` baseline diverges from the masked on-screen display
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Run_TrackedRawBaseline_ReflectsUnmaskedValue_EvenThoughDisplayIsMasked()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["AWS_SECRET_ACCESS_KEY"] = "supersecretvalue123" };
+
+        using var db = new TempTrackingDb();
+        var rtkCmd = "rtk env";
+
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        // On-screen: masked.
+        Assert.DoesNotContain("supersecretvalue123", output, StringComparison.Ordinal);
+
+        // Tracked: the raw baseline's token count must reflect the full unmasked
+        // "AWS_SECRET_ACCESS_KEY=supersecretvalue123\n" line, not the masked display line - proving
+        // the documented divergence.
+        var maskedLineTokens = Tracker.EstimateTokens("AWS_SECRET_ACCESS_KEY=su****23\n");
+        var unmaskedLineTokens = Tracker.EstimateTokens("AWS_SECRET_ACCESS_KEY=supersecretvalue123\n");
+        Assert.NotEqual(maskedLineTokens, unmaskedLineTokens);
+
+        var row = QueryRow(db.DbPath, rtkCmd);
+        Assert.NotNull(row);
+        Assert.Equal(unmaskedLineTokens, row!.Value.InputTokens);
+    }
+
+    [Fact]
+    public void Run_Tracking_StillHappens_EvenWhenFilterIsSet()
+    {
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["CARGO_HOME"] = "/x" };
+
+        using var db = new TempTrackingDb();
+        CaptureRun(["-f", "CARGO"], vars, verbosity: 0);
+
+        var row = QueryRow(db.DbPath, "rtk env");
+        Assert.NotNull(row);
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers
+    // -----------------------------------------------------------------------
+
+    private static string CaptureRun(IReadOnlyList<string> args, IReadOnlyDictionary<string, string> vars, int verbosity)
+    {
+        var originalOut = Console.Out;
+        var capture = new StringWriter();
+        try
+        {
+            Console.SetOut(capture);
+            var exitCode = EnvCommand.Run(args, vars, verbosity);
+            Assert.Equal(0, exitCode);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        return capture.ToString();
+    }
+
+    private static List<int> SplitOccurrences(string haystack, string needle)
+    {
+        var indices = new List<int>();
+        var idx = 0;
+        while ((idx = haystack.IndexOf(needle, idx, StringComparison.Ordinal)) >= 0)
+        {
+            indices.Add(idx);
+            idx += needle.Length;
+        }
+
+        return indices;
+    }
+
+    private static (int InputTokens, int OutputTokens, long ExecTimeMs)? QueryRow(string dbPath, string rtkCmd)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT input_tokens, output_tokens, exec_time_ms FROM commands WHERE rtk_cmd = $rtkCmd ORDER BY id DESC LIMIT 1";
+        cmd.Parameters.AddWithValue("$rtkCmd", rtkCmd);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return (reader.GetInt32(0), reader.GetInt32(1), reader.GetInt64(2));
+    }
+
+    private sealed class TempTrackingDb : IDisposable
+    {
+        private readonly string? _previousDbPath = Environment.GetEnvironmentVariable(Tracker.DbPathEnvVar);
+        private readonly string _root = Path.Combine(Path.GetTempPath(), "rtksharp-env-cmd-tests-" + Guid.NewGuid().ToString("N"));
+
+        public string DbPath { get; }
+
+        public TempTrackingDb()
+        {
+            Directory.CreateDirectory(_root);
+            DbPath = Path.Combine(_root, "history.db");
+            Environment.SetEnvironmentVariable(Tracker.DbPathEnvVar, DbPath);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable(Tracker.DbPathEnvVar, _previousDbPath);
+            try
+            {
+                Directory.Delete(_root, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+}
