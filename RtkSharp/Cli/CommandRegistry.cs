@@ -60,6 +60,7 @@ public static class CommandRegistry
         Register("vitest", VitestCommand.RunVitestAsync);
         Register("jest", VitestCommand.RunJestAsync);
         Register("playwright", PlaywrightCommand.RunAsync);
+        Register("prisma", PrismaCommand.RunAsync);
 
         // Registering "run" here gives it the same RTK_META_COMMANDS-equivalent guarantee as "gain"
         // above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-passthrough
