@@ -63,6 +63,12 @@ public static class CommandRegistry
         // passthrough path, so `rtk proxy` can never fall back to executing a literal `proxy` binary
         // from $PATH.
         Register("proxy", args => ProxyCommand.RunAsync(args));
+
+        // Registering "pipe" here gives it the same RTK_META_COMMANDS-equivalent guarantee as
+        // "run"/"proxy"/"gain" above: a registry hit always wins over RtkProgram.RunAsync's
+        // TOML-fallback/raw-passthrough path, so `rtk pipe` can never fall back to executing a
+        // literal `pipe` binary from $PATH.
+        Register("pipe", PipeCommand.RunAsync);
     }
 
     /// <summary>
