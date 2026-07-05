@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Text;
 using Microsoft.Data.Sqlite;
 using RtkSharp.Commands.System;
 using RtkSharp.Core.Tracking;
@@ -251,6 +253,55 @@ public sealed class EnvCommandTests
     }
 
     [Fact]
+    public void Run_PathValueExceedsTruncationThreshold_SplitsOnColon_UsingTruncatedDisplayValueNotRawValue()
+    {
+        // 12 realistic-looking segments comfortably over the 100-byte truncation threshold - proves
+        // the PATH split operates on the already-truncated 50-char-preview display value
+        // (env_cmd.rs:42-54 then :70-85), NOT the raw untruncated PATH string. Unlike
+        // Run_ExactPathKey_SplitsOnColon_WithOverflowMarker above (~94 bytes, under the threshold),
+        // this fixture is deliberately sized to exceed it.
+        var rawSegments = Enumerable.Range(0, 12)
+            .Select(i => $"C:\\SomeLongDirectoryName{i}\\bin")
+            .ToList();
+        var rawPath = string.Join(':', rawSegments);
+
+        Assert.True(
+            Encoding.UTF8.GetByteCount(rawPath) > 100,
+            "test fixture must exceed the 100-byte truncation threshold to be discriminating");
+
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["PATH"] = rawPath };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        // Independently recompute the expected TRUNCATED display value the same way EnvCommand.Run
+        // does (first 50 Unicode scalar values + "... ({N} chars)" suffix). The fixture is all-ASCII,
+        // so char count and Rune count coincide here - this test isolates the truncate-before-split
+        // ORDERING only; the byte-vs-rune unit distinction itself is covered by a separate test.
+        var expectedTruncated = rawPath[..50] + $"... ({rawPath.Length} chars)";
+        var expectedSegments = expectedTruncated.Split(':');
+
+        // The truncated string's colon-split count must differ from the raw segment count - proving
+        // the split did not operate on the original, full PATH value.
+        Assert.NotEqual(rawSegments.Count, expectedSegments.Length);
+
+        Assert.Contains($"  PATH ({expectedSegments.Length} entries):", output, StringComparison.Ordinal);
+        foreach (var segment in expectedSegments.Take(10))
+        {
+            Assert.Contains($"    {segment}\n", output, StringComparison.Ordinal);
+        }
+
+        if (expectedSegments.Length > 10)
+        {
+            Assert.Contains($"    ... +{expectedSegments.Length - 10} more\n", output, StringComparison.Ordinal);
+        }
+
+        // The last RAW segment (only reachable if the split had used the untruncated value) must not
+        // appear anywhere as a displayed entry.
+        Assert.DoesNotContain($"    {rawSegments[^1]}\n", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Run_KeyContainsPathButIsNotExactlyPath_PrintedAsNormalLine_NotSplit()
     {
         var vars = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -301,6 +352,43 @@ public sealed class EnvCommandTests
 
         Assert.Contains(new string('x', 50) + "... (150 chars)", output, StringComparison.Ordinal);
         Assert.DoesNotContain(new string('x', 150), output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Run_LongValue_TruncationThresholdIsByteBased_ButPreviewAndCountAreRuneBased()
+    {
+        // 40 emoji (U+1F600, "😀"): each is 1 Unicode scalar value / 1 Rune but 4 UTF-8 bytes and 2
+        // UTF-16 code units. 40 runes -> 160 UTF-8 bytes: OVER the 100-BYTE truncation threshold, even
+        // though the RUNE count (40) is nowhere near 100. A naive rune-based threshold check would NOT
+        // truncate this value at all - so truncation firing here proves the >100 check is byte-based,
+        // not rune-based. Unlike Run_LongValue_IsTruncatedWithCharCount above (150 ASCII 'x', where
+        // byte length and rune count are numerically identical and so cannot discriminate the two
+        // units), this fixture makes byte count and rune count diverge across the threshold.
+        const string emoji = "😀";
+        var longValue = string.Concat(Enumerable.Repeat(emoji, 40));
+
+        var byteCount = Encoding.UTF8.GetByteCount(longValue);
+        var runeCount = longValue.EnumerateRunes().Count();
+        Assert.Equal(160, byteCount);
+        Assert.Equal(40, runeCount);
+        Assert.True(byteCount > 100, "fixture must exceed the byte threshold");
+        Assert.True(runeCount < 100, "fixture's RUNE count must stay well under the byte threshold value");
+
+        // .NET string.Length (UTF-16 code units) diverges from the Rune count too, confirming each
+        // emoji is a surrogate pair - so a naive substring/Length-based preview could split one in half.
+        Assert.Equal(80, longValue.Length);
+
+        var vars = new Dictionary<string, string>(StringComparer.Ordinal) { ["EDITOR"] = longValue };
+
+        using var db = new TempTrackingDb();
+        var output = CaptureRun([], vars, verbosity: 0);
+
+        // Preview is `value.chars().take(50)` (Rune-based) over only 40 runes, so the ENTIRE value is
+        // retained as the preview - and the reported count is the RUNE count (40), not the byte count
+        // (160). This also proves the preview is Rune-sliced (whole emoji preserved), not naively
+        // byte- or UTF-16-sliced (which could mangle a surrogate pair mid-character).
+        Assert.Contains($"  EDITOR={longValue}... (40 chars)", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("(160 chars)", output, StringComparison.Ordinal);
     }
 
     [Fact]
