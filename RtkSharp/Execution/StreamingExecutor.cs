@@ -69,14 +69,18 @@ public sealed class StreamingExecutor : IStreamingExecutor
             return new ExecutionResult("", "", 127, stopwatch.Elapsed, false, ex.Message, false);
         }
 
+        // Declared ahead of the try block so the catch below can still observe (and discard) any
+        // faults from these tasks after a kill, without leaving them unobserved.
+        Task<byte[]>? stdoutTask = null;
+        Task<byte[]>? stderrTask = null;
         try
         {
             // Start draining both pipes immediately and concurrently: the child's stdout/stderr
             // buffers are bounded, so if either pipe isn't read while the other blocks, the child
             // can deadlock against its own output. Reading both up front (rather than after
             // WaitForExitAsync) mirrors Rust spawning both reader threads before child.wait().
-            var stdoutTask = PumpAndCaptureAsync(process.StandardOutput.BaseStream, Console.Out, cancellationToken);
-            var stderrTask = PumpAndCaptureAsync(process.StandardError.BaseStream, Console.Error, cancellationToken);
+            stdoutTask = PumpAndCaptureAsync(process.StandardOutput.BaseStream, Console.Out, cancellationToken);
+            stderrTask = PumpAndCaptureAsync(process.StandardError.BaseStream, Console.Error, cancellationToken);
 
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
             stopwatch.Stop();
@@ -95,7 +99,40 @@ public sealed class StreamingExecutor : IStreamingExecutor
             // etc.) — the C# equivalent of Rust's Drop-based ChildGuard: never leave an orphaned
             // child process behind just because the parent gave up early.
             TryKill(process);
+
+            // The pump tasks are likely still in-flight, reading from a pipe that's about to be
+            // (or already has been) torn down by the kill above; their ReadAsync calls will fault
+            // or cancel. Observe and discard those faults here so they don't surface later as
+            // TaskScheduler.UnobservedTaskException noise — without letting them mask the
+            // original exception being rethrown.
+            await SafeAwaitAsync(stdoutTask).ConfigureAwait(false);
+            await SafeAwaitAsync(stderrTask).ConfigureAwait(false);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Awaits <paramref name="task"/> (if it was ever started), swallowing any exception it
+    /// throws. Used to observe pump tasks on the exception path so their faults don't become
+    /// unobserved task exceptions, without allowing them to replace the exception actually being
+    /// propagated.
+    /// </summary>
+    /// <param name="task">The task to await and whose exception (if any) should be discarded.</param>
+    private static async Task SafeAwaitAsync(Task? task)
+    {
+        if (task is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await task.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Intentionally discarded: this task's failure is expected once the child has been
+            // killed, and the caller is already propagating a different, primary exception.
         }
     }
 
@@ -149,6 +186,26 @@ public sealed class StreamingExecutor : IStreamingExecutor
             if (actualChars > 0)
             {
                 await live.WriteAsync(charBuffer.AsMemory(0, actualChars)).ConfigureAwait(false);
+                await live.FlushAsync().ConfigureAwait(false);
+            }
+        }
+
+        // Flush the decoder's internal state: if the child's final chunk ended mid-multibyte
+        // UTF-8 sequence, those trailing bytes are still buffered inside the stateful `decoder`
+        // and would otherwise be silently dropped from live output (the byte-based `captured`
+        // buffer above is unaffected — this only concerns the live-decode-and-write path).
+        var flushCharCount = decoder.GetCharCount(ReadOnlySpan<byte>.Empty, flush: true);
+        if (flushCharCount > 0)
+        {
+            if (flushCharCount > charBuffer.Length)
+            {
+                charBuffer = new char[flushCharCount];
+            }
+
+            var flushedChars = decoder.GetChars(ReadOnlySpan<byte>.Empty, charBuffer, flush: true);
+            if (flushedChars > 0)
+            {
+                await live.WriteAsync(charBuffer.AsMemory(0, flushedChars)).ConfigureAwait(false);
                 await live.FlushAsync().ConfigureAwait(false);
             }
         }
