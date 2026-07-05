@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using Microsoft.Data.Sqlite;
@@ -302,4 +304,416 @@ public sealed class TrackerTests
             }
         }
     }
+
+    // =========================================================================
+    // Task 2: record / query methods
+    // =========================================================================
+
+    private static Tracker NewTracker(TempDir dir) => new(Path.Combine(dir.Root, "history.db"));
+
+    /// <summary>Inserts a row directly via raw SQL, bypassing <see cref="Tracker.Record"/>, so tests can
+    /// control <c>timestamp</c>/<c>project_path</c> precisely (Rust's own tests rely on wall-clock
+    /// <c>Utc::now()</c> for record() and instead seed via a real DB file for aggregate-math tests;
+    /// here we seed directly for determinism).</summary>
+    private static void InsertRow(
+        string dbPath,
+        string timestamp,
+        string rtkCmd,
+        int inputTokens,
+        int outputTokens,
+        int savedTokens,
+        double savingsPct,
+        long execTimeMs,
+        string projectPath)
+    {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText =
+            """
+            INSERT INTO commands (timestamp, original_cmd, rtk_cmd, project_path, input_tokens, output_tokens, saved_tokens, savings_pct, exec_time_ms)
+            VALUES ($ts, $orig, $rtk, $pp, $it, $ot, $st, $pct, $et)
+            """;
+        cmd.Parameters.AddWithValue("$ts", timestamp);
+        cmd.Parameters.AddWithValue("$orig", "orig");
+        cmd.Parameters.AddWithValue("$rtk", rtkCmd);
+        cmd.Parameters.AddWithValue("$pp", projectPath);
+        cmd.Parameters.AddWithValue("$it", inputTokens);
+        cmd.Parameters.AddWithValue("$ot", outputTokens);
+        cmd.Parameters.AddWithValue("$st", savedTokens);
+        cmd.Parameters.AddWithValue("$pct", savingsPct);
+        cmd.Parameters.AddWithValue("$et", execTimeMs);
+        cmd.ExecuteNonQuery();
+    }
+
+    // -----------------------------------------------------------------------
+    // record() — saturating_sub + pct math (tracking.rs:402-437, tests at 1449-1513)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void Record_ComputesSavedTokensAndSavingsPct()
+    {
+        using var dir = new TempDir();
+        using var tracker = NewTracker(dir);
+        var testCmd = "rtk git status test_" + Guid.NewGuid().ToString("N");
+
+        tracker.Record("git status", testCmd, 100, 20, 50);
+
+        var recent = tracker.GetRecent(10);
+        var record = Assert.Single(recent, r => r.RtkCmd == testCmd);
+        Assert.Equal(80, record.SavedTokens);
+        Assert.Equal(80.0, record.SavingsPct);
+    }
+
+    [Fact]
+    public void Record_ZeroInputTokens_ZeroPct_NoDivideByZero()
+    {
+        // Mirrors tracking.rs:1471-1513 (test_track_passthrough_no_dilution): 0 input / 0 output
+        // must not divide by zero and must record 0% savings, not diluting other stats.
+        using var dir = new TempDir();
+        using var tracker = NewTracker(dir);
+        var testCmd = "rtk passthrough test_" + Guid.NewGuid().ToString("N");
+
+        tracker.Record("cmd", testCmd, 0, 0, 5);
+
+        var recent = tracker.GetRecent(10);
+        var record = Assert.Single(recent, r => r.RtkCmd == testCmd);
+        Assert.Equal(0, record.SavedTokens);
+        Assert.Equal(0.0, record.SavingsPct);
+    }
+
+    [Fact]
+    public void Record_OutputExceedsInput_SaturatesToZero_NotNegative()
+    {
+        // Rust's saturating_sub: an (erroneous) output > input measurement must clamp saved to 0,
+        // never go negative.
+        using var dir = new TempDir();
+        using var tracker = NewTracker(dir);
+        var testCmd = "rtk weird test_" + Guid.NewGuid().ToString("N");
+
+        tracker.Record("cmd", testCmd, 10, 50, 1);
+
+        var recent = tracker.GetRecent(10);
+        var record = Assert.Single(recent, r => r.RtkCmd == testCmd);
+        Assert.Equal(0, record.SavedTokens);
+    }
+
+    // -----------------------------------------------------------------------
+    // reset_all (tracking.rs:452-463, test at 1650-1688)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ResetAll_ClearsBothCommandsAndParseFailuresTables()
+    {
+        using var dir = new TempDir();
+        using var tracker = NewTracker(dir);
+
+        tracker.Record("git status", "rtk git status reset_test", 100, 20, 50);
+        tracker.RecordParseFailure("bad_cmd_reset_test", "parse error", false);
+
+        tracker.ResetAll();
+
+        var summary = tracker.GetSummary();
+        Assert.Equal(0, summary.TotalCommands);
+
+        var failures = tracker.GetParseFailureSummary();
+        Assert.Equal(0, failures.Total);
+    }
+
+    // -----------------------------------------------------------------------
+    // record_parse_failure / get_parse_failure_summary (tracking.rs:465-542, tests at 1609-1648)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void ParseFailure_RecordAndSummary_RoundTrips()
+    {
+        using var dir = new TempDir();
+        using var tracker = NewTracker(dir);
+        var testCmd = "git -C /path status test_" + Guid.NewGuid().ToString("N");
+
+        tracker.RecordParseFailure(testCmd, "unrecognized subcommand", true);
+
+        var summary = tracker.GetParseFailureSummary();
+        Assert.True(summary.Total >= 1);
+        Assert.Contains(summary.Recent, r => r.RawCommand == testCmd);
+    }
+
+    [Fact]
+    public void ParseFailure_RecoveryRate_ComputedFromSucceededOverTotal()
+    {
+        using var dir = new TempDir();
+        using var tracker = NewTracker(dir);
+
+        // 2 successes, 1 failure -> recovery rate is exactly 2/3 * 100 on a fresh DB.
+        tracker.RecordParseFailure("cmd_ok1", "err", true);
+        tracker.RecordParseFailure("cmd_ok2", "err", true);
+        tracker.RecordParseFailure("cmd_fail", "err", false);
+
+        var summary = tracker.GetParseFailureSummary();
+        Assert.Equal(3, summary.Total);
+        Assert.Equal(200.0 / 3.0, summary.RecoveryRate, precision: 10);
+    }
+
+    // -----------------------------------------------------------------------
+    // get_summary_filtered aggregate math (tracking.rs:572-631)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void GetSummary_AggregatesAcrossRows_AvgPctIsTotalSavedOverTotalInput_NotMeanOfPerRowPct()
+    {
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+            // no-op, just create schema
+        }
+
+        // Row 1: 100 in / 20 out -> saved 80, pct 80%.
+        // Row 2: 50 in / 40 out -> saved 10, pct 20%.
+        // Naive mean-of-per-row-pct would be (80+20)/2 = 50%.
+        // Correct (Rust) semantics: total_saved / total_input = 90/150 = 60%.
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk cmd1", 100, 20, 80, 80.0, 10, "");
+        InsertRow(dbPath, "2026-07-01T11:00:00.000000+00:00", "rtk cmd2", 50, 40, 10, 20.0, 30, "");
+
+        using var tracker = new Tracker(dbPath);
+        var summary = tracker.GetSummary();
+
+        Assert.Equal(2, summary.TotalCommands);
+        Assert.Equal(150, summary.TotalInput);
+        Assert.Equal(60, summary.TotalOutput);
+        Assert.Equal(90, summary.TotalSaved);
+        Assert.Equal(60.0, summary.AvgSavingsPct, precision: 10);
+        Assert.Equal(40, summary.TotalTimeMs);
+        Assert.Equal(20, summary.AvgTimeMs); // 40 / 2 commands, integer division
+    }
+
+    [Fact]
+    public void GetSummary_ByCommand_TopByTokensSaved_Descending()
+    {
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk small", 100, 90, 10, 10.0, 5, "");
+        InsertRow(dbPath, "2026-07-01T11:00:00.000000+00:00", "rtk big", 100, 10, 90, 90.0, 5, "");
+
+        using var tracker = new Tracker(dbPath);
+        var summary = tracker.GetSummary();
+
+        Assert.Equal("rtk big", summary.ByCommand[0].Command);
+        Assert.Equal(90, summary.ByCommand[0].SavedTokens);
+        Assert.Equal("rtk small", summary.ByCommand[1].Command);
+    }
+
+    // -----------------------------------------------------------------------
+    // Week-boundary arithmetic (tracking.rs:781-831) — verified empirically against SQLite itself,
+    // not hand-computed, per the phase plan's explicit caution about 'weekday 0' semantics.
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void GetByWeekFiltered_KnownWednesday_ProducesExactSqliteWeekBoundaries()
+    {
+        // 2026-07-01 is a Wednesday (confirmed via `sqlite3 :memory: "SELECT strftime('%w','2026-07-01')"`
+        // -> 3). SQLite's own 'weekday 0'/'weekday 0','-6 days' modifiers against this timestamp
+        // produce week_start=2026-06-29 (Monday) and week_end=2026-07-05 (Sunday) — confirmed by
+        // direct sqlite3 CLI query, not hand-derived, per the phase plan's caution against assuming
+        // ISO-week semantics.
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk wed cmd", 100, 20, 80, 80.0, 10, "");
+
+        using var tracker = new Tracker(dbPath);
+        var weeks = tracker.GetByWeek();
+
+        var week = Assert.Single(weeks);
+        Assert.Equal("2026-06-29", week.WeekStart);
+        Assert.Equal("2026-07-05", week.WeekEnd);
+        Assert.Equal(1, week.Commands);
+        Assert.Equal(80.0, week.SavingsPct, precision: 10);
+    }
+
+    [Fact]
+    public void GetByWeekFiltered_SundayTimestamp_WeekEndIsSameDay()
+    {
+        // 2026-07-05 is itself a Sunday (confirmed via sqlite3 strftime('%w', ...) -> 0). 'weekday 0'
+        // on an already-Sunday date resolves to that same date, per the phase plan's explicit note
+        // ("or today if already Sunday").
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        InsertRow(dbPath, "2026-07-05T10:00:00.000000+00:00", "rtk sun cmd", 100, 20, 80, 80.0, 10, "");
+
+        using var tracker = new Tracker(dbPath);
+        var weeks = tracker.GetByWeek();
+
+        var week = Assert.Single(weeks);
+        Assert.Equal("2026-06-29", week.WeekStart);
+        Assert.Equal("2026-07-05", week.WeekEnd);
+    }
+
+    [Fact]
+    public void GetAllDaysFiltered_And_GetByMonthFiltered_OrderedChronologically()
+    {
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        InsertRow(dbPath, "2026-06-15T10:00:00.000000+00:00", "rtk a", 10, 5, 5, 50.0, 1, "");
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk b", 10, 5, 5, 50.0, 1, "");
+        InsertRow(dbPath, "2026-06-20T10:00:00.000000+00:00", "rtk c", 10, 5, 5, 50.0, 1, "");
+
+        using var tracker = new Tracker(dbPath);
+        var days = tracker.GetAllDays();
+        Assert.Equal(["2026-06-15", "2026-06-20", "2026-07-01"], days.Select(d => d.Date).ToArray());
+
+        var months = tracker.GetByMonth();
+        Assert.Equal(["2026-06", "2026-07"], months.Select(m => m.Month).ToArray());
+        Assert.Equal(2, months[0].Commands); // June: 2 rows
+        Assert.Equal(1, months[1].Commands); // July: 1 row
+    }
+
+    // -----------------------------------------------------------------------
+    // get_recent_filtered / project scoping (tracking.rs:933-962)
+    // -----------------------------------------------------------------------
+
+    [Fact]
+    public void GetRecentFiltered_ExactProjectMatch_IncludesOnlyThatProject()
+    {
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk in project", 10, 5, 5, 50.0, 1, "/home/user/project");
+        InsertRow(dbPath, "2026-07-01T11:00:00.000000+00:00", "rtk elsewhere", 10, 5, 5, 50.0, 1, "/home/user/other");
+
+        using var tracker = new Tracker(dbPath);
+        var recent = tracker.GetRecentFiltered(10, "/home/user/project");
+
+        var record = Assert.Single(recent);
+        Assert.Equal("rtk in project", record.RtkCmd);
+    }
+
+    [Fact]
+    public void GetRecentFiltered_Subdirectory_MatchesViaGlobPrefix()
+    {
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        var sep = Path.DirectorySeparatorChar;
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk subdir", 10, 5, 5, 50.0, 1, $"/home/user/project{sep}sub");
+        InsertRow(dbPath, "2026-07-01T11:00:00.000000+00:00", "rtk sibling", 10, 5, 5, 50.0, 1, "/home/user/project-sibling");
+
+        using var tracker = new Tracker(dbPath);
+        var recent = tracker.GetRecentFiltered(10, "/home/user/project");
+
+        // Only the true subdirectory (separator-prefixed) must match — a same-prefix sibling
+        // directory name ("project-sibling") must NOT match, proving the GLOB pattern anchors on
+        // the path separator rather than doing a naive string-prefix match.
+        var record = Assert.Single(recent);
+        Assert.Equal("rtk subdir", record.RtkCmd);
+    }
+
+    [Fact]
+    public void GetRecentFiltered_NullProjectPath_IncludesAllProjects()
+    {
+        using var dir = new TempDir();
+        var dbPath = Path.Combine(dir.Root, "history.db");
+        using (var seed = NewTracker(dir))
+        {
+        }
+
+        InsertRow(dbPath, "2026-07-01T10:00:00.000000+00:00", "rtk one", 10, 5, 5, 50.0, 1, "/home/user/project");
+        InsertRow(dbPath, "2026-07-01T11:00:00.000000+00:00", "rtk two", 10, 5, 5, 50.0, 1, "/home/user/other");
+
+        using var tracker = new Tracker(dbPath);
+        var recent = tracker.GetRecentFiltered(10, null);
+
+        Assert.Equal(2, recent.Count);
+    }
+
+    // -----------------------------------------------------------------------
+    // project_filter_params — GLOB-safety (tracking.rs:1571-1607, ported verbatim via reflection
+    // since the method is private in both languages)
+    // -----------------------------------------------------------------------
+
+    private static (string? Exact, string? Glob) InvokeProjectFilterParams(string? projectPath)
+    {
+        var method = typeof(Tracker).GetMethod("ProjectFilterParams", BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new InvalidOperationException("ProjectFilterParams method not found via reflection.");
+        var result = method.Invoke(null, [projectPath]);
+        var tupleType = result!.GetType();
+        var exact = (string?)tupleType.GetField("Item1")!.GetValue(result);
+        var glob = (string?)tupleType.GetField("Item2")!.GetValue(result);
+        return (exact, glob);
+    }
+
+    [Fact]
+    public void ProjectFilterParams_UsesGlobPatternWithStarWildcard()
+    {
+        // Mirrors tracking.rs:1572-1584 (test_project_filter_params_glob_pattern).
+        var (exact, glob) = InvokeProjectFilterParams("/home/user/project");
+
+        Assert.Equal("/home/user/project", exact);
+        Assert.NotNull(glob);
+        Assert.EndsWith("*", glob);
+        Assert.DoesNotContain('%', glob);
+        Assert.Equal($"/home/user/project{Path.DirectorySeparatorChar}*", glob);
+    }
+
+    [Fact]
+    public void ProjectFilterParams_NoneInput_ReturnsNoneForBoth()
+    {
+        // Mirrors tracking.rs:1587-1592 (test_project_filter_params_none).
+        var (exact, glob) = InvokeProjectFilterParams(null);
+
+        Assert.Null(exact);
+        Assert.Null(glob);
+    }
+
+    [Fact]
+    public void ProjectFilterParams_UnderscoreInPath_PreservedLiterally_NotTreatedAsGlobWildcard()
+    {
+        // Mirrors tracking.rs:1595-1607 (test_project_filter_params_underscore_safe). Unlike LIKE,
+        // where '_' matches any single character, GLOB treats '_' as a literal character — so a real
+        // path segment like "my_project" must survive unescaped in the pattern.
+        var (exact, glob) = InvokeProjectFilterParams("/home/user/my_project");
+
+        Assert.Equal("/home/user/my_project", exact);
+        Assert.Contains("my_project", glob);
+        Assert.Equal($"/home/user/my_project{Path.DirectorySeparatorChar}*", glob);
+    }
+
+    [Fact]
+    public void ProjectFilterParams_AsteriskAndQuestionMarkInPath_StillProduceValidPattern()
+    {
+        // Not present verbatim in the Rust test module but a natural extension of the GLOB-safety
+        // concern: a path segment that happens to contain GLOB metacharacters itself would still be
+        // appended as literal text by this function (no escaping) — documenting this as a known,
+        // narrow edge case (matches Rust: project_filter_params does not escape metacharacters in the
+        // input path itself, only guarantees the *pattern it appends* uses GLOB-safe syntax).
+        var (exact, glob) = InvokeProjectFilterParams("/home/user/weird*project?");
+
+        Assert.Equal("/home/user/weird*project?", exact);
+        Assert.Equal($"/home/user/weird*project?{Path.DirectorySeparatorChar}*", glob);
+    }
+
+    // -----------------------------------------------------------------------
+    // estimate_tokens already covered in Task 1's suite above.
+    // -----------------------------------------------------------------------
 }
