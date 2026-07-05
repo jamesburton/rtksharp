@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -72,5 +73,29 @@ public static partial class Utils
 
         sb.Append("...");
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Formats a token count with adaptive precision, abbreviating large counts. Faithful port of
+    /// Rust <c>utils::format_tokens</c> (<c>src/core/utils.rs:78-86</c>).
+    /// </summary>
+    /// <param name="n">The token count to format.</param>
+    /// <returns>
+    /// <c>"{n/1_000_000:F1}M"</c> when <paramref name="n"/> is at least 1,000,000;
+    /// <c>"{n/1_000:F1}K"</c> when at least 1,000; otherwise the plain decimal value of <paramref name="n"/>.
+    /// </returns>
+    public static string FormatTokens(long n)
+    {
+        if (n >= 1_000_000)
+        {
+            return (n / 1_000_000.0).ToString("F1", CultureInfo.InvariantCulture) + "M";
+        }
+
+        if (n >= 1_000)
+        {
+            return (n / 1_000.0).ToString("F1", CultureInfo.InvariantCulture) + "K";
+        }
+
+        return n.ToString(CultureInfo.InvariantCulture);
     }
 }

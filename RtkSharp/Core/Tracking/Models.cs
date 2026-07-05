@@ -95,9 +95,11 @@ public sealed class GainSummary
 
 /// <summary>
 /// Daily statistics for token savings and execution metrics. Port of Rust <c>DayStats</c>
-/// (<c>tracking.rs:154-172</c>).
+/// (<c>tracking.rs:154-172</c>). Implements <see cref="IPeriodStats"/> so it can be rendered by the
+/// shared <see cref="DisplayHelpers.PrintPeriodTable{T}"/> table printer (port of Rust's
+/// <c>impl PeriodStats for DayStats</c>, <c>display_helpers.rs:144-192</c>).
 /// </summary>
-public sealed class DayStats
+public sealed class DayStats : IPeriodStats
 {
     /// <summary>ISO date (<c>YYYY-MM-DD</c>).</summary>
     public required string Date { get; init; }
@@ -122,6 +124,21 @@ public sealed class DayStats
 
     /// <summary>Average execution time per command (milliseconds).</summary>
     public required long AvgTimeMs { get; init; }
+
+    /// <inheritdoc/>
+    public static string Icon => "D";
+
+    /// <inheritdoc/>
+    public static string Label => "Daily";
+
+    /// <inheritdoc/>
+    public static int PeriodWidth => 12;
+
+    /// <inheritdoc/>
+    public static int SeparatorWidth => 74;
+
+    /// <inheritdoc/>
+    string IPeriodStats.Period => Date;
 }
 
 /// <summary>
@@ -130,7 +147,7 @@ public sealed class DayStats
 /// <c>DATE(timestamp, 'weekday 0', '-6 days')</c>/<c>DATE(timestamp, 'weekday 0')</c> modifiers
 /// (<c>'weekday 0'</c> resolves to "next Sunday, or today if already Sunday").
 /// </summary>
-public sealed class WeekStats
+public sealed class WeekStats : IPeriodStats
 {
     /// <summary>Week start date (<c>YYYY-MM-DD</c>) — the Monday preceding (or equal to) the week's dates.</summary>
     public required string WeekStart { get; init; }
@@ -158,13 +175,41 @@ public sealed class WeekStats
 
     /// <summary>Average execution time per command (milliseconds).</summary>
     public required long AvgTimeMs { get; init; }
+
+    /// <inheritdoc/>
+    public static string Icon => "W";
+
+    /// <inheritdoc/>
+    public static string Label => "Weekly";
+
+    /// <inheritdoc/>
+    public static int PeriodWidth => 22;
+
+    /// <inheritdoc/>
+    public static int SeparatorWidth => 82;
+
+    /// <summary>
+    /// Renders <c>"{start} → {end}"</c> with the leading 4-digit-year-and-dash prefix (indices 0-4,
+    /// e.g. <c>"2026-"</c>) stripped from both dates when present, matching Rust's
+    /// <c>&amp;self.week_start[5..]</c>/<c>&amp;self.week_end[5..]</c> slicing
+    /// (<c>display_helpers.rs:204-214</c>).
+    /// </summary>
+    string IPeriodStats.Period
+    {
+        get
+        {
+            var start = WeekStart.Length > 5 ? WeekStart[5..] : WeekStart;
+            var end = WeekEnd.Length > 5 ? WeekEnd[5..] : WeekEnd;
+            return $"{start} → {end}";
+        }
+    }
 }
 
 /// <summary>
 /// Monthly statistics for token savings and execution metrics. Port of Rust <c>MonthStats</c>
 /// (<c>tracking.rs:200-221</c>).
 /// </summary>
-public sealed class MonthStats
+public sealed class MonthStats : IPeriodStats
 {
     /// <summary>Month identifier (<c>YYYY-MM</c>).</summary>
     public required string Month { get; init; }
@@ -189,6 +234,21 @@ public sealed class MonthStats
 
     /// <summary>Average execution time per command (milliseconds).</summary>
     public required long AvgTimeMs { get; init; }
+
+    /// <inheritdoc/>
+    public static string Icon => "M";
+
+    /// <inheritdoc/>
+    public static string Label => "Monthly";
+
+    /// <inheritdoc/>
+    public static int PeriodWidth => 10;
+
+    /// <inheritdoc/>
+    public static int SeparatorWidth => 74;
+
+    /// <inheritdoc/>
+    string IPeriodStats.Period => Month;
 }
 
 /// <summary>
