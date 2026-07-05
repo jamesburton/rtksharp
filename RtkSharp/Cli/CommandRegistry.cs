@@ -57,6 +57,12 @@ public static class CommandRegistry
         // above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-passthrough
         // path, so `rtk run` can never fall back to executing a literal `run` binary from $PATH.
         Register("run", RunCommand.RunAsync);
+
+        // Registering "proxy" here gives it the same RTK_META_COMMANDS-equivalent guarantee as "run"/
+        // "gain" above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-
+        // passthrough path, so `rtk proxy` can never fall back to executing a literal `proxy` binary
+        // from $PATH.
+        Register("proxy", args => ProxyCommand.RunAsync(args));
     }
 
     /// <summary>

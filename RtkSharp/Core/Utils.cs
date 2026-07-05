@@ -98,4 +98,33 @@ public static partial class Utils
 
         return n.ToString(CultureInfo.InvariantCulture);
     }
+
+    /// <summary>
+    /// Resolves a child process's exit code, reconstructing the conventional Unix
+    /// <c>128 + signal</c> exit code when the process was killed by a signal rather than exiting
+    /// normally. Faithful port of Rust <c>exit_code_from_status</c> (<c>src/core/utils.rs:213-229</c>),
+    /// used by <c>rtk proxy</c> (deliberately not by <c>rtk run</c>, which uses a plain
+    /// <c>unwrap_or(1)</c> fallback instead - see <see cref="RtkSharp.Commands.System.RunCommand"/>).
+    /// </summary>
+    /// <remarks>
+    /// <b>Safe no-op passthrough on Windows.</b> Rust's <c>std::process::ExitStatus::code()</c>
+    /// returns <c>None</c> only when a Unix child was killed by a signal, in which case Rust logs a
+    /// diagnostic to stderr and returns <c>128 + signal</c>; that whole branch is <c>#[cfg(unix)]</c>
+    /// and does not exist at all in Rust's own Windows build. .NET's <see cref="System.Diagnostics.Process.ExitCode"/>
+    /// has no equivalent "no code available" state on Windows (this port's target platform) - it is
+    /// always a genuine 32-bit exit code - so simply returning <paramref name="exitCode"/> unchanged is
+    /// a correct, faithful port here, not a gap: there is no Rust Windows behavior to diverge from. A
+    /// future Unix port of RtkSharp would need to inspect .NET's platform-specific signal information
+    /// (unavailable via <c>Process.ExitCode</c> alone) and fill in that branch here; <paramref
+    /// name="label"/> is accepted now (unused on Windows) so that future change only touches this
+    /// method's body, not every call site.
+    /// </remarks>
+    /// <param name="exitCode">The child process's exit code.</param>
+    /// <param name="label">A short label identifying the command, used in Rust's Unix-only signal diagnostic.</param>
+    /// <returns>The resolved exit code.</returns>
+    public static int ExitCodeFromStatus(int exitCode, string label)
+    {
+        _ = label;
+        return exitCode;
+    }
 }
