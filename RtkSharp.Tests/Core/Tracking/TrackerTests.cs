@@ -20,7 +20,9 @@ namespace RtkSharp.Tests.Core.Tracking;
 /// All tests that touch process-global environment variables (<c>RTK_DB_PATH</c>,
 /// <c>RTK_DATA_DIR_OVERRIDE</c>, <c>RTK_CONFIG_DIR_OVERRIDE</c>) serialize via <see cref="EnvLock"/>,
 /// mirroring Rust's own <c>ENV_LOCK</c> mutex in <c>test_db_path_env_and_default</c>
-/// (<c>tracking.rs:1553-1555</c>) and RtkSharp's established <c>InitTestSupport.EnvLock</c> pattern.
+/// (<c>tracking.rs:1553-1555</c>) and RtkSharp's established <c>InitTestSupport.EnterEnvLock</c>/
+/// <c>ExitEnvLock</c> pattern (this class uses its own separate lock object rather than that one,
+/// since it serializes a disjoint set of environment variables).
 /// </remarks>
 public sealed class TrackerTests
 {
