@@ -14,13 +14,13 @@ public enum NpxRouteKind
     /// <summary><c>npx tsc</c>/<c>npx typescript</c> — routes to the future tsc filter (Phase 8 Task 4).</summary>
     Tsc,
 
-    /// <summary><c>npx playwright</c> — routes to the future playwright filter (Phase 8 Task 6).</summary>
+    /// <summary><c>npx playwright</c> — delegates to <see cref="PlaywrightCommand.RunSafeAsync"/>.</summary>
     Playwright,
 
-    /// <summary><c>npx prisma generate</c> — routes to the future prisma filter (Phase 8 Task 7).</summary>
+    /// <summary><c>npx prisma generate</c> — delegates to <see cref="PrismaCommand.RunGenerateAsync"/>.</summary>
     PrismaGenerate,
 
-    /// <summary><c>npx prisma db push</c> — routes to the future prisma filter (Phase 8 Task 7).</summary>
+    /// <summary><c>npx prisma db push</c> — delegates to <see cref="PrismaCommand.RunDbPushAsync"/>.</summary>
     PrismaDbPush,
 
     /// <summary>
@@ -72,16 +72,14 @@ internal readonly record struct NpxRoute(NpxRouteKind Kind, string[] RemainingAr
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Stub routes for not-yet-ported filters (playwright/prisma); tsc now wired.</b> Phase 8 Task 2
-/// only ported npm/npx, leaving tsc (Task 4), playwright (Task 6), and prisma (Task 7) as stubs. Task 4
-/// has since landed <see cref="TscCommand"/>, so the <c>npx tsc</c>/<c>npx typescript</c> route now
-/// delegates to <see cref="TscCommand.RunTscSafeAsync"/> instead of throwing. Playwright and prisma
-/// remain unported: rather than silently mis-filtering their output through npm's
-/// <c>filter_npm_output</c> (which was never designed for them) or duplicating unwritten future logic,
-/// those two routes throw a clear <see cref="NotImplementedException"/> naming the target Phase 8 task.
-/// This is caught by the same top-level <c>rtk: {message}</c> fail-loud handler
-/// <see cref="RunAsync"/>/<see cref="ExecAsync"/> already need for other errors — the user sees an
-/// explicit "not yet implemented" message rather than a crash or silently wrong output.
+/// <b>All future-task routes now wired.</b> Phase 8 Task 2 only ported npm/npx, leaving tsc
+/// (Task 4), playwright (Task 6), and prisma (Task 7) as stubs that threw
+/// <see cref="NotImplementedException"/> naming the future task. Task 4 landed
+/// <see cref="TscCommand"/>, Task 6 landed <see cref="PlaywrightCommand"/>, and Task 7 landed
+/// <see cref="PrismaCommand"/> — the <c>npx tsc</c>/<c>npx typescript</c>, <c>npx playwright</c>,
+/// <c>npx prisma generate</c>, and <c>npx prisma db push</c> routes all now delegate to their real
+/// filter instead of throwing. <c>route.RemainingArgs</c> (already subcommand-stripped) is passed
+/// straight through, matching each filter's own argument shape.
 /// </para>
 /// <para>
 /// <b>eslint/next/prettier: raw passthrough, not a stub.</b> These three are explicitly out of scope
@@ -274,9 +272,9 @@ public static class NpmCommand
         return route.Kind switch
         {
             NpxRouteKind.Tsc => TscCommand.RunTscSafeAsync(route.RemainingArgs, verbose),
-            NpxRouteKind.Playwright => throw StubNotImplemented("playwright", "Phase 8 Task 6"),
-            NpxRouteKind.PrismaGenerate => throw StubNotImplemented("prisma generate", "Phase 8 Task 7"),
-            NpxRouteKind.PrismaDbPush => throw StubNotImplemented("prisma db push", "Phase 8 Task 7"),
+            NpxRouteKind.Playwright => PlaywrightCommand.RunSafeAsync(route.RemainingArgs, verbose, executor),
+            NpxRouteKind.PrismaGenerate => PrismaCommand.RunGenerateAsync(route.RemainingArgs, verbose, executor),
+            NpxRouteKind.PrismaDbPush => PrismaCommand.RunDbPushAsync(route.RemainingArgs, verbose, executor),
             NpxRouteKind.EslintPassthrough
                 or NpxRouteKind.NextPassthrough
                 or NpxRouteKind.PrettierPassthrough
@@ -347,16 +345,6 @@ public static class NpmCommand
         // Passthrough other prisma subcommands (main.rs:2187-2201).
         return new NpxRoute(NpxRouteKind.PrismaPassthrough, rest, full);
     }
-
-    /// <summary>
-    /// Builds the exception thrown for a not-yet-ported npx target, naming the future Phase 8 task
-    /// that will implement it.
-    /// </summary>
-    /// <param name="tool">The routed tool/subcommand name (e.g. <c>"tsc"</c>, <c>"prisma generate"</c>).</param>
-    /// <param name="futureTask">The future Phase 8 task expected to implement this route.</param>
-    /// <returns>The exception to throw.</returns>
-    private static NotImplementedException StubNotImplemented(string tool, string futureTask) =>
-        new($"npx {tool} is not yet implemented in RtkSharp (planned for {futureTask})");
 
     /// <summary>
     /// Reports whether <c>args</c>' first element needs a <c>"run"</c> subcommand injected in front of

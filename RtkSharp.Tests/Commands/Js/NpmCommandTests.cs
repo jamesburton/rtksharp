@@ -284,54 +284,70 @@ public sealed class NpmCommandTests
     }
 
     // -----------------------------------------------------------------------
-    // npx: stub routes (playwright/prisma) - sane, clearly-marked failure, no execution attempted.
-    // tsc is no longer a stub (Phase 8 Task 4 landed TscCommand) - DispatchNpxAsync_Tsc now routes
-    // through TscCommand.RunTscSafeAsync, which (like the Default route) constructs its own
-    // ProcessExecutor internally with no injection seam, so it is not exercised here to avoid
-    // spawning a real tsc/npx process as a side effect of the test suite; TscCommand's filter logic
-    // is covered directly in TscCommandTests, and the route mapping itself in
-    // ResolveNpxRoute_RecognizedAndUnrecognizedTools_RouteCorrectly above.
+    // npx: playwright/prisma routes now delegate to their real filters (Phase 8 Tasks 6/7 landed
+    // PlaywrightCommand/PrismaCommand after this routing table was first written). Unlike tsc's route
+    // (TscCommand.RunTscSafeAsync constructs its own ProcessExecutor internally with no injection
+    // seam, so it's only covered via ResolveNpxRoute_RecognizedAndUnrecognizedTools_RouteCorrectly
+    // above), playwright/prisma's entry points DO accept an injectable IProcessExecutor, so the
+    // delegation itself is exercised end-to-end here with a fake executor - mirroring the pattern
+    // PlaywrightCommandTests/PrismaCommandTests use for their own direct-entry-point tests.
     // -----------------------------------------------------------------------
 
     [Fact]
-    public async Task DispatchNpxAsync_Playwright_ThrowsNotImplementedNamingFutureTask()
+    public async Task DispatchNpxAsync_Playwright_DelegatesToPlaywrightCommand()
     {
-        var ex = await Assert.ThrowsAsync<NotImplementedException>(
-            () => NpmCommand.DispatchNpxAsync(["playwright", "test"], verbose: 0, skipEnv: false, executor: null));
+        using var db = new TempTrackingDb();
+        using var stdout = new ConsoleOutCapture();
 
-        Assert.Contains("playwright", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("Phase 8 Task 6", ex.Message, StringComparison.Ordinal);
+        const string json = /*lang=json,strict*/ """
+        {"stats": {"expected": 1, "unexpected": 0, "skipped": 0, "duration": 10.0}, "suites": [], "errors": []}
+        """;
+
+        var fake = new FakeProcessExecutor(new ExecutionResult(json, string.Empty, 0, TimeSpan.Zero, true, null, false));
+
+        var exitCode = await NpmCommand.DispatchNpxAsync(["playwright", "test"], verbose: 0, skipEnv: false, executor: fake);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("test", fake.LastRequest!.Arguments);
+        Assert.Contains("--reporter=json", fake.LastRequest.Arguments);
+        Assert.Contains("PASS (1) FAIL (0)", stdout.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task DispatchNpxAsync_PrismaGenerate_ThrowsNotImplementedNamingFutureTask()
+    public async Task DispatchNpxAsync_PrismaGenerate_DelegatesToPrismaCommand()
     {
-        var ex = await Assert.ThrowsAsync<NotImplementedException>(
-            () => NpmCommand.DispatchNpxAsync(["prisma", "generate"], verbose: 0, skipEnv: false, executor: null));
+        using var db = new TempTrackingDb();
+        using var stdout = new ConsoleOutCapture();
 
-        Assert.Contains("prisma", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("Phase 8 Task 7", ex.Message, StringComparison.Ordinal);
+        var fake = new FakeProcessExecutor(
+            new ExecutionResult("Prisma Client generated\n", string.Empty, 0, TimeSpan.Zero, true, null, false));
+
+        var exitCode = await NpmCommand.DispatchNpxAsync(["prisma", "generate"], verbose: 0, skipEnv: false, executor: fake);
+
+        Assert.Equal(0, exitCode);
+        // FileName resolves to "prisma" (global) or "npx" (fallback) depending on whether prisma is
+        // on PATH in the test environment - only the trailing args (subcommand-stripped-then-rebuilt
+        // by PrismaCommand itself) are stable to assert on.
+        Assert.Contains("generate", fake.LastRequest!.Arguments);
+        Assert.Contains("Prisma Client generated", stdout.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task DispatchNpxAsync_PrismaDbPush_ThrowsNotImplementedNamingFutureTask()
+    public async Task DispatchNpxAsync_PrismaDbPush_DelegatesToPrismaCommand()
     {
-        var ex = await Assert.ThrowsAsync<NotImplementedException>(
-            () => NpmCommand.DispatchNpxAsync(["prisma", "db", "push"], verbose: 0, skipEnv: false, executor: null));
+        using var db = new TempTrackingDb();
+        using var stdout = new ConsoleOutCapture();
 
-        Assert.Contains("prisma", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("Phase 8 Task 7", ex.Message, StringComparison.Ordinal);
-    }
+        var fake = new FakeProcessExecutor(
+            new ExecutionResult("Schema pushed to database\n", string.Empty, 0, TimeSpan.Zero, true, null, false));
 
-    [Fact]
-    public async Task RunNpxSafeAsync_StubRoute_PrintsRtkPrefixedNotImplementedMessage_ReturnsOne()
-    {
-        using var console = new ConsoleErrorCapture();
+        var exitCode = await NpmCommand.DispatchNpxAsync(["prisma", "db", "push"], verbose: 0, skipEnv: false, executor: fake);
 
-        var exitCode = await NpmCommand.RunNpxSafeAsync(["playwright"], verbose: 0, skipEnv: false, executor: null);
-
-        Assert.Equal(1, exitCode);
-        Assert.StartsWith("rtk: npx playwright is not yet implemented", console.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, exitCode);
+        // See DispatchNpxAsync_PrismaGenerate_DelegatesToPrismaCommand for why FileName isn't asserted.
+        Assert.Contains("db", fake.LastRequest!.Arguments);
+        Assert.Contains("push", fake.LastRequest.Arguments);
+        Assert.Contains("Schema pushed to database", stdout.ToString(), StringComparison.Ordinal);
     }
 
     // -----------------------------------------------------------------------
@@ -428,6 +444,19 @@ public sealed class NpmCommandTests
         public override string ToString() => _capture.ToString();
 
         public void Dispose() => Console.SetError(_original);
+    }
+
+    /// <summary>Captures <see cref="Console.Out"/> output for the lifetime of the instance.</summary>
+    private sealed class ConsoleOutCapture : IDisposable
+    {
+        private readonly TextWriter _original = Console.Out;
+        private readonly StringWriter _capture = new();
+
+        public ConsoleOutCapture() => Console.SetOut(_capture);
+
+        public override string ToString() => _capture.ToString();
+
+        public void Dispose() => Console.SetOut(_original);
     }
 
     /// <summary>Points <c>RTK_DB_PATH</c> at a fresh throwaway SQLite file for the lifetime of the instance.</summary>
