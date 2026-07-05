@@ -67,28 +67,28 @@ public sealed partial class ErrorStreamFilter : IStreamFilter
 
     // --- Rust-specific ---
 
-    [GeneratedRegex(@"^error\[E\d+\]:.*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^error\[E\d+\]:.*$")]
     private static partial Regex RustErrorCodeRegex();
 
-    [GeneratedRegex(@"^\s*--> .*:\d+:\d+$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*--> .*:\d+:\d+$")]
     private static partial Regex RustLocationRegex();
 
     // --- Python ---
 
-    [GeneratedRegex(@"^Traceback.*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Traceback.*$")]
     private static partial Regex PythonTracebackRegex();
 
-    [GeneratedRegex("""^\s*File ".*", line \d+.*$""", RegexOptions.IgnoreCase)]
+    [GeneratedRegex("""^\s*File ".*", line \d+.*$""")]
     private static partial Regex PythonFileLineRegex();
 
     // --- JavaScript/TypeScript ---
 
-    [GeneratedRegex(@"^\s*at .*:\d+:\d+.*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^\s*at .*:\d+:\d+.*$")]
     private static partial Regex JsAtLocationRegex();
 
     // --- Go ---
 
-    [GeneratedRegex(@"^.*\.go:\d+:.*$", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^.*\.go:\d+:.*$")]
     private static partial Regex GoFileLineRegex();
 
     /// <inheritdoc />

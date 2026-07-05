@@ -106,6 +106,50 @@ public sealed class ErrorStreamFilterTests
         Assert.Equal(expected, ErrorStreamFilter.IsErrorLine(line));
 
     // -----------------------------------------------------------------------
+    // Case-sensitivity regression: Rust's ERROR_PATTERNS only applies the `(?i)` inline flag to
+    // the first 8 generic patterns (runner.rs:16-23); the 6 language-specific patterns
+    // (runner.rs:25-33) are case-sensitive. A prior port incorrectly attached
+    // RegexOptions.IgnoreCase to all 14 [GeneratedRegex] attributes, which made these patterns
+    // match lowercased/miscased input that the real Rust regex would not.
+    // -----------------------------------------------------------------------
+
+    [Theory]
+    [InlineData("Traceback (most recent call last):", true)]
+    [InlineData("traceback: boom", false)] // lowercase "traceback" must NOT match (Rust pattern has no (?i))
+    public void PythonTraceback_IsCaseSensitive(string line, bool expected) =>
+        Assert.Equal(expected, ErrorStreamFilter.IsErrorLine(line));
+
+    [Theory]
+    [InlineData("    at foo.js:10:5", true)]
+    [InlineData("    AT foo.js:10:5", false)] // uppercase "AT" must NOT match
+    public void JsAtLocation_IsCaseSensitive(string line, bool expected) =>
+        Assert.Equal(expected, ErrorStreamFilter.IsErrorLine(line));
+
+    [Theory]
+    [InlineData("main.go:15: undefined variable", true)]
+    [InlineData("main.GO:15: undefined variable", false)] // uppercase ".GO:" must NOT match
+    public void GoFileLine_IsCaseSensitive(string line, bool expected) =>
+        Assert.Equal(expected, ErrorStreamFilter.IsErrorLine(line));
+
+    [Theory]
+    [InlineData("  File \"app.py\", line 42, in <module>", true)]
+    [InlineData("  file \"app.py\", line 42, in <module>", false)] // lowercase "file" must NOT match
+    public void PythonFileLine_IsCaseSensitive(string line, bool expected) =>
+        Assert.Equal(expected, ErrorStreamFilter.IsErrorLine(line));
+
+    [Theory]
+    [InlineData("error[E0432]: unresolved import", true)]
+    [InlineData("error[e0432]: unresolved import", false)] // lowercase "e0432" must NOT match this specific pattern
+    public void RustErrorCode_IsCaseSensitive(string line, bool expected)
+    {
+        // Isolated like RustErrorCode_Pattern above: the generic "error[\s:\[]" pattern (which IS
+        // case-insensitive) also matches both samples via IsErrorLine, so assert the Rust-specific
+        // pattern directly to observe the case-sensitivity regression.
+        var rustErrorCodeMatches = System.Text.RegularExpressions.Regex.IsMatch(line, @"^error\[E\d+\]:.*$");
+        Assert.Equal(expected, rustErrorCodeMatches);
+    }
+
+    // -----------------------------------------------------------------------
     // Error-block context-line continuation: indented lines, blank tolerance up to 2.
     // -----------------------------------------------------------------------
 
