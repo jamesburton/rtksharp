@@ -432,12 +432,20 @@ public static class PipeCommand
     /// <returns>The detected filter function, or <see cref="IdentityFilter"/> if no signature matched.</returns>
     internal static Func<string, string> AutoDetectFilter(string input)
     {
+        // NOT a byte-for-byte port of the window size: Rust's 1024 is a BYTE count and a raw
+        // `&input[..end]` slice PANICS if it splits a multi-byte UTF-8 sequence, so Rust must floor
+        // to a char boundary to avoid crashing. .NET's `input[..end]` here is a 1024 UTF-16
+        // *code-unit* count, and .NET range/substring slicing does NOT throw when it splits a
+        // surrogate pair (it silently yields a string ending in a lone high surrogate) — so there is
+        // no crash hazard to avoid in this code path. `FloorCharBoundary` below is purely defensive
+        // (keeps the sniff window free of a lone surrogate, which is harmless either way since every
+        // signature checked below is plain ASCII and appears well before any realistic boundary) —
+        // it is not preventing a panic the way Rust's floor does. On heavily non-ASCII input the
+        // 1024-char vs. 1024-byte windows also cover different amounts of content (e.g. 1024 CJK
+        // characters ≈ 3072 UTF-8 bytes, so Rust would see roughly 1/3 as much text) — in practice
+        // this doesn't matter since every signature is ASCII and appears at the very start of
+        // real tool output, but the window sizes are not an exact byte-for-byte match.
         var end = Math.Min(input.Length, 1024);
-
-        // Rust avoids a panic by flooring to the nearest UTF-8 char boundary (a multi-byte
-        // sequence could straddle byte 1024). .NET strings are UTF-16, so the equivalent hazard is
-        // slicing inside a surrogate pair (an astral character, e.g. an emoji, represented as two
-        // UTF-16 code units) — floor by one position when that would happen.
         end = FloorCharBoundary(input, end);
         var first1K = input[..end];
 

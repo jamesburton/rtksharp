@@ -382,10 +382,13 @@ public sealed class PipeCommandTests
     [Fact]
     public async Task RunAsync_StdinWithinLimit_Succeeds()
     {
+        // Deliberately does NOT pass --passthrough: that flag returns before the size-check
+        // branch entirely, so a passthrough invocation would not actually exercise (and could not
+        // discriminate a regression in) the within-limit path this test is named for.
         using var stdin = ToStream(new string('x', 100));
         using var stdout = new ConsoleOutCapture();
 
-        var exitCode = await PipeCommand.RunAsync(["--passthrough"], stdin);
+        var exitCode = await PipeCommand.RunAsync([], stdin);
 
         Assert.Equal(0, exitCode);
     }
