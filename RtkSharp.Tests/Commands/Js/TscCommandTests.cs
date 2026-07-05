@@ -107,7 +107,11 @@ public sealed class TscCommandTests
     }
 
     // -----------------------------------------------------------------------
-    // FilterTscOutput - ports tsc_cmd.rs's test_filter_no_errors (both no-error message variants)
+    // FilterTscOutput - zero-error cases always report "No errors found", matching the streaming
+    // TscHandler::format_summary path real `rtk tsc` invocations use (unconditional on error_count == 0,
+    // no substring check). The buffered-only "Found 0 errors" substring gate has been removed since it
+    // produced the wrong message for the most common real-world case: a clean `tsc --noEmit` run that
+    // prints nothing at all.
     // -----------------------------------------------------------------------
 
     [Fact]
@@ -118,10 +122,19 @@ public sealed class TscCommandTests
     }
 
     [Fact]
-    public void FilterTscOutput_NoMatchesAndNoFoundZeroErrorsSubstring_ReturnsGenericCompletedMessage()
+    public void FilterTscOutput_NoMatchesAndNoFoundZeroErrorsSubstring_ReturnsNoErrorsFoundMessage()
     {
+        // No "Found 0 errors" substring present - the case the buffered port previously mishandled.
         var result = TscCommand.FilterTscOutput("Compilation finished with 0 issues.");
-        Assert.Equal("TypeScript compilation completed", result);
+        Assert.Equal("TypeScript: No errors found", result);
+    }
+
+    [Fact]
+    public void FilterTscOutput_EmptyOutput_ReturnsNoErrorsFoundMessage()
+    {
+        // The single most common real-world case: a clean `tsc --noEmit` run prints nothing and exits 0.
+        var result = TscCommand.FilterTscOutput(string.Empty);
+        Assert.Equal("TypeScript: No errors found", result);
     }
 
     // -----------------------------------------------------------------------

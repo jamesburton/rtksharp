@@ -24,14 +24,26 @@ namespace RtkSharp.Commands.Js;
 /// against a live streaming child process). This port implements <see cref="FilterTscOutput"/> as the
 /// buffered equivalent of <c>filter_tsc_output</c> and drives it through <see cref="CommandRunner"/>'s
 /// existing captured-filter pipeline (the same one <c>npm</c>/<c>npx</c> use) rather than introducing a
-/// new tsc-specific streaming primitive into RtkSharp's execution layer. This is judged behaviorally
-/// sufficient: Rust's own tests never observe a difference between the two paths (that is the whole
-/// point of shipping both), and Phase 6's buffered-capture infrastructure already handles this shape of
-/// command well. Flagged explicitly here for Phase 8's compatibility ledger (Task 8): <b>tsc runs via
-/// buffered capture, not true line-by-line streaming</b> — a user piping enormous compiler output
-/// (many thousands of diagnostic lines) will see output only after the process exits, rather than
-/// incrementally. No RTK behavior a user can observe from the printed result differs; only the timing
-/// of when output appears could, for an extreme input size.
+/// new tsc-specific streaming primitive into RtkSharp's execution layer.
+/// </para>
+/// <para>
+/// <b>Correction: the two paths were NOT behaviorally equivalent for the zero-error case, and this has
+/// been fixed.</b> A prior version of this port carried the buffered <c>filter_tsc_output</c>'s
+/// zero-error branching verbatim — returning <c>"TypeScript: No errors found"</c> only when the raw
+/// output happened to contain the literal substring <c>"Found 0 errors"</c>, and otherwise falling back
+/// to a generic <c>"TypeScript compilation completed"</c> message. But real <c>rtk tsc</c> invocations run
+/// through the streaming <c>TscHandler::format_summary</c> path, which returns
+/// <c>"TypeScript: No errors found"</c> unconditionally whenever <c>error_count == 0</c> — no substring
+/// check at all. Since a plain <c>tsc --noEmit</c> on a clean project typically prints nothing and exits
+/// 0, that is exactly the case where the substring is absent and the ported buffered logic diverged from
+/// what users actually observe. <see cref="FilterTscOutput"/> now always returns
+/// <c>"TypeScript: No errors found"</c> on zero errors, matching the streaming path's real, observed
+/// behavior; the substring-conditional generic-message fallback has been removed. Flagged here for Phase
+/// 8's compatibility ledger (Task 8): <b>tsc runs via buffered capture, not true line-by-line
+/// streaming</b> — a user piping enormous compiler output (many thousands of diagnostic lines) will see
+/// output only after the process exits, rather than incrementally. That timing difference remains the
+/// one known, accepted divergence; the zero-error message content divergence described above has been
+/// eliminated.
 /// </para>
 /// <para>
 /// <b>Tool resolution: <c>tool_exists("tsc")</c>, not <see cref="PackageManagerDetection"/>.</b> Rust's
@@ -241,9 +253,14 @@ public static partial class TscCommand
 
         if (errors.Count == 0)
         {
-            return output.Contains("Found 0 errors", StringComparison.Ordinal)
-                ? "TypeScript: No errors found"
-                : "TypeScript compilation completed";
+            // Always report "No errors found" on zero-error output, matching the streaming
+            // TscHandler::format_summary path real `rtk tsc` invocations actually use (it returns
+            // this message unconditionally whenever error_count == 0, with no substring check on
+            // the raw output). A plain `tsc --noEmit` on a clean project typically prints nothing
+            // at all, so gating this message on a "Found 0 errors" substring (as Rust's buffered
+            // filter_tsc_output does) produced the wrong, never-actually-observed message for the
+            // most common success case. See remarks above for the full correction.
+            return "TypeScript: No errors found";
         }
 
         // Group by file.
