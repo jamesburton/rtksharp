@@ -69,6 +69,14 @@ public static class CommandRegistry
         // TOML-fallback/raw-passthrough path, so `rtk pipe` can never fall back to executing a
         // literal `pipe` binary from $PATH.
         Register("pipe", PipeCommand.RunAsync);
+
+        // "err"/"test" are registered here the same way "git"/"gh"/"dotnet" are: a normal dispatch
+        // entry, NOT the meta-command-style guarantee "run"/"proxy"/"pipe"/"gain" get above. This is
+        // deliberate: Rust's own RTK_META_COMMANDS list does not include "err"/"test" either (they're
+        // classified under Rust's PASSTHROUGH set instead) - a Rust-source asymmetry preserved as-is,
+        // not "fixed" for consistency with the meta-commands above.
+        Register("err", ErrCommand.RunAsync);
+        Register("test", TestCommand.RunAsync);
     }
 
     /// <summary>
