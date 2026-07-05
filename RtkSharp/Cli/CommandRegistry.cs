@@ -1,5 +1,6 @@
 using RtkSharp.Commands.Analytics;
 using RtkSharp.Commands.Dotnet;
+using RtkSharp.Core;
 using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
 using RtkSharp.Commands.Js;
@@ -38,6 +39,7 @@ public static class CommandRegistry
         Register("trust", args => Task.FromResult(TrustCommand.RunTrust(args)));
         Register("untrust", args => Task.FromResult(TrustCommand.RunUntrust(args)));
         Register("hook-audit", args => Task.FromResult(HookAuditCommand.Run(args)));
+        Register("telemetry", args => Task.FromResult(TelemetryCommand.Run(args)));
 
         // Registering "gain" here (rather than raw shell passthrough) is what gives it Rust's
         // RTK_META_COMMANDS guarantee (main.rs:1170-1205): a lookup hit in this registry always wins

@@ -532,9 +532,13 @@ public static class TrustCommand
     /// <returns>The trusted-file records, keyed by canonicalized path.</returns>
     internal static Dictionary<string, TrustEntry> ListTrusted() => TryReadStoreOrDefault().Trusted;
 
-    /// <summary>Builds an RFC-3339 UTC timestamp string for "now", approximating Rust's <c>chrono::Utc::now().to_rfc3339()</c>.</summary>
+    /// <summary>
+    /// Builds an RFC-3339 UTC timestamp string for "now", approximating Rust's
+    /// <c>chrono::Utc::now().to_rfc3339()</c>. Shared with <see cref="RtkSharp.Core.TelemetryCommand"/>,
+    /// which needs the identical format for its own <c>consent_date</c> field.
+    /// </summary>
     /// <returns>The formatted timestamp.</returns>
-    private static string RfcTimestampUtcNow() =>
+    internal static string RfcTimestampUtcNow() =>
         DateTimeOffset.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.ffffffzzz", CultureInfo.InvariantCulture);
 
     // -----------------------------------------------------------------------
