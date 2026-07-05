@@ -95,6 +95,21 @@ public class PipeProxyRunParityTests
 {
     private const double ParityThresholdPercent = 95.0;
 
+    /// <summary>
+    /// The exact set of entry labels this battery is known — and allowed — to mismatch, per the
+    /// disclosed <c>pipe -f cargo-test</c> ecosystem-filter-delegation gap documented in this
+    /// class's remarks and <c>docs/parity/compatibility-ledger.md</c>. This must be an exact set
+    /// match, not merely a count/percentage: any mismatch outside this set is a real regression,
+    /// and this ledgered entry unexpectedly starting to match is itself news (it means the gap has
+    /// closed and this test — plus the ledger — needs updating), so both directions are asserted
+    /// explicitly rather than folded into a single threshold check.
+    /// </summary>
+    private static readonly IReadOnlySet<string> ExpectedMismatchLabels =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "pipe -f cargo-test (disclosed-gap identity passthrough alias)",
+        };
+
     /// <summary>A single battery entry: a label, the full CLI args (including the leading verb), and optional stdin content.</summary>
     private sealed record Entry(string Label, string[] Args, string Stdin);
 
@@ -145,6 +160,28 @@ public class PipeProxyRunParityTests
                 $"  MISMATCH [{r.Label}]: rustExit={r.RustExit} portExit={r.PortExit} stdoutMatch={r.StdoutMatches}");
         }
 
+        // Pin the mismatch to the SPECIFIC disclosed-gap entry rather than a raw percentage/count:
+        // a percentage threshold alone would tolerate any one mismatch, silently masking a real
+        // regression on a currently-passing entry if it happened to coincide with the ledgered
+        // cargo-test gap closing elsewhere. Assert the exact set of mismatching labels instead.
+        var actualMismatchLabels = new HashSet<string>(
+            results.Where(r => !r.IsMatch).Select(r => r.Label), StringComparer.Ordinal);
+
+        var unexpectedMismatches = actualMismatchLabels.Except(ExpectedMismatchLabels).ToList();
+        Assert.True(
+            unexpectedMismatches.Count == 0,
+            "Unexpected mismatch(es) outside the disclosed-gap ledger — this is a real regression, " +
+            $"not the known cargo-test gap: {string.Join(", ", unexpectedMismatches)}.\n{detail}");
+
+        var nowPassingGaps = ExpectedMismatchLabels.Except(actualMismatchLabels).ToList();
+        Assert.True(
+            nowPassingGaps.Count == 0,
+            "Expected disclosed-gap entry(ies) now pass against the oracle — the ecosystem-filter-" +
+            "delegation gap has apparently closed. Update ExpectedMismatchLabels in this file and " +
+            $"docs/parity/compatibility-ledger.md to reflect the new state: {string.Join(", ", nowPassingGaps)}.\n{detail}");
+
+        // Belt-and-braces: the exact-set assertions above already pin identity, but keep the
+        // percentage floor too as a coarse sanity check consistent with every other battery file.
         Assert.True(percent >= ParityThresholdPercent, detail.ToString());
     }
 
