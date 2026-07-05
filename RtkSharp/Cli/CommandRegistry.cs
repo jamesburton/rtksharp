@@ -2,6 +2,7 @@ using RtkSharp.Commands.Analytics;
 using RtkSharp.Commands.Dotnet;
 using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
+using RtkSharp.Commands.Js;
 using RtkSharp.Commands.System;
 using RtkSharp.Hooks;
 using RtkSharp.Rewrite;
@@ -52,6 +53,8 @@ public static class CommandRegistry
         Register("dotnet", DotnetCommand.RunAsync);
         Register("git", GitCommand.RunAsync);
         Register("gh", GhCommand.RunAsync);
+        Register("npm", NpmCommand.RunAsync);
+        Register("npx", NpmCommand.ExecAsync);
 
         // Registering "run" here gives it the same RTK_META_COMMANDS-equivalent guarantee as "gain"
         // above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-passthrough

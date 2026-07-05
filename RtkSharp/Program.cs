@@ -27,6 +27,7 @@ internal static class RtkProgram
         // into gh_cmd::run (main.rs:1673). See RuntimeOptions for the rationale.
         RuntimeOptions.UltraCompact = parsed.UltraCompact;
         RuntimeOptions.Verbosity = parsed.Verbosity;
+        RuntimeOptions.SkipEnv = parsed.SkipEnv;
 
         if (parsed.Version)
         {

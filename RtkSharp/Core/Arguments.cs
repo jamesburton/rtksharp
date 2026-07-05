@@ -11,6 +11,7 @@ public record RtkArguments(
     bool NoColor,
     bool Help,
     bool Version,
+    bool SkipEnv,
     string? CommandName,
     string[] CommandArgs
 )
@@ -28,6 +29,7 @@ public record RtkArguments(
         bool noColor = false;
         bool help = false;
         bool version = false;
+        bool skipEnv = false;
         string? commandName = null;
         var commandArgs = new List<string>();
 
@@ -77,6 +79,10 @@ public record RtkArguments(
                 {
                     version = true;
                 }
+                else if (arg == "--skip-env")
+                {
+                    skipEnv = true;
+                }
                 else
                 {
                     // Unrecognized option, or belongs to the command
@@ -108,6 +114,7 @@ public record RtkArguments(
             noColor,
             help,
             version,
+            skipEnv,
             commandName,
             commandArgs.ToArray()
         );

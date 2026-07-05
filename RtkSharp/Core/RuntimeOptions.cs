@@ -37,4 +37,12 @@ public static class RuntimeOptions
     /// <c>RtkSharp.Hooks.InitCommand</c>, whose registry delegate cannot receive it as an argument.
     /// </summary>
     public static int Verbosity { get; set; }
+
+    /// <summary>
+    /// Whether the user requested <c>SKIP_ENV_VALIDATION=1</c> for child processes via the global
+    /// <c>--skip-env</c> flag (mirrors Rust's <c>cli.skip_env: bool</c>, main.rs:73-75). Set once by
+    /// <c>Program</c> before command dispatch; read by <c>RtkSharp.Commands.Js.NpmCommand</c>, whose
+    /// registry delegate cannot receive it as an argument.
+    /// </summary>
+    public static bool SkipEnv { get; set; }
 }
