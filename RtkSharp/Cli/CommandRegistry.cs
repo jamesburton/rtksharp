@@ -52,6 +52,11 @@ public static class CommandRegistry
         Register("dotnet", DotnetCommand.RunAsync);
         Register("git", GitCommand.RunAsync);
         Register("gh", GhCommand.RunAsync);
+
+        // Registering "run" here gives it the same RTK_META_COMMANDS-equivalent guarantee as "gain"
+        // above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-passthrough
+        // path, so `rtk run` can never fall back to executing a literal `run` binary from $PATH.
+        Register("run", RunCommand.RunAsync);
     }
 
     /// <summary>
