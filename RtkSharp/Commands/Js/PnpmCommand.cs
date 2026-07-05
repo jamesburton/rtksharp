@@ -92,14 +92,18 @@ internal readonly record struct PnpmInvocation(
 /// exactly: <see cref="RunOutdatedAsync"/> ignores the child's exit code entirely.
 /// </para>
 /// <para>
-/// <b>Typecheck: a pure alias, stubbed until Phase 8 Task 4 lands.</b> Rust's <c>PnpmCommands::Typecheck</c>
-/// arm (<c>main.rs</c>:1721) is zero pnpm-specific logic — it calls straight into <c>tsc_cmd::run</c>.
-/// Since tsc has not been ported yet in RtkSharp, this throws a <see cref="NotImplementedException"/>
-/// naming Phase 8 Task 4, matching the exact stub convention <c>NpmCommand</c> established for its own
-/// not-yet-ported npx routes (tsc/playwright/prisma). The <c>--filter</c>+<c>typecheck</c> warning
-/// (<see cref="ValidatePnpmFilters"/>) still fires before the stub throws, exactly as Rust's
-/// <c>validate_pnpm_filters</c> call happens unconditionally before the subcommand match
-/// (<c>main.rs</c>:1701-1703) regardless of whether that subcommand's own execution succeeds.
+/// <b>Typecheck: a pure alias, now delegating to <see cref="TscCommand"/>.</b> Rust's
+/// <c>PnpmCommands::Typecheck</c> arm (<c>main.rs</c>:1721) is zero pnpm-specific logic — it calls
+/// straight into <c>tsc_cmd::run(&amp;args, cli.verbose)</c> with the subcommand's own (unmerged) args,
+/// deliberately NOT the <c>--filter</c>-merged args every other verb here uses (<see cref="MergeFilters"/>
+/// is only applied to <see cref="PnpmVerb.List"/>/<see cref="PnpmVerb.Outdated"/>/
+/// <see cref="PnpmVerb.Install"/>/<see cref="PnpmVerb.Other"/>). Now that Phase 8 Task 4 has landed
+/// <see cref="TscCommand"/>, this delegates to <see cref="TscCommand.RunTscSafeAsync"/> with
+/// <c>invocation.Args</c> unmerged, exactly matching Rust's call site. The <c>--filter</c>+<c>typecheck</c>
+/// warning (<see cref="ValidatePnpmFilters"/>) still fires unconditionally before dispatch, exactly as
+/// Rust's <c>validate_pnpm_filters</c> call happens before the subcommand match regardless of whether
+/// that subcommand's own execution succeeds (<c>main.rs</c>:1701-1703) — filters preceding
+/// <c>typecheck</c> are warned about and ignored, never silently applied.
 /// </para>
 /// </remarks>
 public static partial class PnpmCommand
@@ -171,7 +175,7 @@ public static partial class PnpmCommand
             PnpmVerb.List => RunListAsync(invocation.Depth, MergeFilters(invocation.Filters, invocation.Args), verbose, executor),
             PnpmVerb.Outdated => RunOutdatedAsync(MergeFilters(invocation.Filters, invocation.Args), verbose, executor),
             PnpmVerb.Install => RunInstallAsync(MergeFilters(invocation.Filters, invocation.Args), verbose, executor),
-            PnpmVerb.Typecheck => throw StubTypecheckNotImplemented(),
+            PnpmVerb.Typecheck => TscCommand.RunTscSafeAsync(invocation.Args, verbose),
             PnpmVerb.Other => RunPassthroughAsync(MergeFilters(invocation.Filters, invocation.PassthroughArgs), verbose, executor),
             _ => throw new ArgumentOutOfRangeException(nameof(args), invocation.Verb, "Unknown pnpm verb."),
         };
@@ -347,15 +351,6 @@ public static partial class PnpmCommand
 
         return merged;
     }
-
-    /// <summary>
-    /// Builds the exception thrown for the not-yet-ported <c>pnpm typecheck</c> alias, naming the
-    /// future Phase 8 task expected to implement <c>tsc</c>. Matches <c>NpmCommand</c>'s
-    /// <c>StubNotImplemented</c> convention exactly.
-    /// </summary>
-    /// <returns>The exception to throw.</returns>
-    private static NotImplementedException StubTypecheckNotImplemented() =>
-        new("pnpm typecheck is not yet implemented in RtkSharp (planned for Phase 8 Task 4)");
 
     // -----------------------------------------------------------------------
     // run_list (pnpm_cmd.rs:364-418)

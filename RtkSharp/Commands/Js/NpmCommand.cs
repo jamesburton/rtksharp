@@ -72,14 +72,16 @@ internal readonly record struct NpxRoute(NpxRouteKind Kind, string[] RemainingAr
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Stub routes for not-yet-ported filters (tsc/playwright/prisma).</b> Phase 8 Task 2 (this task)
-/// only ports npm/npx; the tsc (Task 4), playwright (Task 6), and prisma (Task 7) filters do not exist
-/// yet. Rather than silently mis-filtering their output through npm's <c>filter_npm_output</c> (which
-/// was never designed for them) or duplicating unwritten future logic, those three routes throw a
-/// clear <see cref="NotImplementedException"/> naming the target Phase 8 task. This is caught by the
-/// same top-level <c>rtk: {message}</c> fail-loud handler <see cref="RunAsync"/>/<see cref="ExecAsync"/>
-/// already need for other errors — the user sees an explicit "not yet implemented" message rather than
-/// a crash or silently wrong output.
+/// <b>Stub routes for not-yet-ported filters (playwright/prisma); tsc now wired.</b> Phase 8 Task 2
+/// only ported npm/npx, leaving tsc (Task 4), playwright (Task 6), and prisma (Task 7) as stubs. Task 4
+/// has since landed <see cref="TscCommand"/>, so the <c>npx tsc</c>/<c>npx typescript</c> route now
+/// delegates to <see cref="TscCommand.RunTscSafeAsync"/> instead of throwing. Playwright and prisma
+/// remain unported: rather than silently mis-filtering their output through npm's
+/// <c>filter_npm_output</c> (which was never designed for them) or duplicating unwritten future logic,
+/// those two routes throw a clear <see cref="NotImplementedException"/> naming the target Phase 8 task.
+/// This is caught by the same top-level <c>rtk: {message}</c> fail-loud handler
+/// <see cref="RunAsync"/>/<see cref="ExecAsync"/> already need for other errors — the user sees an
+/// explicit "not yet implemented" message rather than a crash or silently wrong output.
 /// </para>
 /// <para>
 /// <b>eslint/next/prettier: raw passthrough, not a stub.</b> These three are explicitly out of scope
@@ -271,7 +273,7 @@ public static class NpmCommand
 
         return route.Kind switch
         {
-            NpxRouteKind.Tsc => throw StubNotImplemented("tsc", "Phase 8 Task 4"),
+            NpxRouteKind.Tsc => TscCommand.RunTscSafeAsync(route.RemainingArgs, verbose),
             NpxRouteKind.Playwright => throw StubNotImplemented("playwright", "Phase 8 Task 6"),
             NpxRouteKind.PrismaGenerate => throw StubNotImplemented("prisma generate", "Phase 8 Task 7"),
             NpxRouteKind.PrismaDbPush => throw StubNotImplemented("prisma db push", "Phase 8 Task 7"),

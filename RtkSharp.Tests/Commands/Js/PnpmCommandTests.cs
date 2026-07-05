@@ -16,7 +16,7 @@ namespace RtkSharp.Tests.Commands.Js;
 /// Tests for <see cref="PnpmCommand"/>, ported directly from Rust's own <c>#[cfg(test)]</c> module in
 /// <c>pnpm_cmd.rs</c> (JSON/regex-fallback parsing, the cap-only-when-unfiltered listing logic,
 /// install-filter line classification) plus original coverage for the CLI-parsing surface
-/// (<c>--filter</c>/<c>--depth</c> extraction, the typecheck stub wiring, the <c>--filter</c>+
+/// (<c>--filter</c>/<c>--depth</c> extraction, the typecheck-alias dispatch wiring, the <c>--filter</c>+
 /// <c>typecheck</c> warning, and the passthrough route) that lives inline in Rust's <c>main.rs</c>
 /// <c>Commands::Pnpm</c> arm rather than in a dedicated Rust <c>#[cfg(test)]</c> module.
 /// </summary>
@@ -468,43 +468,14 @@ public sealed class PnpmCommandTests
         Assert.Null(PnpmCommand.ValidatePnpmFilters(["@app1"], verb));
 
     // -----------------------------------------------------------------------
-    // Typecheck: pure alias, stubbed until Phase 8 Task 4 lands
+    // Typecheck: pure alias delegating to TscCommand (Phase 8 Task 4). DispatchAsync/RunPnpmSafeAsync
+    // for "typecheck" are not exercised end-to-end here: TscCommand.RunTscSafeAsync (like the pnpm
+    // Other/passthrough route) constructs its own ProcessExecutor internally with no injection seam,
+    // so invoking it would risk spawning a real tsc/npx process as a side effect of the test suite.
+    // The warning-before-dispatch ordering is covered by ValidatePnpmFilters_TypecheckWithFilters_*
+    // above (Rust's validate_pnpm_filters is called unconditionally before the subcommand match,
+    // main.rs:1701-1703); TscCommand's own filter logic is covered directly in TscCommandTests.
     // -----------------------------------------------------------------------
-
-    [Fact]
-    public async Task DispatchAsync_Typecheck_ThrowsNotImplementedNamingFutureTask()
-    {
-        var ex = await Assert.ThrowsAsync<NotImplementedException>(
-            () => PnpmCommand.DispatchAsync(["typecheck", "--noEmit"], verbose: 0, executor: null));
-
-        Assert.Contains("typecheck", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("Phase 8 Task 4", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task DispatchAsync_TypecheckWithFilter_PrintsWarningThenThrows()
-    {
-        using var stderr = new ConsoleErrorCapture();
-
-        await Assert.ThrowsAsync<NotImplementedException>(
-            () => PnpmCommand.DispatchAsync(["-F", "@app1", "typecheck"], verbose: 0, executor: null));
-
-        Assert.Contains(
-            "[rtk] warning: --filter is not yet supported for pnpm tsc",
-            stderr.ToString(),
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task RunPnpmSafeAsync_TypecheckStub_PrintsRtkPrefixedNotImplementedMessage_ReturnsOne()
-    {
-        using var stderr = new ConsoleErrorCapture();
-
-        var exitCode = await PnpmCommand.RunPnpmSafeAsync(["typecheck"], verbose: 0, executor: null);
-
-        Assert.Equal(1, exitCode);
-        Assert.StartsWith("rtk: pnpm typecheck is not yet implemented", stderr.ToString(), StringComparison.Ordinal);
-    }
 
     // -----------------------------------------------------------------------
     // Other/passthrough - executes via an injectable IProcessExecutor, mirroring Rust's

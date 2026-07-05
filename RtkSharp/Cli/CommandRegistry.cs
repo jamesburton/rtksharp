@@ -56,6 +56,7 @@ public static class CommandRegistry
         Register("npm", NpmCommand.RunAsync);
         Register("npx", NpmCommand.ExecAsync);
         Register("pnpm", PnpmCommand.RunAsync);
+        Register("tsc", TscCommand.RunAsync);
 
         // Registering "run" here gives it the same RTK_META_COMMANDS-equivalent guarantee as "gain"
         // above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-passthrough

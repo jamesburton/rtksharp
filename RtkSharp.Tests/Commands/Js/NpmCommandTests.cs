@@ -284,20 +284,14 @@ public sealed class NpmCommandTests
     }
 
     // -----------------------------------------------------------------------
-    // npx: stub routes (tsc/playwright/prisma) - sane, clearly-marked failure, no execution attempted
+    // npx: stub routes (playwright/prisma) - sane, clearly-marked failure, no execution attempted.
+    // tsc is no longer a stub (Phase 8 Task 4 landed TscCommand) - DispatchNpxAsync_Tsc now routes
+    // through TscCommand.RunTscSafeAsync, which (like the Default route) constructs its own
+    // ProcessExecutor internally with no injection seam, so it is not exercised here to avoid
+    // spawning a real tsc/npx process as a side effect of the test suite; TscCommand's filter logic
+    // is covered directly in TscCommandTests, and the route mapping itself in
+    // ResolveNpxRoute_RecognizedAndUnrecognizedTools_RouteCorrectly above.
     // -----------------------------------------------------------------------
-
-    [Theory]
-    [InlineData("tsc")]
-    [InlineData("typescript")]
-    public async Task DispatchNpxAsync_Tsc_ThrowsNotImplementedNamingFutureTask(string tool)
-    {
-        var ex = await Assert.ThrowsAsync<NotImplementedException>(
-            () => NpmCommand.DispatchNpxAsync([tool, "--noEmit"], verbose: 0, skipEnv: false, executor: null));
-
-        Assert.Contains("tsc", ex.Message, StringComparison.Ordinal);
-        Assert.Contains("Phase 8 Task 4", ex.Message, StringComparison.Ordinal);
-    }
 
     [Fact]
     public async Task DispatchNpxAsync_Playwright_ThrowsNotImplementedNamingFutureTask()
@@ -334,10 +328,10 @@ public sealed class NpmCommandTests
     {
         using var console = new ConsoleErrorCapture();
 
-        var exitCode = await NpmCommand.RunNpxSafeAsync(["tsc"], verbose: 0, skipEnv: false, executor: null);
+        var exitCode = await NpmCommand.RunNpxSafeAsync(["playwright"], verbose: 0, skipEnv: false, executor: null);
 
         Assert.Equal(1, exitCode);
-        Assert.StartsWith("rtk: npx tsc is not yet implemented", console.ToString(), StringComparison.Ordinal);
+        Assert.StartsWith("rtk: npx playwright is not yet implemented", console.ToString(), StringComparison.Ordinal);
     }
 
     // -----------------------------------------------------------------------
