@@ -33,25 +33,34 @@ namespace RtkSharp.ParityTests;
 /// real <c>%LOCALAPPDATA%\rtk</c> (including <c>history.db</c> and <c>.hook_warn_last</c>) with an
 /// identical mtime before and after — confirming the oracle never touches that directory for any
 /// <c>gain</c> invocation when <c>RTK_DB_PATH</c> is set, exactly as the Phase 5 plan predicted. No
-/// defensive guard is therefore applied in this file.
+/// defensive guard is therefore applied in this file. This is not a fully exhaustive proof by static
+/// reasoning alone, though: <c>main.rs</c>'s pre-dispatch sequence also calls
+/// <c>core::telemetry::maybe_ping()</c> for every command including <c>Gain</c>, and that function's
+/// marker/salt file paths likewise resolve via <c>dirs::data_local_dir()</c> (not redirected by
+/// <c>RTK_DB_PATH</c>/<c>CLAUDE_CONFIG_DIR</c>). It is harmless in practice only because
+/// <c>maybe_ping()</c> returns immediately when the compile-time <c>TELEMETRY_URL</c>
+/// (<c>option_env!</c>) is absent — the default oracle build used here — and is additionally gated on
+/// <c>telemetry.consent_given == Some(true)</c>; the empirical canary above is what actually closes
+/// this gap for this specific oracle binary, not the source-reading argument on its own.
 /// </para>
 /// <para>
-/// <b>Seeding strategy: raw SQL, not through either binary; a fresh file-copy per side per entry.</b>
-/// A deterministic dataset (18 <c>commands</c> rows spanning April-July 2026 across 10 distinct
-/// <c>rtk_cmd</c> values, for realistic daily/weekly/monthly/by-command/history coverage; a separate
-/// 5-row <c>parse_failures</c> dataset for the non-zero <c>--failures</c> case) is inserted directly
-/// via <see cref="Microsoft.Data.Sqlite.SqliteConnection"/> against the exact schema
+/// <b>Seeding strategy: raw SQL, not through either binary; a fresh database built from scratch per
+/// side per entry (not a shared master file).</b> A deterministic dataset (18 <c>commands</c> rows
+/// spanning April-July 2026 across 10 distinct <c>rtk_cmd</c> values, for realistic
+/// daily/weekly/monthly/by-command/history coverage; a separate 5-row <c>parse_failures</c> dataset
+/// for the non-zero <c>--failures</c> case) is inserted directly via
+/// <see cref="Microsoft.Data.Sqlite.SqliteConnection"/> against the exact schema
 /// <c>RtkSharp/Core/Tracking/Tracker.cs</c>'s <c>InitSchema</c> creates (mirrored here verbatim, not
 /// invoked through <see cref="RtkSharp.Core.Tracking.Tracker"/> itself, which has no public
 /// externally-usable constructor and whose <c>internal</c> one is not exposed to this test assembly) —
 /// this guarantees both binaries see byte-identical starting bytes on disk, independent of either
-/// implementation's own write path. Every entry then works from its own fresh
-/// <see cref="System.IO.File.Copy(string, string)"/> of the relevant master seed file for <b>each</b>
-/// side independently (oracle gets its own copy, the port gets its own copy) — chosen over sharing one
-/// file between both invocations because <c>gain.rs</c>'s <c>--reset</c> path is the one command in
-/// this surface that mutates the database, and giving every entry (not just <c>--reset</c>) its own
-/// pristine copy per side removes any need to reason about invocation order or partial mutation for
-/// the other 17 read-only entries — simplest-robust over cleverness, per the task brief's own guidance.
+/// implementation's own write path. Every entry independently re-runs this seeding routine for each
+/// side (oracle gets its own freshly-created file, the port gets its own freshly-created file) rather
+/// than copying from one shared master file — chosen over sharing one file between both invocations
+/// because <c>gain.rs</c>'s <c>--reset</c> path is the one command in this surface that mutates the
+/// database, and giving every entry (not just <c>--reset</c>) its own pristine, independently-seeded
+/// database per side removes any need to reason about invocation order or partial mutation for the
+/// other 17 read-only entries — simplest-robust over cleverness, per the task brief's own guidance.
 /// </para>
 /// <para>
 /// <b>Stdout only, forced non-interactive stdin.</b> Every entry passes <c>StdinContent = ""</c> (EOF
