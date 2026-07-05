@@ -1,3 +1,4 @@
+using RtkSharp.Commands.Analytics;
 using RtkSharp.Commands.Dotnet;
 using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
@@ -35,6 +36,12 @@ public static class CommandRegistry
         Register("config", args => Task.FromResult(ConfigCommand.Run(args)));
         Register("trust", args => Task.FromResult(TrustCommand.RunTrust(args)));
         Register("untrust", args => Task.FromResult(TrustCommand.RunUntrust(args)));
+
+        // Registering "gain" here (rather than raw shell passthrough) is what gives it Rust's
+        // RTK_META_COMMANDS guarantee (main.rs:1170-1205): a lookup hit in this registry always wins
+        // over RtkProgram.RunAsync's TOML-fallback/raw-passthrough path, so a bad `rtk gain` flag can
+        // never fall back to executing a literal `gain` binary from $PATH.
+        Register("gain", args => Task.FromResult(GainCommand.Run(args)));
 
         Register("ls", LsCommand.RunAsync);
         Register("read", ReadCommand.RunAsync);
