@@ -18,7 +18,7 @@ internal sealed class DataDirGuard : IDisposable
 
     public DataDirGuard(TempDir tmp)
     {
-        System.Threading.Monitor.Enter(InitTestSupport.EnvLock);
+        InitTestSupport.EnterEnvLock();
 
         DataDir = Path.Combine(tmp.Root, "data");
         Directory.CreateDirectory(DataDir);
@@ -30,7 +30,7 @@ internal sealed class DataDirGuard : IDisposable
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(RtkSharp.Hooks.TrustCommand.DataDirOverrideEnvVar, _previous);
-        System.Threading.Monitor.Exit(InitTestSupport.EnvLock);
+        InitTestSupport.ExitEnvLock();
     }
 }
 

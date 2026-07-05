@@ -183,7 +183,8 @@ public sealed class SettingsPatcherTests
         // InitTestSupport.CwdLock — serialize via the equivalent env-var lock so this can't race
         // with GlobalScopeGuard-based tests in another test class (a different xUnit collection,
         // and therefore eligible to run in parallel with this one).
-        lock (InitTestSupport.EnvLock)
+        InitTestSupport.EnterEnvLock();
+        try
         {
             var previous = System.Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
             try
@@ -195,6 +196,10 @@ public sealed class SettingsPatcherTests
             {
                 System.Environment.SetEnvironmentVariable("CLAUDE_CONFIG_DIR", previous);
             }
+        }
+        finally
+        {
+            InitTestSupport.ExitEnvLock();
         }
     }
 }

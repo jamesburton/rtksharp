@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Threading;
 
 namespace RtkSharp.Tests.Hooks;
 
@@ -15,12 +16,49 @@ internal static class InitTestSupport
     /// <summary>The single lock serializing every CWD mutation across the init test suite.</summary>
     public static readonly object CwdLock = new();
 
+    private static readonly SemaphoreSlim EnvSemaphore = new(1, 1);
+
     /// <summary>
-    /// The single lock serializing every <c>CLAUDE_CONFIG_DIR</c>/<c>RTK_CONFIG_DIR_OVERRIDE</c>
-    /// environment-variable mutation across the init test suite (both are process-global, like the
-    /// CWD guarded by <see cref="CwdLock"/>).
+    /// Per-logical-call-context reentrancy depth for <see cref="EnvSemaphore"/>. An
+    /// <see cref="AsyncLocal{T}"/> (not <c>[ThreadStatic]</c>) is required: it flows with the async
+    /// call chain across <c>await</c> continuations even when the continuation resumes on a
+    /// different thread-pool thread than the one that entered the guard, which is exactly what
+    /// happens in Phase 5's <c>HookCheckTests</c> (guards held across <c>await
+    /// RtkSharp.RtkProgram.RunAsync(...)</c>).
     /// </summary>
-    public static readonly object EnvLock = new();
+    private static readonly AsyncLocal<int> EnvLockDepth = new();
+
+    /// <summary>
+    /// Enters the environment-variable lock serializing every <c>CLAUDE_CONFIG_DIR</c>/
+    /// <c>RTK_CONFIG_DIR_OVERRIDE</c>/<c>CODEX_HOME</c>/<c>RTK_DATA_DIR_OVERRIDE</c> mutation across
+    /// the init/trust test suites (all process-global, like the CWD guarded by
+    /// <see cref="CwdLock"/>). Reentrant on the same logical call context (e.g. a test method that
+    /// nests <c>GlobalScopeGuard</c> then <c>DataDirGuard</c> synchronously, both guarding the same
+    /// resource) — a bare non-reentrant <see cref="SemaphoreSlim"/> would deadlock on that second,
+    /// nested <c>Wait()</c> call on the same thread, since only the matching number of
+    /// <see cref="ExitEnvLock"/> calls releases the underlying semaphore.
+    /// </summary>
+    public static void EnterEnvLock()
+    {
+        var depth = EnvLockDepth.Value;
+        if (depth == 0)
+        {
+            EnvSemaphore.Wait();
+        }
+
+        EnvLockDepth.Value = depth + 1;
+    }
+
+    /// <summary>Releases one level of <see cref="EnterEnvLock"/>, releasing the underlying semaphore only when the outermost level unwinds.</summary>
+    public static void ExitEnvLock()
+    {
+        var depth = EnvLockDepth.Value - 1;
+        EnvLockDepth.Value = depth;
+        if (depth == 0)
+        {
+            EnvSemaphore.Release();
+        }
+    }
 }
 
 /// <summary>
@@ -47,7 +85,7 @@ internal sealed class GlobalScopeGuard : IDisposable
 
     public GlobalScopeGuard(TempDir tmp)
     {
-        System.Threading.Monitor.Enter(InitTestSupport.EnvLock);
+        InitTestSupport.EnterEnvLock();
 
         ClaudeDir = Path.Combine(tmp.Root, ".claude");
         ConfigDir = Path.Combine(tmp.Root, "config");
@@ -65,7 +103,7 @@ internal sealed class GlobalScopeGuard : IDisposable
     {
         Environment.SetEnvironmentVariable(ClaudeConfigDirEnvVar, _previousClaudeConfigDir);
         Environment.SetEnvironmentVariable(RtkSharp.Hooks.InitArtifacts.ConfigDirOverrideEnvVar, _previousConfigDirOverride);
-        System.Threading.Monitor.Exit(InitTestSupport.EnvLock);
+        InitTestSupport.ExitEnvLock();
     }
 }
 
@@ -89,7 +127,7 @@ internal sealed class CodexScopeGuard : IDisposable
 
     public CodexScopeGuard(TempDir tmp)
     {
-        System.Threading.Monitor.Enter(InitTestSupport.EnvLock);
+        InitTestSupport.EnterEnvLock();
 
         CodexDir = Path.Combine(tmp.Root, ".codex");
         Directory.CreateDirectory(CodexDir);
@@ -101,7 +139,7 @@ internal sealed class CodexScopeGuard : IDisposable
     public void Dispose()
     {
         Environment.SetEnvironmentVariable(CodexHomeEnvVar, _previousCodexHome);
-        System.Threading.Monitor.Exit(InitTestSupport.EnvLock);
+        InitTestSupport.ExitEnvLock();
     }
 }
 

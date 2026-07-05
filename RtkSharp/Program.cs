@@ -40,6 +40,16 @@ internal static class RtkProgram
             return 0;
         }
 
+        // Startup hook-status warning, run once before dispatch. Skipped for `gain`, which shows
+        // its own inline hook warning in its summary view (mirrors Rust's explicit `Commands::Gain`
+        // exclusion, main.rs:1483-1485). `gain` itself doesn't exist as a registered command yet
+        // (Phase 5 Task 5) — this string check is written in anticipation and needs no changes once
+        // it lands.
+        if (!string.Equals(parsed.CommandName, "gain", StringComparison.Ordinal))
+        {
+            HookCheck.MaybeWarn();
+        }
+
         if (CommandRegistry.TryGet(parsed.CommandName, out var handler))
         {
             return await handler(parsed.CommandArgs).ConfigureAwait(false);
