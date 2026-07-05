@@ -88,6 +88,34 @@ public static class PathResolver
         return name;
     }
 
+    /// <summary>
+    /// Resolves an <see cref="ExecutionRequest"/>'s executable name to a full path, honoring
+    /// any <c>PATH</c>/<c>PATHEXT</c> overrides in <see cref="ExecutionRequest.Environment"/>
+    /// (falling back to the current process's own environment) and the request's
+    /// <see cref="ExecutionRequest.WorkingDirectory"/> (falling back to the current directory).
+    /// Shared by every executor that spawns a child process from an <see cref="ExecutionRequest"/>.
+    /// </summary>
+    /// <param name="request">The execution request whose <see cref="ExecutionRequest.FileName"/> to resolve.</param>
+    /// <returns>The resolved full path, or the request's file name unchanged if it could not be resolved.</returns>
+    public static string ResolveForRequest(ExecutionRequest request)
+    {
+        string? requestPath = null;
+        string? requestPathExt = null;
+        request.Environment?.TryGetValue("PATH", out requestPath);
+        request.Environment?.TryGetValue("PATHEXT", out requestPathExt);
+
+        var workingDirectory = string.IsNullOrWhiteSpace(request.WorkingDirectory)
+            ? Environment.CurrentDirectory
+            : request.WorkingDirectory;
+
+        return Resolve(
+            request.FileName,
+            requestPath ?? Environment.GetEnvironmentVariable("PATH"),
+            requestPathExt ?? Environment.GetEnvironmentVariable("PATHEXT"),
+            workingDirectory
+        );
+    }
+
     private static string[] GetWindowsExtensions(string? pathExtEnv)
     {
         var value = string.IsNullOrWhiteSpace(pathExtEnv)

@@ -223,24 +223,7 @@ public sealed class ProcessExecutor : IProcessExecutor
         return startInfo;
     }
 
-    private static string ResolveFileName(ExecutionRequest request)
-    {
-        string? requestPath = null;
-        string? requestPathExt = null;
-        request.Environment?.TryGetValue("PATH", out requestPath);
-        request.Environment?.TryGetValue("PATHEXT", out requestPathExt);
-
-        var workingDirectory = string.IsNullOrWhiteSpace(request.WorkingDirectory)
-            ? Environment.CurrentDirectory
-            : request.WorkingDirectory;
-
-        return PathResolver.Resolve(
-            request.FileName,
-            requestPath ?? Environment.GetEnvironmentVariable("PATH"),
-            requestPathExt ?? Environment.GetEnvironmentVariable("PATHEXT"),
-            workingDirectory
-        );
-    }
+    private static string ResolveFileName(ExecutionRequest request) => PathResolver.ResolveForRequest(request);
 
     private static void TryKill(Process process)
     {
