@@ -424,9 +424,9 @@ public sealed class Tracker : IDisposable
     public GainSummary GetSummaryFiltered(string? projectPath)
     {
         var totalCommands = 0;
-        var totalInput = 0;
-        var totalOutput = 0;
-        var totalSaved = 0;
+        long totalInput = 0;
+        long totalOutput = 0;
+        long totalSaved = 0;
         long totalTimeMs = 0;
 
         using (var cmd = _connection.CreateCommand())
@@ -442,9 +442,9 @@ public sealed class Tracker : IDisposable
             while (reader.Read())
             {
                 totalCommands++;
-                totalInput += (int)reader.GetInt64(0);
-                totalOutput += (int)reader.GetInt64(1);
-                totalSaved += (int)reader.GetInt64(2);
+                totalInput += reader.GetInt64(0);
+                totalOutput += reader.GetInt64(1);
+                totalSaved += reader.GetInt64(2);
                 totalTimeMs += reader.GetInt64(3);
             }
         }
@@ -494,7 +494,7 @@ public sealed class Tracker : IDisposable
             {
                 Command = reader.GetString(0),
                 Count = (int)reader.GetInt64(1),
-                SavedTokens = (int)reader.GetInt64(2),
+                SavedTokens = reader.GetInt64(2),
                 AvgSavingsPct = reader.GetDouble(3),
                 AvgTimeMs = (long)reader.GetDouble(4),
             });
@@ -529,7 +529,7 @@ public sealed class Tracker : IDisposable
         {
             while (reader.Read())
             {
-                result.Add(new DaySavings { Date = reader.GetString(0), SavedTokens = (int)reader.GetInt64(1) });
+                result.Add(new DaySavings { Date = reader.GetString(0), SavedTokens = reader.GetInt64(1) });
             }
         }
 
@@ -585,9 +585,9 @@ public sealed class Tracker : IDisposable
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            var input = (int)reader.GetInt64(2);
-            var output = (int)reader.GetInt64(3);
-            var saved = (int)reader.GetInt64(4);
+            var input = reader.GetInt64(2);
+            var output = reader.GetInt64(3);
+            var saved = reader.GetInt64(4);
             var commands = (int)reader.GetInt64(1);
             var totalTime = reader.GetInt64(5);
             var savingsPct = input > 0 ? saved / (double)input * 100.0 : 0.0;
@@ -656,9 +656,9 @@ public sealed class Tracker : IDisposable
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            var input = (int)reader.GetInt64(3);
-            var output = (int)reader.GetInt64(4);
-            var saved = (int)reader.GetInt64(5);
+            var input = reader.GetInt64(3);
+            var output = reader.GetInt64(4);
+            var saved = reader.GetInt64(5);
             var commands = (int)reader.GetInt64(2);
             var totalTime = reader.GetInt64(6);
             var savingsPct = input > 0 ? saved / (double)input * 100.0 : 0.0;
@@ -718,9 +718,9 @@ public sealed class Tracker : IDisposable
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            var input = (int)reader.GetInt64(2);
-            var output = (int)reader.GetInt64(3);
-            var saved = (int)reader.GetInt64(4);
+            var input = reader.GetInt64(2);
+            var output = reader.GetInt64(3);
+            var saved = reader.GetInt64(4);
             var commands = (int)reader.GetInt64(1);
             var totalTime = reader.GetInt64(5);
             var savingsPct = input > 0 ? saved / (double)input * 100.0 : 0.0;
@@ -793,7 +793,7 @@ public sealed class Tracker : IDisposable
             {
                 Timestamp = timestamp,
                 RtkCmd = reader.GetString(1),
-                SavedTokens = (int)reader.GetInt64(2),
+                SavedTokens = reader.GetInt64(2),
                 SavingsPct = reader.GetDouble(3),
             });
         }

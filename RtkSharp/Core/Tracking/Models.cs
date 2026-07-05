@@ -16,7 +16,7 @@ public sealed class CommandRecord
     public required string RtkCmd { get; init; }
 
     /// <summary>Number of tokens saved (input minus output).</summary>
-    public required int SavedTokens { get; init; }
+    public required long SavedTokens { get; init; }
 
     /// <summary>Savings percentage (<c>(saved / input) * 100</c>).</summary>
     public required double SavingsPct { get; init; }
@@ -36,7 +36,7 @@ public sealed class CommandStat
     public required int Count { get; init; }
 
     /// <summary>Total tokens saved across all invocations of this command.</summary>
-    public required int SavedTokens { get; init; }
+    public required long SavedTokens { get; init; }
 
     /// <summary>Average savings percentage across all invocations of this command.</summary>
     public required double AvgSavingsPct { get; init; }
@@ -55,7 +55,7 @@ public sealed class DaySavings
     public required string Date { get; init; }
 
     /// <summary>Total tokens saved on this day.</summary>
-    public required int SavedTokens { get; init; }
+    public required long SavedTokens { get; init; }
 }
 
 /// <summary>
@@ -69,13 +69,13 @@ public sealed class GainSummary
     public required int TotalCommands { get; init; }
 
     /// <summary>Total input tokens across all commands.</summary>
-    public required int TotalInput { get; init; }
+    public required long TotalInput { get; init; }
 
     /// <summary>Total output tokens across all commands.</summary>
-    public required int TotalOutput { get; init; }
+    public required long TotalOutput { get; init; }
 
     /// <summary>Total tokens saved (input minus output) across all commands.</summary>
-    public required int TotalSaved { get; init; }
+    public required long TotalSaved { get; init; }
 
     /// <summary>Average savings percentage across all commands.</summary>
     public required double AvgSavingsPct { get; init; }
@@ -106,13 +106,13 @@ public sealed class DayStats
     public required int Commands { get; init; }
 
     /// <summary>Total input tokens for this day.</summary>
-    public required int InputTokens { get; init; }
+    public required long InputTokens { get; init; }
 
     /// <summary>Total output tokens for this day.</summary>
-    public required int OutputTokens { get; init; }
+    public required long OutputTokens { get; init; }
 
     /// <summary>Total tokens saved this day.</summary>
-    public required int SavedTokens { get; init; }
+    public required long SavedTokens { get; init; }
 
     /// <summary>Savings percentage for this day.</summary>
     public required double SavingsPct { get; init; }
@@ -142,13 +142,13 @@ public sealed class WeekStats
     public required int Commands { get; init; }
 
     /// <summary>Total input tokens for this week.</summary>
-    public required int InputTokens { get; init; }
+    public required long InputTokens { get; init; }
 
     /// <summary>Total output tokens for this week.</summary>
-    public required int OutputTokens { get; init; }
+    public required long OutputTokens { get; init; }
 
     /// <summary>Total tokens saved this week.</summary>
-    public required int SavedTokens { get; init; }
+    public required long SavedTokens { get; init; }
 
     /// <summary>Savings percentage for this week.</summary>
     public required double SavingsPct { get; init; }
@@ -173,13 +173,13 @@ public sealed class MonthStats
     public required int Commands { get; init; }
 
     /// <summary>Total input tokens for this month.</summary>
-    public required int InputTokens { get; init; }
+    public required long InputTokens { get; init; }
 
     /// <summary>Total output tokens for this month.</summary>
-    public required int OutputTokens { get; init; }
+    public required long OutputTokens { get; init; }
 
     /// <summary>Total tokens saved this month.</summary>
-    public required int SavedTokens { get; init; }
+    public required long SavedTokens { get; init; }
 
     /// <summary>Savings percentage for this month.</summary>
     public required double SavingsPct { get; init; }
