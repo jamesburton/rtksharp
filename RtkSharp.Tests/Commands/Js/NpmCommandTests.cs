@@ -36,7 +36,7 @@ public sealed class NpmCommandTests
     [Fact]
     public void NeedsRunInjection_EveryWhitelistEntry_ReturnsFalse()
     {
-        // Exhaustive sweep of all 74 entries, mirroring Rust's own `for subcmd in NPM_SUBCOMMANDS` loop.
+        // Exhaustive sweep of all 64 entries, mirroring Rust's own `for subcmd in NPM_SUBCOMMANDS` loop.
         foreach (var subcmd in NpmCommand.NpmSubcommands)
         {
             Assert.False(
