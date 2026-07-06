@@ -43,9 +43,12 @@ public sealed class AstFilterTests
         try
         {
             Console.SetError(se);
-            const string code = "use foo;\nfn main() {\n    let x = 1;\n}\n";
-            var aggressiveResult = new AggressiveFilter().Filter(code, Language.Rust);
-            var astResult = AstFilter.Filter(code, Language.Rust);
+            // Language.Unknown has no registered AST analyzer (unlike Rust, which now does —
+            // see RustAstAnalyzer) and is a realistic case for a file with an unrecognized
+            // extension, so it's a stable target for exercising the fallback path.
+            const string code = "// a comment\nvoid main() {\n    int x = 1;\n}\n";
+            var aggressiveResult = new AggressiveFilter().Filter(code, Language.Unknown);
+            var astResult = AstFilter.Filter(code, Language.Unknown);
             Assert.Equal(aggressiveResult, astResult);
             Assert.Contains("falling back to aggressive", se.ToString());
         }

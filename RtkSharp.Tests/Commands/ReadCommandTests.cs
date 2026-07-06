@@ -448,12 +448,15 @@ public sealed class ReadCommandTests
     [Fact]
     public async Task RunAsync_AstLevel_OnLanguageWithNoAnalyzer_FallsBackToAggressive()
     {
-        var path = NewTempFile("use foo;\nfn main() {\n    let x = 1;\n}\n", extension: ".rs");
+        // An unrecognized extension maps to Language.Unknown, which has no registered AST
+        // analyzer (unlike Rust, which now does — see RustAstAnalyzer) — a stable target for
+        // exercising the fallback path.
+        var path = NewTempFile("// a comment\nvoid main() {\n    int x = 1;\n}\n", extension: ".rtkunknownext");
         try
         {
             var (exit, outText, errText) = await RunCaptureAsync(new[] { "--level", "ast", path });
             Assert.Equal(0, exit);
-            Assert.Contains("use foo;", outText);
+            Assert.Contains("void main()", outText);
             Assert.Contains("falling back to aggressive", errText);
         }
         finally

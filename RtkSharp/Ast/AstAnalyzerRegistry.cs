@@ -14,6 +14,16 @@ public static class AstAnalyzerRegistry
     static AstAnalyzerRegistry()
     {
         Register(new CSharpAstAnalyzer());
+        Register(new RustAstAnalyzer());
+        Register(new PythonAstAnalyzer());
+        Register(new JavaScriptAstAnalyzer());
+        Register(new TypeScriptAstAnalyzer());
+        Register(new GoAstAnalyzer());
+        Register(new CAstAnalyzer());
+        Register(new CppAstAnalyzer());
+        Register(new JavaAstAnalyzer());
+        Register(new RubyAstAnalyzer());
+        Register(new ShellAstAnalyzer());
     }
 
     /// <summary>Registers (or replaces) the analyzer for its <see cref="IAstAnalyzer.Language"/>.</summary>
