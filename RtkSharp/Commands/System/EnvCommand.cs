@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Text;
+using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 
@@ -66,17 +67,23 @@ namespace RtkSharp.Commands.System;
 /// </para>
 /// <para>
 /// <b>Not a meta-command (deliberate Rust-source asymmetry, same as <c>err</c>/<c>test</c>).</b> Rust's
-/// <c>RTK_META_COMMANDS</c> list does not include <c>"env"</c> either (a malformed invocation falls
-/// through to raw passthrough rather than a hard Clap parse error) — but <c>env</c> IS present in
-/// Rust's <c>is_operational_command</c> whitelist. As of this port there is no
-/// operational-vs-meta-command gate built yet for any command, so this is a no-op for now; <c>env</c>
-/// is registered in <see cref="RtkSharp.Cli.CommandRegistry"/> as a normal dispatch entry, which
-/// already gives it the registry-hit-always-wins guarantee established as the sufficient substitute
-/// in Phase 6.
+/// <c>RTK_META_COMMANDS</c> list does not include <c>"env"</c> — a malformed invocation (an
+/// unrecognized flag, a stray positional, or a missing <c>--filter</c> value) is a clap-layer parse
+/// failure that falls through to <c>run_fallback</c>'s raw PATH passthrough exec of the real
+/// <c>env</c> binary, NOT a clean clap-style error. <see cref="ParseArgs"/> throws
+/// <see cref="CommandArgumentParseException"/> for exactly these cases so
+/// <see cref="RtkProgram"/>'s dispatch layer can re-route there — this was a genuine, pre-existing
+/// divergence found during independent review of the broader clap-fallback-exec fix (an earlier
+/// version silently ignored any unrecognized token instead). <c>env</c> is also present in Rust's
+/// <c>is_operational_command</c> whitelist, but as of this port there is no
+/// operational-vs-meta-command gate built for any command, so that distinction remains a no-op;
+/// <c>env</c> is registered in <see cref="RtkSharp.Cli.CommandRegistry"/> as a normal dispatch entry,
+/// which already gives it the registry-hit-always-wins guarantee established as the sufficient
+/// substitute in Phase 6.
 /// </para>
 /// <para>
-/// <b>Always exits 0.</b> Reading the environment cannot fail, and there is no other error path in
-/// <c>env_cmd.rs</c> itself.
+/// <b>Exits 0 once parsed successfully.</b> Reading the environment cannot fail, and there is no
+/// other error path in <c>env_cmd.rs</c> itself.
 /// </para>
 /// </remarks>
 public static class EnvCommand
@@ -101,7 +108,8 @@ public static class EnvCommand
     /// <c>env</c> verb), reading the real process environment and the global verbosity flag.
     /// </summary>
     /// <param name="args">The CLI arguments following <c>env</c>.</param>
-    /// <returns>0 (always — <c>env</c> has no failure path).</returns>
+    /// <returns>0 on success.</returns>
+    /// <exception cref="CommandArgumentParseException">The arguments failed to parse.</exception>
     public static Task<int> RunAsync(string[] args) =>
         Task.FromResult(Run(args, GetProcessEnvironmentVariables(), RuntimeOptions.Verbosity));
 
@@ -111,7 +119,8 @@ public static class EnvCommand
     /// <param name="args">The CLI arguments following <c>env</c>.</param>
     /// <param name="envVars">The environment variables to display (key/value pairs, any order).</param>
     /// <param name="verbosity">The global verbosity level (mirrors Rust's <c>cli.verbose: u8</c>).</param>
-    /// <returns>0 (always — <c>env</c> has no failure path).</returns>
+    /// <returns>0 on success.</returns>
+    /// <exception cref="CommandArgumentParseException">The arguments failed to parse.</exception>
     internal static int Run(IReadOnlyList<string> args, IReadOnlyDictionary<string, string> envVars, int verbosity)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -293,6 +302,16 @@ public static class EnvCommand
     /// </summary>
     /// <param name="args">The raw CLI arguments following the <c>env</c> verb.</param>
     /// <returns>The resolved filter string (or null if not given) and whether <c>--show-all</c> was set.</returns>
+    /// <exception cref="CommandArgumentParseException">
+    /// An unrecognized flag, a stray positional, or a missing value for <c>-f</c>/<c>--filter</c> —
+    /// Rust's <c>Env { filter: Option&lt;String&gt;, show_all: bool }</c> clap struct (main.rs:247-254)
+    /// has no positional field and no <c>trailing_var_arg</c>, so any of these fail at the clap
+    /// layer. <c>env</c> is Rust-classified PASSTHROUGH, not RTK_META_COMMANDS, so the real oracle
+    /// falls back to running the REAL <c>env</c> binary with the original argv (its own
+    /// "unknown option"/"No such file or directory" errors, exit 125/127 — verified directly
+    /// against target/release/rtk.exe) rather than silently ignoring the bad token, which an
+    /// earlier version of this method did.
+    /// </exception>
     internal static (string? Filter, bool ShowAll) ParseArgs(IReadOnlyList<string> args)
     {
         ArgumentNullException.ThrowIfNull(args);
@@ -307,16 +326,13 @@ public static class EnvCommand
 
             if (a == "-f" || a == "--filter")
             {
-                if (i + 1 < args.Count)
+                if (i + 1 >= args.Count)
                 {
-                    filter = args[i + 1];
-                    i += 2;
-                }
-                else
-                {
-                    i++;
+                    throw new CommandArgumentParseException($"a value is required for '{a}' but none was supplied");
                 }
 
+                filter = args[i + 1];
+                i += 2;
                 continue;
             }
 
@@ -334,7 +350,9 @@ public static class EnvCommand
                 continue;
             }
 
-            i++;
+            // Rust's Env struct has no positional field and no trailing_var_arg — any other
+            // token (an unrecognized flag OR a stray positional) is a clap-layer parse failure.
+            throw new CommandArgumentParseException($"unexpected argument '{a}'");
         }
 
         return (filter, showAll);

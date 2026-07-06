@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using RtkSharp.Cli;
 using RtkSharp.Commands.Js;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
@@ -439,19 +440,40 @@ public sealed class PrismaCommandTests
     }
 
     [Fact]
-    public async Task DispatchAsync_EmptyArgs_ReturnsUsageError()
+    public async Task DispatchAsync_EmptyArgs_ThrowsCommandArgumentParseException()
     {
-        var exitCode = await PrismaCommand.DispatchAsync([], verbose: 0, executor: null);
-
-        Assert.Equal(2, exitCode);
+        // `prisma`'s subcommand shape mirrors clap's PrismaCommands enum (closed set) — a missing
+        // subcommand is a clap-layer parse failure. `prisma` is Rust-classified PASSTHROUGH, not
+        // RTK_META_COMMANDS, so the real oracle falls back to a raw PATH-exec attempt of "prisma"
+        // (exit 127 when not installed, verified against target/release/rtk.exe) rather than a
+        // clean clap-style exit 2 — this now throws so RtkProgram's dispatch layer can re-route.
+        var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => PrismaCommand.DispatchAsync([], verbose: 0, executor: null));
+        Assert.Contains("requires a subcommand", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task DispatchAsync_UnknownSubcommand_ReturnsUsageError()
+    public async Task DispatchAsync_UnknownSubcommand_ThrowsCommandArgumentParseException()
     {
-        var exitCode = await PrismaCommand.DispatchAsync(["frobnicate"], verbose: 0, executor: null);
+        var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => PrismaCommand.DispatchAsync(["frobnicate"], verbose: 0, executor: null));
+        Assert.Contains("unknown prisma subcommand 'frobnicate'", ex.Message, StringComparison.Ordinal);
+    }
 
-        Assert.Equal(2, exitCode);
+    [Fact]
+    public async Task DispatchAsync_MigrateEmptyArgs_ThrowsCommandArgumentParseException()
+    {
+        var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => PrismaCommand.DispatchAsync(["migrate"], verbose: 0, executor: null));
+        Assert.Contains("prisma migrate requires a subcommand", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task DispatchAsync_MigrateUnknownSubcommand_ThrowsCommandArgumentParseException()
+    {
+        var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => PrismaCommand.DispatchAsync(["migrate", "frobnicate"], verbose: 0, executor: null));
+        Assert.Contains("unknown prisma migrate subcommand 'frobnicate'", ex.Message, StringComparison.Ordinal);
     }
 
     // -----------------------------------------------------------------------

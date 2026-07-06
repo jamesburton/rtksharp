@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
@@ -80,8 +81,14 @@ public static partial class PlaywrightCommand
         {
             return await RunAsync(args, verbose, executor).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
+            // CommandArgumentParseException must propagate to RtkProgram's dispatch layer,
+            // which re-routes it to the TOML-fallback/raw-passthrough path — it is not a
+            // generic runtime failure, so this safety net must not swallow it. Not thrown from
+            // this command today, but this guard is added proactively (playwright is
+            // Rust-classified PASSTHROUGH) so a future migration here can't silently regress
+            // into the same swallowed-exception bug found in DockerCommand/PrismaCommand.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }

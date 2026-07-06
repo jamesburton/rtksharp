@@ -128,6 +128,16 @@ public class DockerParityTests
                 " => [web 2/4] WORKDIR /app                                          0.1s\n")),
         new("passthrough: unrecognized docker subcommand", ["build", "-t", "myimage", "."], new ToolStub("Successfully built myimage\n")),
         new("passthrough: unrecognized compose subcommand", ["compose", "down"], new ToolStub("Stopping web-1 ... done\n")),
+        // Regression coverage for the clap-fallback-exec fix: `docker` (no subcommand) and
+        // `docker logs` (no container) are clap-level parse failures in Rust, and `docker` is
+        // PASSTHROUGH (not RTK_META_COMMANDS) — so the oracle falls back to running the REAL
+        // `docker` binary with the original argv rather than printing a clap-style usage error.
+        // The stand-in's canned output/exit code is returned regardless of args, so a match here
+        // proves RtkSharp's dispatch layer genuinely re-execs "docker"/"docker logs" via the
+        // fallback path (previously it printed its own message and returned exit 2 without ever
+        // spawning anything).
+        new("no subcommand: falls back to the real docker binary", [], new ToolStub("Usage: docker [OPTIONS] COMMAND\n", ExitCode: 0)),
+        new("logs: no container falls back to the real docker binary", ["logs"], new ToolStub("docker: 'docker logs' requires 1 argument\n", ExitCode: 1)),
     ];
 
     // ===================== execution =====================

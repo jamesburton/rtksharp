@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using RtkSharp.Ast;
+using RtkSharp.Cli;
 using RtkSharp.Core;
 
 namespace RtkSharp.Commands.System;
@@ -57,25 +58,28 @@ public static partial class ReadCommand
     /// <summary>
     /// Parses the arguments following the <c>read</c> verb, reads each file (or stdin for
     /// <c>-</c>), and prints the (optionally windowed and numbered) contents. Returns 1 if any
-    /// file could not be read, otherwise 0. Requesting a non-default filter level, or supplying
-    /// no files or conflicting window flags, prints an error to stderr and returns 2.
+    /// file could not be read, otherwise 0. A malformed invocation (unknown flag, missing value,
+    /// invalid <c>--level</c>/count value, conflicting window flags, or no files) throws
+    /// <see cref="CommandArgumentParseException"/> rather than handling it here — <c>read</c> is
+    /// Rust-classified PASSTHROUGH, so the oracle's own clap-level parse failure never reaches
+    /// read.rs's body at all; RtkProgram's dispatch layer catches this and re-routes through the
+    /// same TOML-fallback/raw-passthrough path used for an unregistered verb.
     /// </summary>
     /// <param name="args">The arguments following the <c>read</c> verb.</param>
-    /// <returns>0 on success, 1 if any file failed to read, 2 on a usage/scope error.</returns>
+    /// <returns>0 on success, 1 if any file failed to read.</returns>
+    /// <exception cref="CommandArgumentParseException">The arguments failed to parse.</exception>
     public static Task<int> RunAsync(string[] args)
     {
         ArgumentNullException.ThrowIfNull(args);
 
-        ReadArgs parsed;
-        try
-        {
-            parsed = ParseArgs(args);
-        }
-        catch (ArgumentException ex)
-        {
-            Console.Error.WriteLine($"rtk: read: {ex.Message}");
-            return Task.FromResult(2);
-        }
+        // ParseArgs throws CommandArgumentParseException (not caught here) for anything Rust's
+        // clap would reject at the top-level parse — RtkProgram's dispatch layer catches it and
+        // re-routes through the same TOML-fallback/raw-passthrough path used for an unregistered
+        // verb, since `read` is Rust-classified PASSTHROUGH (not RTK_META_COMMANDS): the oracle's
+        // own parse failure here never reaches read.rs's body at all. See
+        // CommandArgumentParseException's remarks and the compatibility-ledger entry documenting
+        // this discovery.
+        var parsed = ParseArgs(args);
 
         var hadError = false;
         var stdinSeen = false;
@@ -330,7 +334,7 @@ public static partial class ReadCommand
     /// </summary>
     /// <param name="args">The raw argument vector following the verb.</param>
     /// <returns>The parsed arguments.</returns>
-    /// <exception cref="ArgumentException">On unknown flags, missing values, conflicting window flags, or no files.</exception>
+    /// <exception cref="CommandArgumentParseException">On unknown flags, missing values, conflicting window flags, or no files.</exception>
     internal static ReadArgs ParseArgs(string[] args)
     {
         var files = new List<string>();
@@ -361,7 +365,7 @@ public static partial class ReadCommand
             }
             else if (arg.Length > 1 && arg.StartsWith('-') && arg != "-")
             {
-                throw new ArgumentException($"unexpected argument '{arg}'");
+                throw new CommandArgumentParseException($"unexpected argument '{arg}'");
             }
             else
             {
@@ -371,12 +375,12 @@ public static partial class ReadCommand
 
         if (maxLines is not null && tailLines is not null)
         {
-            throw new ArgumentException("the argument '--max-lines' cannot be used with '--tail-lines'");
+            throw new CommandArgumentParseException("the argument '--max-lines' cannot be used with '--tail-lines'");
         }
 
         if (files.Count == 0)
         {
-            throw new ArgumentException("the following required arguments were not provided: <FILES>");
+            throw new CommandArgumentParseException("the following required arguments were not provided: <FILES>");
         }
 
         return new ReadArgs(files, level, maxLines, tailLines, lineNumbers);
@@ -394,7 +398,7 @@ public static partial class ReadCommand
         {
             if (i + 1 >= args.Length)
             {
-                throw new ArgumentException($"a value is required for '{longName}' but none was supplied");
+                throw new CommandArgumentParseException($"a value is required for '{longName}' but none was supplied");
             }
 
             value = args[++i];
@@ -420,7 +424,7 @@ public static partial class ReadCommand
             "aggressive" => FilterLevel.Aggressive,
             // RtkSharp-only extra tier, on top of the three Rust recognizes — see FilterLevel.Ast.
             "ast" => FilterLevel.Ast,
-            _ => throw new ArgumentException($"invalid value '{value}' for '--level'")
+            _ => throw new CommandArgumentParseException($"invalid value '{value}' for '--level'")
         };
 
     private static int ParseCount(string value, string flag)
@@ -428,7 +432,7 @@ public static partial class ReadCommand
         if (!int.TryParse(value, global::System.Globalization.NumberStyles.None,
                 global::System.Globalization.CultureInfo.InvariantCulture, out var count))
         {
-            throw new ArgumentException($"invalid value '{value}' for '{flag}': not a non-negative integer");
+            throw new CommandArgumentParseException($"invalid value '{value}' for '{flag}': not a non-negative integer");
         }
 
         return count;

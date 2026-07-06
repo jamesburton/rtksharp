@@ -1,3 +1,5 @@
+using RtkSharp;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 
@@ -263,16 +265,16 @@ public sealed class ReadCommandTests
 
     [Fact]
     public void ParseArgs_ConflictingWindowFlags_Throws() =>
-        Assert.Throws<ArgumentException>(() =>
+        Assert.Throws<CommandArgumentParseException>(() =>
             ReadCommand.ParseArgs(new[] { "--max-lines", "3", "--tail-lines", "2", "f.txt" }));
 
     [Fact]
     public void ParseArgs_NoFiles_Throws() =>
-        Assert.Throws<ArgumentException>(() => ReadCommand.ParseArgs(new[] { "-n" }));
+        Assert.Throws<CommandArgumentParseException>(() => ReadCommand.ParseArgs(new[] { "-n" }));
 
     [Fact]
     public void ParseArgs_UnknownFlag_Throws() =>
-        Assert.Throws<ArgumentException>(() => ReadCommand.ParseArgs(new[] { "--bogus", "f.txt" }));
+        Assert.Throws<CommandArgumentParseException>(() => ReadCommand.ParseArgs(new[] { "--bogus", "f.txt" }));
 
     [Fact]
     public void ParseArgs_DashIsFileNotFlag()
@@ -411,14 +413,37 @@ public sealed class ReadCommandTests
     }
 
     [Fact]
-    public async Task RunAsync_InvalidLevel_ReturnsTwo()
+    public async Task RunAsync_InvalidLevel_ThrowsCommandArgumentParseException()
     {
+        // RunAsync no longer catches its own parse failures — it's RtkProgram's dispatch layer
+        // that catches CommandArgumentParseException and re-routes to the fallback path (see
+        // RunAsync_InvalidLevel_ViaRtkProgram_FallsBackAndReturns127 for the end-to-end case).
         var path = NewTempFile("x\n");
         try
         {
-            var (exit, _, errText) = await RunCaptureAsync(new[] { "--level", "bogus", path });
-            Assert.Equal(2, exit);
-            Assert.Contains("invalid value", errText);
+            var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+                () => ReadCommand.RunAsync(new[] { "--level", "bogus", path }));
+            Assert.Contains("invalid value", ex.Message);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidLevel_ViaRtkProgram_FallsBackAndReturns127()
+    {
+        // End-to-end: oracle-verified real behavior is that `rtk read --level bogus file` (a
+        // clap-level parse failure for a PASSTHROUGH-classified verb) falls back to a raw PATH
+        // exec attempt of "read" (no such binary exists) and exits 127 — NOT read.rs's own body,
+        // which never runs. This is the actual fix for the compatibility-ledger's documented
+        // clap-fallback-exec divergence.
+        var path = NewTempFile("x\n");
+        try
+        {
+            var exit = await RtkProgram.RunAsync(new[] { "read", "--level", "bogus", path });
+            Assert.Equal(127, exit);
         }
         finally
         {
@@ -488,11 +513,9 @@ public sealed class ReadCommandTests
     }
 
     [Fact]
-    public async Task RunAsync_ConflictingFlags_ReturnsTwo()
-    {
-        var (exit, _, _) = await RunCaptureAsync(new[] { "--max-lines", "3", "--tail-lines", "2", "f.txt" });
-        Assert.Equal(2, exit);
-    }
+    public async Task RunAsync_ConflictingFlags_ThrowsCommandArgumentParseException() =>
+        await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => ReadCommand.RunAsync(new[] { "--max-lines", "3", "--tail-lines", "2", "f.txt" }));
 
     [Fact]
     public async Task RunAsync_DuplicateStdin_WarnsOnce()

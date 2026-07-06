@@ -1,3 +1,4 @@
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
@@ -213,10 +214,14 @@ public static class NpmCommand
             var effectiveArgs = BuildEffectiveArgs(args);
             return await RunFilteredAsync("npm", effectiveArgs, verbose, skipEnv).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
             // Fail-loud, same convention as RunCommand/ProxyCommand: an rtk-level failure (not a
             // filter failure — CommandRunner already guards those) surfaces as `rtk: {message}`.
+            // CommandArgumentParseException must propagate to RtkProgram's dispatch layer instead
+            // (re-routed to the TOML-fallback/raw-passthrough path); not thrown from this command
+            // today, but guarded proactively — see DockerCommand/PrismaCommand's own remarks for
+            // the swallowed-exception bug this prevents.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }
@@ -240,8 +245,10 @@ public static class NpmCommand
         {
             return await DispatchNpxAsync(args, verbose, skipEnv, executor).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
+            // Guarded proactively, not thrown from this command today — see NpmCommand's other
+            // catch (above) and DockerCommand/PrismaCommand's remarks for why.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }

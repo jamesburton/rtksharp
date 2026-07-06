@@ -1,4 +1,5 @@
 using System.Text;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
@@ -125,10 +126,12 @@ public static class PrismaCommand
         {
             return await DispatchAsync(args, verbose, executor).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
             // Fail-loud, same convention as NpmCommand/PnpmCommand: an rtk-level failure surfaces as
-            // `rtk: {message}`.
+            // `rtk: {message}`. CommandArgumentParseException must propagate to RtkProgram's
+            // dispatch layer instead (re-routed to the TOML-fallback/raw-passthrough path) — it
+            // is not a generic runtime failure, so this safety net must not swallow it.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }
@@ -148,10 +151,15 @@ public static class PrismaCommand
     {
         ArgumentNullException.ThrowIfNull(args);
 
+        // `prisma`'s subcommand shape mirrors clap's PrismaCommands enum — a closed set, no
+        // external-subcommand catch-all — so a missing/unrecognized subcommand is a clap-layer
+        // parse failure. `prisma` is Rust-classified PASSTHROUGH (not RTK_META_COMMANDS), so the
+        // real oracle never reaches prisma_cmd.rs's body here; it falls back to a raw PATH-exec
+        // attempt of "prisma" (exit 127 when no such binary is installed, verified directly
+        // against target/release/rtk.exe) rather than a clean clap-style exit 2.
         if (args.Length == 0)
         {
-            Console.Error.Write("rtk: prisma requires a subcommand (generate, migrate, db-push)\n");
-            return Task.FromResult(2);
+            throw new CommandArgumentParseException("prisma requires a subcommand (generate, migrate, db-push)");
         }
 
         switch (args[0])
@@ -166,8 +174,7 @@ public static class PrismaCommand
                 return DispatchMigrateAsync(args[1..], verbose, executor);
 
             default:
-                Console.Error.Write($"rtk: unknown prisma subcommand '{args[0]}'\n");
-                return Task.FromResult(2);
+                throw new CommandArgumentParseException($"unknown prisma subcommand '{args[0]}'");
         }
     }
 
@@ -175,8 +182,7 @@ public static class PrismaCommand
     {
         if (args.Length == 0)
         {
-            Console.Error.Write("rtk: prisma migrate requires a subcommand (dev, status, deploy)\n");
-            return Task.FromResult(2);
+            throw new CommandArgumentParseException("prisma migrate requires a subcommand (dev, status, deploy)");
         }
 
         switch (args[0])
@@ -192,8 +198,7 @@ public static class PrismaCommand
                 return RunMigrateDeployAsync(args[1..], verbose, executor);
 
             default:
-                Console.Error.Write($"rtk: unknown prisma migrate subcommand '{args[0]}'\n");
-                return Task.FromResult(2);
+                throw new CommandArgumentParseException($"unknown prisma migrate subcommand '{args[0]}'");
         }
     }
 

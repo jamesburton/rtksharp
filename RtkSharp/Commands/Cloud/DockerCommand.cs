@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Threading.Tasks;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
@@ -71,8 +72,11 @@ public static class DockerCommand
         {
             return await RunCoreAsync(args, verbose, executor).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
+            // CommandArgumentParseException must propagate to RtkProgram's dispatch layer, which
+            // re-routes it to the TOML-fallback/raw-passthrough path — it is not a generic
+            // runtime failure, so it must not be swallowed by this safety net.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }
@@ -90,8 +94,13 @@ public static class DockerCommand
     {
         if (args.Length == 0)
         {
-            Console.Error.Write("error: 'rtk docker' requires a subcommand but one was not provided\n  [subcommands: ps, images, logs, compose]\n\nUsage: rtk docker <COMMAND>\n\nFor more information, try '--help'.\n");
-            return 2;
+            // Rust's `DockerCommands` is a REQUIRED clap subcommand enum (main.rs:1792) — `rtk
+            // docker` with no subcommand fails at the clap layer before container.rs's body ever
+            // runs. `docker` is Rust-classified PASSTHROUGH (not RTK_META_COMMANDS), so that clap
+            // failure falls back to a raw PATH-exec attempt of "docker" (main.rs's run_fallback),
+            // NOT a docker-specific usage message — this throw lets RtkProgram's dispatch layer
+            // re-route there instead of printing this message directly.
+            throw new CommandArgumentParseException("'rtk docker' requires a subcommand but one was not provided");
         }
 
         var subcommand = args[0];
@@ -347,15 +356,20 @@ public static class DockerCommand
     private static async Task<int> RunLogsAsync(string[] rest, IProcessExecutor executor)
     {
         // Rust's `DockerCommands::Logs { container: String }` (main.rs:920) is a REQUIRED clap
-        // positional — `rtk docker logs` with zero args never reaches this function at all; it fails
-        // at the clap layer with a usage banner and exit 2, matching the established
-        // GainCommand/HookAuditCommand/TelemetryCommand short-usage-error convention. The module's own
-        // `container.is_empty()` check (container.rs:309) is reachable ONLY via an explicit empty
-        // string argument (e.g. `rtk docker logs ""`), which clap itself does not reject.
+        // positional — `rtk docker logs` with zero args never reaches this function at all; it
+        // fails at the clap layer. `docker` is Rust-classified PASSTHROUGH (not
+        // RTK_META_COMMANDS — confirmed against src/main.rs's test_every_subcommand_is_classified
+        // and the real oracle, which for this exact case falls back to running the REAL `docker`
+        // binary with the original argv, printing docker's OWN "'docker logs' requires 1
+        // argument" usage and exiting 1 — NOT a clean clap-style exit 2, and NOT RtkSharp's own
+        // message). Throwing here lets RtkProgram's dispatch layer re-route to that same
+        // TOML-fallback/raw-passthrough path. The module's own `container.is_empty()` check below
+        // is reachable ONLY via an explicit empty string argument (e.g. `rtk docker logs ""`),
+        // which clap itself does not reject.
         if (rest.Length == 0)
         {
-            Console.Error.Write("error: the following required arguments were not provided:\n  <CONTAINER>\n\nUsage: rtk docker logs <CONTAINER>\n\nFor more information, try '--help'.\n");
-            return 2;
+            throw new CommandArgumentParseException(
+                "the following required arguments were not provided: <CONTAINER>");
         }
 
         var container = rest[0];

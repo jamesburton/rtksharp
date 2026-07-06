@@ -1,3 +1,4 @@
+using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
@@ -62,8 +63,10 @@ public static class ErrCommand
         {
             return await RunCoreAsync(args, executor).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
+            // Guarded proactively, not thrown from this command today — see DockerCommand/
+            // PrismaCommand's remarks for the swallowed-exception bug this prevents.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }

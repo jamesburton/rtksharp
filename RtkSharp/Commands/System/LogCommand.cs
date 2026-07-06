@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 
@@ -57,8 +58,10 @@ public static class LogCommand
 
             return RunStdin(Console.In, Console.Out);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
+            // Guarded proactively, not thrown from this command today — see DockerCommand/
+            // PrismaCommand's remarks for the swallowed-exception bug this prevents.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }

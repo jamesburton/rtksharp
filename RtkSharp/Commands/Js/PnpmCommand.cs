@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
@@ -140,9 +141,11 @@ public static partial class PnpmCommand
         {
             return await DispatchAsync(args, verbose, executor).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
             // Fail-loud, same convention as NpmCommand: an rtk-level failure surfaces as `rtk: {message}`.
+            // Guarded proactively, not thrown from this command today — see DockerCommand/
+            // PrismaCommand's remarks for the swallowed-exception bug this prevents.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }

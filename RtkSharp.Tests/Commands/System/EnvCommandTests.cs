@@ -3,7 +3,10 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.Data.Sqlite;
+using RtkSharp;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core.Tracking;
 using Xunit;
@@ -178,6 +181,36 @@ public sealed class EnvCommandTests
         var (filter, showAll) = EnvCommand.ParseArgs(["--show-all"]);
         Assert.Null(filter);
         Assert.True(showAll);
+    }
+
+    // Regression tests for a real, pre-existing divergence caught during independent review of
+    // the broader clap-fallback-exec fix: Rust's Env { filter: Option<String>, show_all: bool }
+    // clap struct (main.rs:247-254) has no positional field and no trailing_var_arg, so an
+    // unrecognized flag, a stray positional, or a missing --filter value all fail at the clap
+    // layer — an earlier version of ParseArgs silently ignored any such token instead of
+    // rejecting it, which (since env is Rust-classified PASSTHROUGH, not RTK_META_COMMANDS) meant
+    // RtkSharp printed filtered env output with exit 0 where the oracle falls back to running the
+    // real `env` binary (its own "unknown option"/"No such file or directory" errors, exit
+    // 125/127 — verified directly against target/release/rtk.exe).
+    [Fact]
+    public void ParseArgs_UnrecognizedFlag_ThrowsCommandArgumentParseException() =>
+        Assert.Throws<CommandArgumentParseException>(() => EnvCommand.ParseArgs(["--badflag"]));
+
+    [Fact]
+    public void ParseArgs_StrayPositional_ThrowsCommandArgumentParseException() =>
+        Assert.Throws<CommandArgumentParseException>(() => EnvCommand.ParseArgs(["somepositional"]));
+
+    [Fact]
+    public void ParseArgs_FilterFlagMissingValue_ThrowsCommandArgumentParseException() =>
+        Assert.Throws<CommandArgumentParseException>(() => EnvCommand.ParseArgs(["-f"]));
+
+    [Fact]
+    public async Task RunAsync_UnrecognizedFlag_ViaRtkProgram_FallsBackToRealEnvBinary()
+    {
+        // End-to-end: confirms the fallback genuinely re-execs the real `env` binary rather than
+        // RtkSharp silently printing its own filtered output — this is the actual fix.
+        var exit = await RtkProgram.RunAsync(["env", "--badflag"]);
+        Assert.NotEqual(0, exit);
     }
 
     // -----------------------------------------------------------------------

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using RtkSharp.Cli;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Execution;
@@ -105,10 +106,11 @@ public static partial class TscCommand
         {
             return await ExecuteAsync(args, verbose).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not CommandArgumentParseException)
         {
             // Fail-loud, same convention as NpmCommand/PnpmCommand: an rtk-level failure surfaces as
-            // `rtk: {message}`.
+            // `rtk: {message}`. Guarded proactively, not thrown from this command today — see
+            // DockerCommand/PrismaCommand's remarks for the swallowed-exception bug this prevents.
             Console.Error.Write($"rtk: {ex.Message}\n");
             return 1;
         }

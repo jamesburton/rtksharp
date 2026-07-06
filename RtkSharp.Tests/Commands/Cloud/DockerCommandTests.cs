@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using RtkSharp.Cli;
 using RtkSharp.Commands.Cloud;
 using RtkSharp.Execution;
 using Xunit;
@@ -199,12 +200,18 @@ public sealed class DockerCommandTests
     // ===================== RunCoreAsync: dispatch via a recording/responding fake executor =====================
 
     [Fact]
-    public async Task RunCoreAsync_NoArgs_PrintsUsageErrorAndReturnsTwo()
+    public async Task RunCoreAsync_NoArgs_ThrowsCommandArgumentParseException()
     {
+        // `docker` is Rust-classified PASSTHROUGH, not RTK_META_COMMANDS — confirmed against
+        // src/main.rs's test_every_subcommand_is_classified and the real oracle, which for `rtk
+        // docker` (no subcommand) falls back to running the REAL docker binary (prints ITS OWN
+        // usage, exits 0 if docker.exe is present) rather than a clean clap-style exit 2. This
+        // now throws so RtkProgram's dispatch layer can re-route there instead of RunCoreAsync
+        // printing its own message.
         var executor = new RecordingExecutor(_ => Ok(""));
-        var stderr = await CaptureStderrAsync(() => DockerCommand.RunCoreAsync([], verbose: 0, executor));
-
-        Assert.Contains("requires a subcommand", stderr, StringComparison.Ordinal);
+        var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => DockerCommand.RunCoreAsync([], verbose: 0, executor));
+        Assert.Contains("requires a subcommand", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -282,16 +289,18 @@ public sealed class DockerCommandTests
     }
 
     [Fact]
-    public async Task RunCoreAsync_Logs_NoArgsAtAll_UsageErrorExitTwo()
+    public async Task RunCoreAsync_Logs_NoArgsAtAll_ThrowsCommandArgumentParseException()
     {
         // Rust's `container: String` positional is REQUIRED at the clap layer — zero args never
-        // reaches docker_logs at all; it's a clap usage error, exit 2.
+        // reaches docker_logs at all. `docker` is Rust-classified PASSTHROUGH, not
+        // RTK_META_COMMANDS, so the real oracle falls back to running the REAL docker binary
+        // with the original argv (its own "'docker logs' requires 1 argument" message, exit 1),
+        // not a clean clap-style exit 2 — verified directly against target/release/rtk.exe.
         var executor = new RecordingExecutor(_ => Ok(""));
 
-        var (stderr, exit) = await CaptureStderrAndExitAsync(() => DockerCommand.RunCoreAsync(["logs"], verbose: 0, executor));
-
-        Assert.Equal(2, exit);
-        Assert.Contains("required arguments", stderr, StringComparison.Ordinal);
+        var ex = await Assert.ThrowsAsync<CommandArgumentParseException>(
+            () => DockerCommand.RunCoreAsync(["logs"], verbose: 0, executor));
+        Assert.Contains("required arguments", ex.Message, StringComparison.Ordinal);
         Assert.Empty(executor.Requests);
     }
 

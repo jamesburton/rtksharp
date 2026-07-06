@@ -53,13 +53,23 @@ internal static class RtkProgram
 
         if (CommandRegistry.TryGet(parsed.CommandName, out var handler))
         {
-            return await handler(parsed.CommandArgs).ConfigureAwait(false);
+            try
+            {
+                return await handler(parsed.CommandArgs).ConfigureAwait(false);
+            }
+            catch (CommandArgumentParseException)
+            {
+                // The module's own argument parsing rejected these args in a way Rust's clap
+                // would have too (see CommandArgumentParseException's remarks) — re-dispatch
+                // through the SAME fallback mechanism used below for a verb with no module at
+                // all, using the ORIGINAL raw args, not the module's own usage message.
+            }
         }
 
-        // Last-resort TOML filter fallback for commands with no dedicated module (mirrors Rust's
-        // run_fallback TOML branch, main.rs:1213-1292). Strictly after the registry lookup, so a
-        // dedicated module's behavior is never changed. Runtime hot path: any lookup failure returns
-        // null and degrades to the raw passthrough below; RTK_NO_TOML=1 also bypasses it.
+        // Last-resort TOML filter fallback: for a verb with no dedicated module, OR a dedicated
+        // module whose own argument parsing just rejected these args (mirrors Rust's run_fallback
+        // TOML branch, main.rs:1213-1292). Runtime hot path: any lookup failure returns null and
+        // degrades to the raw passthrough below; RTK_NO_TOML=1 also bypasses it.
         var tomlExit = await TryTomlFallbackAsync(
             parsed.CommandName,
             parsed.CommandArgs,
