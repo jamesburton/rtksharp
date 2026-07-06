@@ -386,7 +386,15 @@ public static class RewriteEngine
     /// category/savings/status fields and the Ignored-vs-Unsupported distinction (both suppress
     /// rewrite) are elided.
     /// </summary>
-    private static string? ClassifyRtkEquivalent(string cmd)
+    /// <remarks>
+    /// Promoted from <see langword="private"/> to <see langword="internal"/> so
+    /// <c>RtkSharp.Discover.CommandClassifier</c> can reuse this exact matching pipeline for
+    /// <c>rtk session</c>'s command-classification needs — in Rust, <c>classify_command</c> and
+    /// <c>rewrite_command</c> are not separate schemes; they share the same <c>RULES</c> table and
+    /// matching pipeline in <c>discover/registry.rs</c>, so RtkSharp reuses the one ported engine
+    /// rather than duplicating it.
+    /// </remarks>
+    internal static string? ClassifyRtkEquivalent(string cmd)
     {
         string trimmed = cmd.Trim();
         if (trimmed.Length == 0)
@@ -477,8 +485,12 @@ public static class RewriteEngine
         return null;
     }
 
-    /// <summary>Quote-aware heredoc detection. Port of Rust <c>has_heredoc</c> (registry.rs:230).</summary>
-    private static bool HasHeredoc(string cmd)
+    /// <summary>
+    /// Quote-aware heredoc detection. Port of Rust <c>has_heredoc</c> (registry.rs:230). Promoted to
+    /// <see langword="internal"/> so <c>RtkSharp.Discover.CommandClassifier</c> can reuse it for
+    /// <c>split_command_chain</c>'s identical short-circuit check.
+    /// </summary>
+    internal static bool HasHeredoc(string cmd)
     {
         return ShellLexer.Tokenize(cmd)
             .Any(t => t.Kind == TokenKind.Redirect && t.Value.StartsWith("<<"));
