@@ -1,4 +1,5 @@
 using RtkSharp.Commands.System;
+using RtkSharp.Core;
 
 namespace RtkSharp.Tests.Commands;
 
@@ -40,6 +41,17 @@ public sealed class ReadCommandTests
     [Fact]
     public void SplitLines_EmptyStringYieldsNoLines() =>
         Assert.Empty(ReadCommand.SplitLines(string.Empty));
+
+    // Regression test for a real divergence caught in independent review, confirmed against the
+    // official Rust str::lines() docs: a bare trailing \r with no following \n (the final,
+    // unterminated segment) is KEPT, not stripped — only an interior \r immediately before a \n
+    // is stripped. An earlier version stripped it unconditionally in both cases.
+    [Fact]
+    public void SplitLines_BareTrailingCarriageReturnWithNoFollowingNewline_IsKept()
+    {
+        var lines = ReadCommand.SplitLines("a\nb\r");
+        Assert.Equal(new[] { "a", "b\r" }, lines);
+    }
 
     [Fact]
     public void SplitLines_PreservesInteriorBlankLines()
@@ -133,6 +145,52 @@ public sealed class ReadCommandTests
         Assert.Equal(total, kept + reported);
     }
 
+    // ---- Render: filter-emptied-non-empty-content safety fallback (read.rs's own guard) ----
+
+    [Fact]
+    public void Render_FilterEmptiesNonEmptyContent_FallsBackToRawAndWarns()
+    {
+        // A file containing only a single-line comment: MinimalFilter strips it to nothing.
+        var origErr = Console.Error;
+        var se = new StringWriter();
+        try
+        {
+            Console.SetError(se);
+            var output = ReadCommand.Render(
+                "// only a comment\n", Language.Rust, FilterLevel.Minimal, maxLines: null, tailLines: null,
+                lineNumbers: false, filePath: "comment-only.rs");
+            Assert.Equal("// only a comment\n", output);
+            Assert.Contains("filter produced empty output", se.ToString());
+            Assert.Contains("comment-only.rs", se.ToString());
+        }
+        finally
+        {
+            Console.SetError(origErr);
+        }
+    }
+
+    [Fact]
+    public void Render_StdinPath_FilterEmptiesContent_NoFallbackNoWarning()
+    {
+        // Mirrors read.rs's run_stdin, which has NO empty-output safety guard (only run() does)
+        // — filePath: null skips the check entirely, matching a genuine oracle asymmetry.
+        var origErr = Console.Error;
+        var se = new StringWriter();
+        try
+        {
+            Console.SetError(se);
+            var output = ReadCommand.Render(
+                "// only a comment\n", Language.Rust, FilterLevel.Minimal, maxLines: null, tailLines: null,
+                lineNumbers: false, filePath: null);
+            Assert.Equal(string.Empty, output);
+            Assert.DoesNotContain("filter produced empty output", se.ToString());
+        }
+        finally
+        {
+            Console.SetError(origErr);
+        }
+    }
+
     // ---- FormatWithLineNumbers (oracle-derived) ----
 
     [Fact]
@@ -152,6 +210,19 @@ public sealed class ReadCommandTests
         Assert.Equal("1 │ <Solution>\n2 │ </Solution>\n", output);
     }
 
+    // ---- GetExtension (Rust Path::extension() semantics) ----
+
+    [Theory]
+    [InlineData("foo.rs", "rs")]
+    [InlineData("dir/foo.tar.gz", "gz")]
+    [InlineData("noext", "")]
+    [InlineData(".gitignore", "")]
+    [InlineData(".env", "")]
+    [InlineData(".env.local", "local")]
+    [InlineData("dir/.env", "")]
+    public void GetExtension_MatchesRustPathExtensionSemantics(string path, string expected) =>
+        Assert.Equal(expected, ReadCommand.GetExtension(path));
+
     // ---- ParseArgs ----
 
     [Fact]
@@ -159,7 +230,7 @@ public sealed class ReadCommandTests
     {
         var parsed = ReadCommand.ParseArgs(new[] { "a.txt", "b.txt" });
         Assert.Equal(new[] { "a.txt", "b.txt" }, parsed.Files);
-        Assert.Equal(ReadCommand.FilterLevelOption.None, parsed.Level);
+        Assert.Equal(FilterLevel.None, parsed.Level);
         Assert.Null(parsed.MaxLines);
         Assert.Null(parsed.TailLines);
         Assert.False(parsed.LineNumbers);
@@ -323,18 +394,93 @@ public sealed class ReadCommandTests
     }
 
     [Fact]
-    public async Task RunAsync_MinimalLevel_ReportsUnsupportedAndReturnsTwo()
+    public async Task RunAsync_MinimalLevel_StripsCommentsForDetectedLanguage()
     {
-        var path = NewTempFile("x\n");
+        var path = NewTempFile("// a comment\nfn main() {}\n", extension: ".rs");
         try
         {
-            var (exit, _, errText) = await RunCaptureAsync(new[] { "--level", "minimal", path });
-            Assert.Equal(2, exit);
-            Assert.Contains("not yet supported", errText);
+            var (exit, outText, _) = await RunCaptureAsync(new[] { "--level", "minimal", path });
+            Assert.Equal(0, exit);
+            Assert.DoesNotContain("// a comment", outText);
+            Assert.Contains("fn main()", outText);
         }
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_InvalidLevel_ReturnsTwo()
+    {
+        var path = NewTempFile("x\n");
+        try
+        {
+            var (exit, _, errText) = await RunCaptureAsync(new[] { "--level", "bogus", path });
+            Assert.Equal(2, exit);
+            Assert.Contains("invalid value", errText);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_AstLevel_OnCSharpFile_UsesRoslynAnalyzer()
+    {
+        var path = NewTempFile(
+            "public class Foo\n{\n    public void Bar()\n    {\n        var x = 1;\n    }\n}\n",
+            extension: ".cs");
+        try
+        {
+            var (exit, outText, _) = await RunCaptureAsync(new[] { "--level", "ast", path });
+            Assert.Equal(0, exit);
+            Assert.Contains("public void Bar()", outText);
+            Assert.DoesNotContain("var x = 1;", outText);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_AstLevel_OnLanguageWithNoAnalyzer_FallsBackToAggressive()
+    {
+        var path = NewTempFile("use foo;\nfn main() {\n    let x = 1;\n}\n", extension: ".rs");
+        try
+        {
+            var (exit, outText, errText) = await RunCaptureAsync(new[] { "--level", "ast", path });
+            Assert.Equal(0, exit);
+            Assert.Contains("use foo;", outText);
+            Assert.Contains("falling back to aggressive", errText);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_AggressiveLevel_OnDotfileWithNoExtension_TreatedAsUnknownNotData()
+    {
+        // ".env" has no extension under Rust's Path::extension() semantics (leading dot, no
+        // other dot) — Language::Unknown, not Language::Data, so it DOES get comment-stripped
+        // (with C-style // patterns, which is what the real oracle does for .env files too).
+        var dir = Directory.CreateTempSubdirectory("rtk_read_dotfile_").FullName;
+        var path = Path.Combine(dir, ".env");
+        File.WriteAllText(path, "// comment\nKEY=value\n");
+        try
+        {
+            var (exit, outText, _) = await RunCaptureAsync(new[] { "--level", "minimal", path });
+            Assert.Equal(0, exit);
+            Assert.DoesNotContain("// comment", outText);
+            Assert.Contains("KEY=value", outText);
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
         }
     }
 
@@ -352,9 +498,9 @@ public sealed class ReadCommandTests
         Assert.Contains("stdin specified more than once", errText);
     }
 
-    private static string NewTempFile(string content)
+    private static string NewTempFile(string content, string extension = ".txt")
     {
-        var path = Path.Combine(Path.GetTempPath(), "rtk_read_" + Guid.NewGuid().ToString("N") + ".txt");
+        var path = Path.Combine(Path.GetTempPath(), "rtk_read_" + Guid.NewGuid().ToString("N") + extension);
         File.WriteAllText(path, content);
         return path;
     }

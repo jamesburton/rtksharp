@@ -1,5 +1,7 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using RtkSharp.Ast;
+using RtkSharp.Core;
 
 namespace RtkSharp.Commands.System;
 
@@ -13,21 +15,19 @@ namespace RtkSharp.Commands.System;
 /// </summary>
 /// <remarks>
 /// Ported from <c>src/cmds/system/read.rs</c> together with the multi-file dispatch loop in
-/// <c>src/main.rs</c> (<c>Commands::Read</c>). Two intentional scope limits:
+/// <c>src/main.rs</c> (<c>Commands::Read</c>), including all three <c>--level</c> filter tiers
+/// (<c>none</c>/<c>minimal</c>/<c>aggressive</c>) via <see cref="Core.SourceFilter"/>
+/// (<c>src/core/filter.rs</c>), language detection by file extension, and the
+/// filter-emptied-non-empty-content safety fallback (read.rs's own
+/// <c>if filtered.trim().is_empty() &amp;&amp; !content.trim().is_empty()</c> guard). One
+/// intentional scope limit remains:
 /// <list type="bullet">
-///   <item>
-///     <b>Filter levels.</b> Only the default <c>--level none</c> (verbatim content) path is
-///     ported. <c>minimal</c> and <c>aggressive</c> delegate into the language-aware engine of
-///     <c>src/core/filter.rs</c> (comment/boilerplate stripping), which is out of scope here;
-///     requesting either returns a clear error instead of silently degrading. The line-window
-///     helper (<c>--max-lines</c>) is part of the <c>none</c> path and is ported faithfully,
-///     including the structural <c>smart_truncate</c> heuristic.
-///   </item>
 ///   <item>
 ///     <b>Verbose diagnostics.</b> The registered handler signature is
 ///     <c>RunAsync(string[])</c> and receives no verbosity level, so read.rs's stderr
-///     <c>eprintln!</c> diagnostics (reduction stats, detected language) are omitted; they
-///     never affect printed output.
+///     <c>eprintln!</c> diagnostics (reduction stats, detected language, "Reading: ...") are
+///     omitted; they never affect printed output. The empty-output safety warning IS ported
+///     (unconditional in Rust, not gated on verbosity).
 ///   </item>
 /// </list>
 /// Token-savings tracking (read.rs's <c>TimedExecution</c>) is also omitted: native commands
@@ -77,15 +77,6 @@ public static partial class ReadCommand
             return Task.FromResult(2);
         }
 
-        // Scope limit: minimal/aggressive delegate into the language-aware filter engine,
-        // which is not ported. Fail loudly rather than silently returning verbatim content.
-        if (parsed.Level != FilterLevelOption.None)
-        {
-            Console.Error.WriteLine(
-                "rtk: read: filter levels (minimal, aggressive) not yet supported in RtkSharp");
-            return Task.FromResult(2);
-        }
-
         var hadError = false;
         var stdinSeen = false;
 
@@ -101,8 +92,11 @@ public static partial class ReadCommand
 
                 stdinSeen = true;
                 var stdinContent = Console.In.ReadToEnd();
-                // stdin has no extension → Unknown language (irrelevant for the none path).
-                var rendered = Render(stdinContent, parsed.MaxLines, parsed.TailLines, parsed.LineNumbers);
+                // stdin has no extension and, per read.rs's run_stdin, no empty-output safety
+                // fallback (that guard exists only in run(), the file path) — filePath: null.
+                var rendered = Render(
+                    stdinContent, Language.Unknown, parsed.Level, parsed.MaxLines, parsed.TailLines,
+                    parsed.LineNumbers, filePath: null);
                 Console.Out.Write(rendered);
                 continue;
             }
@@ -110,7 +104,10 @@ public static partial class ReadCommand
             try
             {
                 var content = File.ReadAllText(file);
-                var rendered = Render(content, parsed.MaxLines, parsed.TailLines, parsed.LineNumbers);
+                var language = LanguageExtensions.FromExtension(GetExtension(file));
+                var rendered = Render(
+                    content, language, parsed.Level, parsed.MaxLines, parsed.TailLines, parsed.LineNumbers,
+                    filePath: file);
                 Console.Out.Write(rendered);
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or
@@ -127,20 +124,43 @@ public static partial class ReadCommand
     }
 
     /// <summary>
-    /// Produces the printed form of a single file's content for the <c>none</c> filter level:
-    /// applies the line window (tail/max) then optional line numbering. With no window and no
-    /// numbering the content is returned verbatim (byte-for-byte, preserving CRLF).
+    /// Produces the printed form of a single file's content: applies the requested
+    /// <paramref name="level"/> filter, then the line window (tail/max), then optional line
+    /// numbering. With <see cref="FilterLevel.None"/>, no window, and no numbering, the content
+    /// is returned verbatim (byte-for-byte, preserving CRLF).
     /// </summary>
     /// <param name="content">The raw file (or stdin) content.</param>
+    /// <param name="language">The detected source language, used by <paramref name="level"/>'s filter.</param>
+    /// <param name="level">The requested filter level.</param>
     /// <param name="maxLines">Keep only the first N lines via <see cref="SmartTruncate"/>, or null.</param>
     /// <param name="tailLines">Keep only the last N lines, or null. Mutually exclusive with <paramref name="maxLines"/>.</param>
     /// <param name="lineNumbers">When true, prefix each line with a right-aligned line number.</param>
+    /// <param name="filePath">
+    /// The file's display path, used only for the empty-output safety warning below. Pass
+    /// <c>null</c> for stdin — read.rs's <c>run_stdin</c> has no such guard, only <c>run</c> does.
+    /// </param>
     /// <returns>The rendered text ready to print.</returns>
-    public static string Render(string content, int? maxLines, int? tailLines, bool lineNumbers)
+    public static string Render(
+        string content, Language language, FilterLevel level, int? maxLines, int? tailLines, bool lineNumbers,
+        string? filePath = null)
     {
         ArgumentNullException.ThrowIfNull(content);
-        var filtered = ApplyLineWindow(content, maxLines, tailLines);
-        return lineNumbers ? FormatWithLineNumbers(filtered) : filtered;
+
+        var filtered = level == FilterLevel.Ast
+            ? AstFilter.Filter(content, language)
+            : SourceFilter.GetFilter(level).Filter(content, language);
+        if (filePath is not null && filtered.Trim().Length == 0 && content.Trim().Length != 0)
+        {
+            // content.len() in Rust is a UTF-8 byte count, not a UTF-16 char count.
+            var byteCount = Encoding.UTF8.GetByteCount(content);
+            Console.Error.WriteLine(
+                $"rtk: warning: filter produced empty output for {filePath} ({byteCount} bytes), " +
+                "showing raw content");
+            filtered = content;
+        }
+
+        var windowed = ApplyLineWindow(filtered, maxLines, tailLines);
+        return lineNumbers ? FormatWithLineNumbers(windowed) : windowed;
     }
 
     /// <summary>
@@ -247,7 +267,11 @@ public static partial class ReadCommand
                 keptLines++;
             }
 
-            if (keptLines >= maxLines - 1)
+            // maxLines is Rust's usize; `max_lines - 1` at max_lines == 0 wraps to usize::MAX
+            // there, so the break condition effectively never fires and the oracle keeps every
+            // structurally-important line instead of stopping after the first. int subtraction
+            // doesn't wrap the same way, so replicate the never-breaks behavior explicitly.
+            if (maxLines != 0 && keptLines >= maxLines - 1)
             {
                 break;
             }
@@ -258,60 +282,31 @@ public static partial class ReadCommand
     }
 
     /// <summary>
-    /// Splits text into lines exactly as Rust's <c>str::lines()</c> does: on <c>\n</c>, with a
-    /// trailing <c>\r</c> stripped from each line, and no trailing empty line after a final
-    /// <c>\n</c>. An empty string yields no lines.
+    /// Extracts a file extension with Rust's <c>Path::extension()</c> semantics: the substring
+    /// after the last <c>.</c> in the file name, or empty if there is no <c>.</c> — critically,
+    /// also empty when the <c>.</c> is the file name's first character and there is no other
+    /// (a "dotfile" like <c>.gitignore</c> or <c>.env</c> has no extension in Rust, unlike
+    /// .NET's own <see cref="Path.GetExtension(string)"/>, which would return <c>.env</c> whole
+    /// and — if the leading dot were naively stripped — misclassify it as
+    /// <see cref="Language.Data"/> instead of <see cref="Language.Unknown"/>).
+    /// </summary>
+    /// <param name="path">The file path.</param>
+    /// <returns>The extension without the leading dot, or empty.</returns>
+    internal static string GetExtension(string path)
+    {
+        var fileName = Path.GetFileName(path);
+        var lastDot = fileName.LastIndexOf('.');
+        return lastDot <= 0 ? string.Empty : fileName[(lastDot + 1)..];
+    }
+
+    /// <summary>
+    /// Splits text into lines exactly as Rust's <c>str::lines()</c> does. Delegates to the
+    /// single shared implementation in <see cref="SourceFilterLineSplitter"/> so this logic —
+    /// including the trailing-bare-<c>\r</c>-is-kept edge case — exists in one place.
     /// </summary>
     /// <param name="text">The text to split.</param>
     /// <returns>The lines.</returns>
-    internal static List<string> SplitLines(string text)
-    {
-        var result = new List<string>();
-        if (text.Length == 0)
-        {
-            return result;
-        }
-
-        var start = 0;
-        for (var i = 0; i < text.Length; i++)
-        {
-            if (text[i] == '\n')
-            {
-                result.Add(StripCarriageReturn(text, start, i));
-                start = i + 1;
-            }
-        }
-
-        if (start < text.Length)
-        {
-            result.Add(StripCarriageReturn(text, start, text.Length));
-        }
-
-        return result;
-
-        static string StripCarriageReturn(string text, int start, int end)
-        {
-            if (end > start && text[end - 1] == '\r')
-            {
-                end--;
-            }
-
-            return text[start..end];
-        }
-    }
-
-    /// <summary>The filter level requested via <c>--level</c>. Only <see cref="None"/> is ported.</summary>
-    internal enum FilterLevelOption
-    {
-        /// <summary>No filtering — verbatim content (the default and only supported level).</summary>
-        None,
-
-        /// <summary>Language-aware light comment stripping (not ported).</summary>
-        Minimal,
-
-        /// <summary>Language-aware aggressive boilerplate stripping (not ported).</summary>
-        Aggressive
-    }
+    internal static List<string> SplitLines(string text) => SourceFilterLineSplitter.SplitLines(text);
 
     /// <summary>Parsed <c>read</c> arguments.</summary>
     /// <param name="Files">The files to read, in order; <c>-</c> denotes stdin.</param>
@@ -321,7 +316,7 @@ public static partial class ReadCommand
     /// <param name="LineNumbers">Whether <c>-n</c>/<c>--line-numbers</c> was given.</param>
     internal sealed record ReadArgs(
         IReadOnlyList<string> Files,
-        FilterLevelOption Level,
+        FilterLevel Level,
         int? MaxLines,
         int? TailLines,
         bool LineNumbers
@@ -339,7 +334,7 @@ public static partial class ReadCommand
     internal static ReadArgs ParseArgs(string[] args)
     {
         var files = new List<string>();
-        var level = FilterLevelOption.None;
+        var level = FilterLevel.None;
         int? maxLines = null;
         int? tailLines = null;
         var lineNumbers = false;
@@ -417,12 +412,14 @@ public static partial class ReadCommand
         return false;
     }
 
-    private static FilterLevelOption ParseLevel(string value) =>
+    private static FilterLevel ParseLevel(string value) =>
         value.ToLowerInvariant() switch
         {
-            "none" => FilterLevelOption.None,
-            "minimal" => FilterLevelOption.Minimal,
-            "aggressive" => FilterLevelOption.Aggressive,
+            "none" => FilterLevel.None,
+            "minimal" => FilterLevel.Minimal,
+            "aggressive" => FilterLevel.Aggressive,
+            // RtkSharp-only extra tier, on top of the three Rust recognizes — see FilterLevel.Ast.
+            "ast" => FilterLevel.Ast,
             _ => throw new ArgumentException($"invalid value '{value}' for '--level'")
         };
 

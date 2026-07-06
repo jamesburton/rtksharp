@@ -43,6 +43,17 @@
       for the verified oracle comparison.
     -->
     <PackageReference Include="Tomlyn" Version="2.10.1" />
+    <!--
+      Roslyn's C# syntax-tree API, powering RtkSharp/Ast/CSharpAstAnalyzer.cs — the reference
+      implementation of the new, RtkSharp-only "rtk read, level=ast" tier (no Rust counterpart;
+      this is a deliberate extension beyond the ported spec, disclosed in
+      docs/parity/compatibility-ledger.md). Only the syntax layer (CSharpSyntaxTree.ParseText) is
+      used, not a full Compilation/semantic model — no project references or metadata are needed,
+      keeping this to a pure text-in/text-out transform. NOTE: Microsoft.CodeAnalysis.CSharp has
+      NOT been verified compatible with this project's PublishAot=true; see CSharpAstAnalyzer.cs's
+      class remarks for the current AOT-publish status.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
     <InternalsVisibleTo Include="RtkSharp.Tests" />
   </ItemGroup>
 
