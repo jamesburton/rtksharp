@@ -44,6 +44,8 @@ public static class CommandRegistry
         Register("session", args => Task.FromResult(SessionCommand.Run(args)));
         Register("curl", CurlCommand.RunAsync);
         Register("lint", LintCommand.RunAsync);
+        Register("log", args => Task.FromResult(LogCommand.Run(args)));
+        Register("docker", DockerCommand.RunAsync);
 
         // Registering "gain" here (rather than raw shell passthrough) is what gives it Rust's
         // RTK_META_COMMANDS guarantee (main.rs:1170-1205): a lookup hit in this registry always wins
