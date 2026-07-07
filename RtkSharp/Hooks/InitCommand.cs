@@ -906,19 +906,21 @@ public static class InitCommand
     /// <summary>
     /// Prints current global Claude Code configuration status. Port of the Claude subset of Rust
     /// <c>show_claude_config</c> (init.rs:3300): hook / RTK.md / CLAUDE.md (global + local) /
-    /// settings.json status lines, the unconditional OpenCode and Cursor "not found" status lines
-    /// (reproduced byte-exact even though those agents' install paths are deferred to a later
-    /// task — they always resolve to their "not installed" branch since this port never writes
-    /// those artifacts), and the closing Usage block.
+    /// settings.json status lines, the OpenCode and Cursor status lines (now read real install
+    /// state via <see cref="CursorInit.HookAlreadyPresent"/> and a plain <c>File.Exists</c> check —
+    /// both agents' install paths are fully ported, unlike when this doc was first written), and
+    /// the closing Usage block.
     /// </summary>
     /// <remarks>
     /// The Rust function's hook-integrity status line (only shown when a <b>legacy shell-script</b>
     /// hook file exists and the binary command isn't registered) is intentionally not reproduced:
-    /// this port never writes a legacy shell-script hook, so that condition is structurally
-    /// unreachable here, and the real integrity-verification logic (hashing, tamper detection) is
-    /// Task 3 scope. Likewise, the Rust function's Unix-only detailed hook-script diagnostics
+    /// this port never writes a legacy shell-script hook for CLAUDE CODE specifically (Gemini does
+    /// write one, with a real SHA-256 baseline via <see cref="Integrity.StoreHash"/> and
+    /// <see cref="VerifyCommand"/> — that integrity/verify machinery is fully ported, just not
+    /// applicable to Claude Code's binary-command hook model), so that condition is structurally
+    /// unreachable here. Likewise, the Rust function's Unix-only detailed hook-script diagnostics
     /// (executable bit, guard-comment sniffing, version parsing) are not reproduced for the same
-    /// reason — this port has nothing to diagnose there.
+    /// reason — this port has nothing to diagnose there for Claude Code.
     /// </remarks>
     private static void ShowClaudeConfig()
     {

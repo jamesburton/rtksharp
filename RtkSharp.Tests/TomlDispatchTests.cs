@@ -63,6 +63,34 @@ public sealed class TomlDispatchTests
     private static TrustChecker Trusted(string content) =>
         _ => new FilterTrustResult(FilterTrustStatus.Trusted, content);
 
+    /// <summary>Redirects <c>RTK_TEE_DIR</c> to a throwaway directory so tee-hint tests never touch
+    /// the real <c>%LOCALAPPDATA%/rtk/tee</c> location. Same shape as <c>ErrCommandTests.TempTeeDir</c>.</summary>
+    private sealed class TempTeeDir : IDisposable
+    {
+        private readonly string? _previous = Environment.GetEnvironmentVariable("RTK_TEE_DIR");
+
+        public string Path { get; } =
+            System.IO.Path.Combine(System.IO.Path.GetTempPath(), "rtksharp-toml-dispatch-tee-" + Guid.NewGuid().ToString("N"));
+
+        public TempTeeDir()
+        {
+            Directory.CreateDirectory(Path);
+            Environment.SetEnvironmentVariable("RTK_TEE_DIR", Path);
+        }
+
+        public void Dispose()
+        {
+            Environment.SetEnvironmentVariable("RTK_TEE_DIR", _previous);
+            try
+            {
+                Directory.Delete(Path, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     [Fact]
     public async Task TryTomlFallback_MatchingFilter_ProducesFilteredOutput()
     {
@@ -122,6 +150,60 @@ public sealed class TomlDispatchTests
         {
             Environment.SetEnvironmentVariable("RTK_NO_TOML", previous);
         }
+    }
+
+    [Fact]
+    public async Task TryTomlFallback_FilterFailure_TeesRawOutputAndAppendsHint()
+    {
+        using var scope = new ProjectScope(ProjectToml);
+        using var teeDir = new TempTeeDir();
+
+        var stdout = new StringWriter { NewLine = "\n" };
+        var stderr = new StringWriter { NewLine = "\n" };
+        // Padded well past Tee's 500-char minimum, non-zero exit code, so both this port's and
+        // Rust's tee_and_hint(&combined_raw, &raw_command, exit_code) (main.rs:1260-1265) trigger.
+        var padded = "keep1\n" + new string('x', 600) + "\nDROP me\nkeep2\n";
+        var exec = new FakeExecutor(new ExecutionResult(padded, string.Empty, 7, TimeSpan.Zero, true, null, false));
+
+        var result = await RtkProgram.TryTomlFallbackAsync(
+            "zz-strip", new[] { "extra" }, stdout, stderr, exec, Trusted(ProjectToml), CancellationToken.None);
+
+        Assert.Equal(7, result);
+        var output = stdout.ToString();
+        // The filter strips "DROP me" from the printed (filtered) output, as usual.
+        Assert.DoesNotContain("DROP me", output);
+        Assert.Contains("[full output: ", output);
+
+        var teedFiles = Directory.GetFiles(teeDir.Path);
+        Assert.Single(teedFiles);
+        // Synchronous read deliberately: CwdGuard's Monitor.Enter/Exit pair (held by the enclosing
+        // ProjectScope) requires the same thread throughout — a real async I/O await here could
+        // resume on a different thread pool thread and throw SynchronizationLockException on
+        // disposal. The earlier `await TryTomlFallbackAsync(...)` above is safe only because
+        // FakeExecutor resolves its ValueTask synchronously (no thread hop).
+        var teedContent = File.ReadAllText(teedFiles[0]);
+        // The teed file holds the RAW (pre-filter) output, including the "DROP me" line the
+        // filter strips — this is the whole point of teeing before filtering.
+        Assert.Contains("DROP me", teedContent);
+    }
+
+    [Fact]
+    public async Task TryTomlFallback_FilterSuccess_DoesNotTee()
+    {
+        using var scope = new ProjectScope(ProjectToml);
+        using var teeDir = new TempTeeDir();
+
+        var stdout = new StringWriter { NewLine = "\n" };
+        var stderr = new StringWriter { NewLine = "\n" };
+        var padded = "keep1\n" + new string('x', 600) + "\nDROP me\nkeep2\n";
+        var exec = new FakeExecutor(new ExecutionResult(padded, string.Empty, 0, TimeSpan.Zero, true, null, false));
+
+        var result = await RtkProgram.TryTomlFallbackAsync(
+            "zz-strip", Array.Empty<string>(), stdout, stderr, exec, Trusted(ProjectToml), CancellationToken.None);
+
+        Assert.Equal(0, result);
+        Assert.DoesNotContain("[full output: ", stdout.ToString());
+        Assert.Empty(Directory.GetFiles(teeDir.Path));
     }
 
     [Theory]

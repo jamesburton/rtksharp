@@ -118,9 +118,12 @@ internal static class RtkProgram
     /// passthrough — when <c>RTK_NO_TOML=1</c> is set, no filter matches, the command could not be
     /// started, or the lookup itself failed (fallback pattern: a bad filter/registry never blocks the
     /// command). The lookup uses the <em>basename</em> of the verb so absolute paths
-    /// (<c>/usr/bin/make</c>) still match anchored patterns like <c>^make\b</c>. Tee/raw-recovery
-    /// hinting on failure (Rust's <c>tee_and_hint</c>) is out of scope this phase (the tee store is
-    /// unported), so it is deliberately omitted.
+    /// (<c>/usr/bin/make</c>) still match anchored patterns like <c>^make\b</c>. On a non-zero exit
+    /// code, the raw (pre-filter) output is teed to disk and a recovery hint appended to the
+    /// filtered output — see <see cref="Tee.TeeAndHint"/> — matching Rust's own
+    /// <c>tee_and_hint(&amp;combined_raw, &amp;raw_command, exit_code)</c> call (<c>main.rs:1260-1265</c>);
+    /// the tee slug uses the ORIGINAL (non-basename) command text, matching Rust's
+    /// <c>raw_command = args.join(" ")</c>.
     /// </remarks>
     /// <param name="commandName">The unrecognized verb (may be an absolute path).</param>
     /// <param name="commandArgs">The verb's arguments.</param>
@@ -200,6 +203,19 @@ internal static class RtkProgram
             }
         }
 
+        // Tee raw output BEFORE filtering on failure — lets the LLM re-read it if the filter
+        // dropped something relevant. Mirrors Rust's tee_and_hint(&combined_raw, &raw_command,
+        // exit_code) call (main.rs:1260-1265), using the ORIGINAL (non-basename) command text as
+        // the slug, exactly like Rust's raw_command = args.join(" ").
+        string? teeHint = null;
+        if (result.ExitCode != 0)
+        {
+            var rawCommand = commandArgs.Length > 0
+                ? commandName + " " + string.Join(' ', commandArgs)
+                : commandName;
+            teeHint = Tee.TeeAndHint(combinedRaw, rawCommand, result.ExitCode);
+        }
+
         string filtered;
         try
         {
@@ -213,6 +229,13 @@ internal static class RtkProgram
 
         stdout.Write(filtered);
         stdout.Write('\n'); // Rust prints via println! (adds a trailing newline).
+
+        if (teeHint is not null)
+        {
+            stdout.Write(teeHint);
+            stdout.Write('\n');
+        }
+
         return result.ExitCode;
     }
 
