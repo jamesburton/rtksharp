@@ -47,10 +47,10 @@ namespace RtkSharp.Hooks;
 /// <c>"Antigravity is project-scoped. Use: rtk init --agent antigravity"</c> when <c>-g</c> is passed,
 /// <b>before</b> calling <c>run_kilocode_mode</c>/<c>run_antigravity_mode</c> — those two functions
 /// themselves take no <c>global</c> parameter at all, exactly like <c>run_cline_mode</c>/
-/// <c>run_windsurf_mode</c>. Reproducing that guard belongs to the future <c>InitCommand</c> dispatch
-/// wiring (out of scope here per this task's file boundaries), not to this class; <see cref="RunKilocode"/>
-/// and <see cref="RunAntigravity"/> match the Rust function signatures exactly (context only, no
-/// <c>global</c> flag).
+/// <c>run_windsurf_mode</c>. That guard is reproduced verbatim in <c>InitCommand.RunCore</c> (not in
+/// this class), matching Rust's own placement in <c>main.rs</c> rather than <c>init.rs</c>;
+/// <see cref="RunKilocode"/> and <see cref="RunAntigravity"/> match the Rust function signatures
+/// exactly (context only, no <c>global</c> flag).
 /// </para>
 /// <para>
 /// <b>No Rust uninstall or <c>--show</c> support exists for any of these four agents.</b> Confirmed by
