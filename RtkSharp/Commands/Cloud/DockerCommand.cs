@@ -15,16 +15,18 @@ namespace RtkSharp.Commands.Cloud;
 /// Implements the <c>rtk docker</c> CLI verb group (<c>ps</c>/<c>images</c>/<c>logs</c>/<c>compose</c>,
 /// plus a generic passthrough fallback for any other subcommand). Faithful port of the
 /// docker-specific portions of Rust <c>src/cmds/cloud/container.rs</c> — the module is shared with
-/// <c>kubectl</c>/<c>oc</c> in Rust, but those are out of scope for this port (see class remarks).
+/// <c>kubectl</c>/<c>oc</c> in Rust, ported separately as <see cref="KubectlCommand"/>/
+/// <see cref="OcCommand"/> (see class remarks).
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Scope: docker only, not kubectl/oc.</b> Rust's <c>container.rs</c> also implements
-/// <c>kubectl</c>/<c>oc</c> (pods/services/logs via <c>run_k8s_json</c>), which share almost no code
-/// with the docker-specific logic beyond the execution/tee/truncation skeleton. This port covers only
-/// the <c>Docker</c>/<c>DockerCommands</c>/<c>ComposeCommands</c> surface; <c>kubectl</c>/<c>oc</c>
-/// remain unported, per <c>docs/parity/command-inventory.md</c>'s independent "Port after core"
-/// disposition for each.
+/// <b>Scope: docker-specific logic only; kubectl/oc are separate sibling classes.</b> Rust's
+/// <c>container.rs</c> also implements <c>kubectl</c>/<c>oc</c> (pods/services/logs via
+/// <c>run_k8s_json</c>), which share almost no code with the docker-specific logic beyond the
+/// execution/tee/truncation skeleton. This class covers only the <c>Docker</c>/<c>DockerCommands</c>/
+/// <c>ComposeCommands</c> surface; <c>kubectl</c>/<c>oc</c> are ported as <see cref="KubectlCommand"/>/
+/// <see cref="OcCommand"/>, sharing their own genuinely-common logic via <c>ContainerFilters.cs</c>
+/// rather than being folded into this file.
 /// </para>
 /// <para>
 /// <b><c>raw</c> is sequential concatenation, not true interleaved capture.</b> Rust's

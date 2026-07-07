@@ -52,8 +52,8 @@ public enum NpxRouteKind
 /// </summary>
 /// <param name="Kind">Which target the tool name routed to.</param>
 /// <param name="RemainingArgs">
-/// The arguments after the routed tool name (and, for prisma, after its recognized subcommand) —
-/// informational for the stub routes, since no filter exists yet to consume them.
+/// The arguments after the routed tool name (and, for prisma, after its recognized subcommand),
+/// consumed by whichever real filter <see cref="NpxRouteKind"/> routes to.
 /// </param>
 /// <param name="PassthroughArgs">
 /// The full argument vector (including the tool name, e.g. <c>["prisma", "migrate", "status"]</c>) to
@@ -260,7 +260,7 @@ public static class NpmCommand
     /// Dispatches an <c>npx</c> invocation to its routed target. Ports the body of Rust's
     /// <c>Commands::Npx</c> arm (<c>main.rs</c>:2163-2218): an empty argument list bails with the exact
     /// message <c>"npx requires a command argument"</c>; otherwise <see cref="ResolveNpxRoute"/>
-    /// determines the target and this method executes (or stub-throws for) it.
+    /// determines the target and this method executes it.
     /// </summary>
     /// <param name="args">The arguments following the <c>npx</c> verb.</param>
     /// <param name="verbose">The verbosity level, forwarded to the default route's filtered pipeline.</param>
