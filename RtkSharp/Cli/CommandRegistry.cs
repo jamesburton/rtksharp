@@ -5,6 +5,7 @@ using RtkSharp.Core;
 using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
 using RtkSharp.Commands.Js;
+using RtkSharp.Commands.Rust;
 using RtkSharp.Commands.System;
 using RtkSharp.Hooks;
 using RtkSharp.Rewrite;
@@ -70,6 +71,7 @@ public static class CommandRegistry
         Register("jest", VitestCommand.RunJestAsync);
         Register("playwright", PlaywrightCommand.RunAsync);
         Register("prisma", PrismaCommand.RunAsync);
+        Register("cargo", CargoCommand.RunAsync);
 
         // Registering "run" here gives it the same RTK_META_COMMANDS-equivalent guarantee as "gain"
         // above: a registry hit always wins over RtkProgram.RunAsync's TOML-fallback/raw-passthrough
