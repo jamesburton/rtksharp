@@ -71,24 +71,20 @@ namespace RtkSharp.ParityTests;
 /// compared (project convention — see <see cref="GainParityTests"/>/<see cref="HookParityTests"/>).
 /// </para>
 /// <para>
-/// <b><c>pipe</c> auto-detect entries deliberately avoid the ecosystem-filter-delegation gap.</b>
-/// <see cref="PipeCommand"/>'s class remarks disclose that <c>cargo-test</c>/<c>pytest</c>/
-/// <c>go-test</c>/<c>go-build</c>/<c>tsc</c>/<c>vitest</c>/<c>mypy</c>/<c>ruff-*</c>/<c>prettier</c>/
-/// <c>log</c> all resolve to <see cref="PipeCommand"/>'s <c>IdentityFilter</c> passthrough in
-/// RtkSharp (no ecosystem filter module exists yet for those languages in this port), whereas the
-/// Rust oracle actually applies its ported filter for several of those signatures on auto-detect
-/// (e.g. a real pytest/cargo-test summary auto-detected by signature would filter differently on the
-/// oracle than the identity-passthrough this port produces) — so this battery's two auto-detect
-/// entries are deliberately the two signatures with <i>no</i> delegation gap at all: the
-/// grep-line-shape signature (<c>GrepWrapper</c>) and the path-listing shape signature
-/// (<c>FindWrapper</c>), both fully, symmetrically ported with no ecosystem dependency in either
-/// codebase. The named-filter-alias entries below include one genuinely-delegating alias
+/// <b>The <c>pipe</c> ecosystem-filter-delegation gap is CLOSED.</b> <see cref="PipeCommand"/>'s
+/// <c>ResolveFilter</c>/<c>AutoDetectFilter</c> used to fall back to <c>IdentityFilter</c> passthrough
+/// for <c>cargo-test</c>/<c>pytest</c>/<c>go-test</c>/<c>go-build</c>/<c>tsc</c>/<c>vitest</c>/
+/// <c>mypy</c>/<c>ruff-*</c>/<c>prettier</c>/<c>log</c> because no ecosystem filter module existed yet
+/// for those languages in this port; now that Rust/Cargo, Python, Go, and JS are all ported, every one
+/// of those aliases delegates to its real ecosystem filter, matching the Rust oracle
+/// (<c>docs/parity/compatibility-ledger.md</c>'s "RESOLVED" row for this gap). The auto-detect entries
+/// below use the grep-line-shape signature (<c>GrepWrapper</c>) and the path-listing shape signature
+/// (<c>FindWrapper</c>) — both fully, symmetrically ported with no ecosystem dependency in either
+/// codebase — and the named-filter-alias entries include both a genuinely-delegating alias
 /// (<c>git-log</c>, which drives <see cref="RtkSharp.Commands.Git.GitCommand"/>'s already-ported
-/// filter logic) and one disclosed-gap identity-passthrough alias (<c>cargo-test</c>) specifically to
-/// exercise both paths under the "each named-filter alias" battery requirement, while every auto-
-/// detect entry sticks to the two gap-free signatures so this file's own parity numbers are not
-/// artificially deflated by a gap that is already ledgered elsewhere
-/// (<c>docs/parity/compatibility-ledger.md</c>).
+/// filter logic) and the formerly-disclosed-gap alias (<c>cargo-test</c>, now also genuinely
+/// delegating to <c>CargoBuildTestFilters.FilterCargoTest</c>) so this battery exercises the
+/// named-filter-alias path with two real delegating examples, not an identity-passthrough stand-in.
 /// </para>
 /// </remarks>
 public class PipeProxyRunParityTests
@@ -96,19 +92,15 @@ public class PipeProxyRunParityTests
     private const double ParityThresholdPercent = 95.0;
 
     /// <summary>
-    /// The exact set of entry labels this battery is known — and allowed — to mismatch, per the
-    /// disclosed <c>pipe -f cargo-test</c> ecosystem-filter-delegation gap documented in this
-    /// class's remarks and <c>docs/parity/compatibility-ledger.md</c>. This must be an exact set
-    /// match, not merely a count/percentage: any mismatch outside this set is a real regression,
-    /// and this ledgered entry unexpectedly starting to match is itself news (it means the gap has
-    /// closed and this test — plus the ledger — needs updating), so both directions are asserted
+    /// The exact set of entry labels this battery is known — and allowed — to mismatch. Empty: the
+    /// <c>pipe -f cargo-test</c> ecosystem-filter-delegation gap that previously lived here is now
+    /// CLOSED (see this class's remarks and <c>docs/parity/compatibility-ledger.md</c>'s "RESOLVED"
+    /// row), so every entry in this battery is expected to match the oracle exactly. This must be an
+    /// exact set match, not merely a count/percentage: any mismatch is a real regression, asserted
     /// explicitly rather than folded into a single threshold check.
     /// </summary>
     private static readonly IReadOnlySet<string> ExpectedMismatchLabels =
-        new HashSet<string>(StringComparer.Ordinal)
-        {
-            "pipe -f cargo-test (disclosed-gap identity passthrough alias)",
-        };
+        new HashSet<string>(StringComparer.Ordinal);
 
     /// <summary>A single battery entry: a label, the full CLI args (including the leading verb), and optional stdin content.</summary>
     private sealed record Entry(string Label, string[] Args, string Stdin);
@@ -160,25 +152,25 @@ public class PipeProxyRunParityTests
                 $"  MISMATCH [{r.Label}]: rustExit={r.RustExit} portExit={r.PortExit} stdoutMatch={r.StdoutMatches}");
         }
 
-        // Pin the mismatch to the SPECIFIC disclosed-gap entry rather than a raw percentage/count:
-        // a percentage threshold alone would tolerate any one mismatch, silently masking a real
-        // regression on a currently-passing entry if it happened to coincide with the ledgered
-        // cargo-test gap closing elsewhere. Assert the exact set of mismatching labels instead.
+        // Pin mismatches to an exact, empty set rather than a raw percentage/count: a percentage
+        // threshold alone would tolerate any one mismatch, silently masking a real regression.
+        // Assert the exact set of mismatching labels instead (empty now that the cargo-test gap
+        // that used to live in ExpectedMismatchLabels has closed).
         var actualMismatchLabels = new HashSet<string>(
             results.Where(r => !r.IsMatch).Select(r => r.Label), StringComparer.Ordinal);
 
         var unexpectedMismatches = actualMismatchLabels.Except(ExpectedMismatchLabels).ToList();
         Assert.True(
             unexpectedMismatches.Count == 0,
-            "Unexpected mismatch(es) outside the disclosed-gap ledger — this is a real regression, " +
-            $"not the known cargo-test gap: {string.Join(", ", unexpectedMismatches)}.\n{detail}");
+            "Unexpected mismatch(es) against the oracle — this is a real regression: " +
+            $"{string.Join(", ", unexpectedMismatches)}.\n{detail}");
 
         var nowPassingGaps = ExpectedMismatchLabels.Except(actualMismatchLabels).ToList();
         Assert.True(
             nowPassingGaps.Count == 0,
-            "Expected disclosed-gap entry(ies) now pass against the oracle — the ecosystem-filter-" +
-            "delegation gap has apparently closed. Update ExpectedMismatchLabels in this file and " +
-            $"docs/parity/compatibility-ledger.md to reflect the new state: {string.Join(", ", nowPassingGaps)}.\n{detail}");
+            "Expected disclosed-gap entry(ies) now pass against the oracle. Update " +
+            "ExpectedMismatchLabels in this file and docs/parity/compatibility-ledger.md to reflect " +
+            $"the new state: {string.Join(", ", nowPassingGaps)}.\n{detail}");
 
         // Belt-and-braces: the exact-set assertions above already pin identity, but keep the
         // percentage floor too as a coarse sanity check consistent with every other battery file.
@@ -200,7 +192,7 @@ public class PipeProxyRunParityTests
             "abc1234 Fix the thing\ndef5678 Add the other thing\n"));
 
         list.Add(new(
-            "pipe -f cargo-test (disclosed-gap identity passthrough alias)",
+            "pipe -f cargo-test (genuinely delegating alias)",
             ["pipe", "-f", "cargo-test"],
             "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n"));
 
