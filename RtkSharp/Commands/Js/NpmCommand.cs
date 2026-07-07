@@ -30,17 +30,14 @@ public enum NpxRouteKind
     /// </summary>
     PrismaPassthrough,
 
-    /// <summary>
-    /// <c>npx eslint</c> — out of scope for this phase (no dedicated RtkSharp filter exists), so it
-    /// gets raw passthrough rather than npm's filter.
-    /// </summary>
-    EslintPassthrough,
+    /// <summary><c>npx eslint</c> — delegates to <see cref="LintCommand.RunAsync(string[], int, IProcessExecutor)"/>.</summary>
+    Eslint,
 
-    /// <summary><c>npx next</c> — out of scope for this phase; raw passthrough.</summary>
-    NextPassthrough,
+    /// <summary><c>npx next</c> — delegates to <see cref="NextCommand.RunNextSafeAsync"/>.</summary>
+    Next,
 
-    /// <summary><c>npx prettier</c> — out of scope for this phase; raw passthrough.</summary>
-    PrettierPassthrough,
+    /// <summary><c>npx prettier</c> — delegates to <see cref="PrettierCommand.RunPrettierSafeAsync"/>.</summary>
+    Prettier,
 
     /// <summary>
     /// Any unrecognized tool — falls through to <c>npm_cmd::exec</c>'s filtered pipeline
@@ -83,14 +80,19 @@ internal readonly record struct NpxRoute(NpxRouteKind Kind, string[] RemainingAr
 /// straight through, matching each filter's own argument shape.
 /// </para>
 /// <para>
-/// <b>eslint/next/prettier: raw passthrough, not a stub.</b> These three are explicitly out of scope
-/// for the whole Phase 8 JS-stack milestone (see the phase plan's Scope Decision) — Rust itself would
-/// only special-case them if <c>lint_cmd</c>/<c>next_cmd</c>/<c>prettier_cmd</c> existed as ported
-/// modules, and in this port they never will. Since there is no future task to defer to, they route to
-/// unfiltered <c>npx</c> passthrough (inherited stdio, no capture, no filtering) — mirroring the exact
-/// inline pattern Rust uses for an unrecognized <c>prisma</c> subcommand (manual
-/// <c>TimedExecution</c>/<c>resolved_command</c> call rather than the shared <c>run_filtered</c>
-/// skeleton, <c>main.rs</c>:2187-2211).
+/// <b>eslint/next/prettier: now delegate to their real filters (was raw passthrough, resolved).</b>
+/// This block previously routed all three to unfiltered <c>npx</c> passthrough, on the premise that
+/// Rust would only special-case them if <c>lint_cmd</c>/<c>next_cmd</c>/<c>prettier_cmd</c> existed as
+/// ported RtkSharp modules — but <c>main.rs</c>'s <c>Commands::Npx</c> arm (<c>main.rs</c>:2171,
+/// 2210-2211) unconditionally routes <c>eslint</c>/<c>next</c>/<c>prettier</c> to
+/// <c>lint_cmd::run</c>/<c>next_cmd::run</c>/<c>prettier_cmd::run</c> regardless, since those Rust
+/// modules always existed; the premise only held while RtkSharp's own <see cref="LintCommand"/>/
+/// <see cref="NextCommand"/>/<see cref="PrettierCommand"/> hadn't been ported yet. Now that they have,
+/// <see cref="NpxRouteKind.Eslint"/>/<see cref="NpxRouteKind.Next"/>/<see cref="NpxRouteKind.Prettier"/>
+/// delegate to them directly instead of passthrough, matching <c>main.rs</c>'s dispatch exactly.
+/// Only an unrecognized <c>prisma</c> subcommand still uses genuine manual-passthrough
+/// (<c>TimedExecution</c>/<c>resolved_command</c> rather than the shared <c>run_filtered</c>
+/// skeleton, <c>main.rs</c>:2187-2211) — see <see cref="NpxRouteKind.PrismaPassthrough"/>.
 /// </para>
 /// <para>
 /// <b>Implicit tracking via <see cref="CommandRunner"/>.</b> The npm path and npx's default
@@ -282,10 +284,10 @@ public static class NpmCommand
             NpxRouteKind.Playwright => PlaywrightCommand.RunSafeAsync(route.RemainingArgs, verbose, executor),
             NpxRouteKind.PrismaGenerate => PrismaCommand.RunGenerateAsync(route.RemainingArgs, verbose, executor),
             NpxRouteKind.PrismaDbPush => PrismaCommand.RunDbPushAsync(route.RemainingArgs, verbose, executor),
-            NpxRouteKind.EslintPassthrough
-                or NpxRouteKind.NextPassthrough
-                or NpxRouteKind.PrettierPassthrough
-                or NpxRouteKind.PrismaPassthrough => RunNpxPassthroughAsync(route.PassthroughArgs, executor),
+            NpxRouteKind.Eslint => LintCommand.RunAsync(route.RemainingArgs, verbose, executor ?? new ProcessExecutor()),
+            NpxRouteKind.Next => NextCommand.RunNextSafeAsync(route.RemainingArgs, verbose),
+            NpxRouteKind.Prettier => PrettierCommand.RunPrettierSafeAsync(route.RemainingArgs, verbose),
+            NpxRouteKind.PrismaPassthrough => RunNpxPassthroughAsync(route.PassthroughArgs, executor),
             NpxRouteKind.Default => RunFilteredAsync("npx", route.PassthroughArgs, verbose, skipEnv),
             _ => throw new ArgumentOutOfRangeException(nameof(args), route.Kind, "Unknown npx route kind."),
         };
@@ -313,10 +315,10 @@ public static class NpmCommand
         return tool switch
         {
             "tsc" or "typescript" => new NpxRoute(NpxRouteKind.Tsc, rest, full),
-            "eslint" => new NpxRoute(NpxRouteKind.EslintPassthrough, rest, full),
+            "eslint" => new NpxRoute(NpxRouteKind.Eslint, rest, full),
             "prisma" => ResolvePrismaRoute(rest, full),
-            "next" => new NpxRoute(NpxRouteKind.NextPassthrough, rest, full),
-            "prettier" => new NpxRoute(NpxRouteKind.PrettierPassthrough, rest, full),
+            "next" => new NpxRoute(NpxRouteKind.Next, rest, full),
+            "prettier" => new NpxRoute(NpxRouteKind.Prettier, rest, full),
             "playwright" => new NpxRoute(NpxRouteKind.Playwright, rest, full),
             _ => new NpxRoute(NpxRouteKind.Default, rest, full),
         };

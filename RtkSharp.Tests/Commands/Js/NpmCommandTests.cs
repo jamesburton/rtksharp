@@ -215,9 +215,9 @@ public sealed class NpmCommandTests
     [Theory]
     [InlineData("tsc", NpxRouteKind.Tsc)]
     [InlineData("typescript", NpxRouteKind.Tsc)]
-    [InlineData("eslint", NpxRouteKind.EslintPassthrough)]
-    [InlineData("next", NpxRouteKind.NextPassthrough)]
-    [InlineData("prettier", NpxRouteKind.PrettierPassthrough)]
+    [InlineData("eslint", NpxRouteKind.Eslint)]
+    [InlineData("next", NpxRouteKind.Next)]
+    [InlineData("prettier", NpxRouteKind.Prettier)]
     [InlineData("playwright", NpxRouteKind.Playwright)]
     [InlineData("cowsay", NpxRouteKind.Default)]
     public void ResolveNpxRoute_RecognizedAndUnrecognizedTools_RouteCorrectly(string tool, NpxRouteKind expected)
@@ -351,27 +351,29 @@ public sealed class NpmCommandTests
     }
 
     // -----------------------------------------------------------------------
-    // npx: out-of-scope passthrough routes (eslint/next/prettier) and prisma-passthrough execute via
-    // an injectable IProcessExecutor, mirroring Rust's manual TimedExecution branch (main.rs:2187-2211)
+    // npx: eslint/next/prettier now delegate to their real ported filters (main.rs:2171,2210,2211
+    // route them to lint_cmd::run/next_cmd::run/prettier_cmd::run, not raw passthrough) - was
+    // stale-disclosed as out-of-scope passthrough before those modules existed in RtkSharp; resolved
+    // once LintCommand/NextCommand/PrettierCommand were ported. Only prisma's non-generate/db-push
+    // subcommands remain genuine passthrough (main.rs:2187-2211's own manual TimedExecution branch).
     // -----------------------------------------------------------------------
 
-    [Theory]
-    [InlineData("eslint")]
-    [InlineData("next")]
-    [InlineData("prettier")]
-    public async Task DispatchNpxAsync_OutOfScopeTool_RunsRawPassthrough_NoFiltering(string tool)
+    [Fact]
+    public async Task DispatchNpxAsync_Eslint_DelegatesToLintCommand_NotRawPassthrough()
     {
         using var db = new TempTrackingDb();
+        using var stdout = new ConsoleOutCapture();
 
-        var fake = new FakeProcessExecutor(new ExecutionResult("", "", 0, TimeSpan.Zero, true, null, false));
+        var fake = new FakeProcessExecutor(new ExecutionResult("[]", "", 0, TimeSpan.Zero, true, null, false));
         var exitCode = await NpmCommand.DispatchNpxAsync(
-            [tool, "--fix"], verbose: 0, skipEnv: false, executor: fake);
+            ["eslint", "--fix"], verbose: 0, skipEnv: false, executor: fake);
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(1, fake.Calls);
-        Assert.Equal("npx", fake.LastRequest!.FileName);
-        Assert.Equal([tool, "--fix"], fake.LastRequest.Arguments);
-        Assert.Equal(ExecutionCaptureMode.Inherit, fake.LastRequest.CaptureMode);
+        // A raw passthrough would inherit stdio (ExecutionCaptureMode.Inherit) and forward "eslint"
+        // as the first argument to npx unchanged; LintCommand instead captures output to filter it
+        // and resolves its own linter executable/package-manager-exec invocation.
+        Assert.NotEqual(ExecutionCaptureMode.Inherit, fake.LastRequest!.CaptureMode);
+        Assert.Contains("No issues found", stdout.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -389,19 +391,19 @@ public sealed class NpmCommandTests
     }
 
     [Fact]
-    public async Task DispatchNpxAsync_PassthroughRoute_NonZeroExitCode_Propagates()
+    public async Task DispatchNpxAsync_PrismaPassthroughRoute_NonZeroExitCode_Propagates()
     {
         using var db = new TempTrackingDb();
 
         var fake = new FakeProcessExecutor(new ExecutionResult("", "", 3, TimeSpan.Zero, true, null, false));
         var exitCode = await NpmCommand.DispatchNpxAsync(
-            ["eslint"], verbose: 0, skipEnv: false, executor: fake);
+            ["prisma", "migrate", "status"], verbose: 0, skipEnv: false, executor: fake);
 
         Assert.Equal(3, exitCode);
     }
 
     [Fact]
-    public async Task DispatchNpxAsync_PassthroughRoute_SpawnFailure_ThrowsWithFailureDetail()
+    public async Task DispatchNpxAsync_PrismaPassthroughRoute_SpawnFailure_ThrowsWithFailureDetail()
     {
         using var db = new TempTrackingDb();
 
@@ -409,9 +411,9 @@ public sealed class NpmCommandTests
             new ExecutionResult("", "", 127, TimeSpan.Zero, false, "The system cannot find the file specified", false));
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            NpmCommand.DispatchNpxAsync(["eslint"], verbose: 0, skipEnv: false, executor: fake));
+            NpmCommand.DispatchNpxAsync(["prisma", "migrate", "status"], verbose: 0, skipEnv: false, executor: fake));
 
-        Assert.Contains("npx eslint", ex.Message, StringComparison.Ordinal);
+        Assert.Contains("npx prisma migrate status", ex.Message, StringComparison.Ordinal);
         Assert.Contains("The system cannot find the file specified", ex.Message, StringComparison.Ordinal);
     }
 
