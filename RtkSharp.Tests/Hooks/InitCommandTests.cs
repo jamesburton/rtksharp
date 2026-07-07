@@ -120,11 +120,28 @@ public sealed class InitCommandTests
         using var cwd = new CwdGuard(tmp.Root);
         using var console = new ConsoleCapture();
 
-        var exit = InitCommand.Run(["--agent", "windsurf"]);
+        // Rust's run_windsurf_mode itself writes to the CWD regardless of --global, but the caller
+        // in run() (init.rs:293-295) still bails without --global first — reproduced faithfully
+        // (see AgentWindsurf_WithoutGlobal_FailsWithExactRustMessage), so --global is required here
+        // even though the write target below doesn't depend on it.
+        var exit = InitCommand.Run(["--agent", "windsurf", "--global"]);
 
         Assert.Equal(0, exit);
         Assert.True(File.Exists(Path.Combine(tmp.Root, ".windsurfrules")));
         Assert.Contains("RTK configured for Windsurf Cascade", console.Out.ToString());
+    }
+
+    [Fact]
+    public void AgentWindsurf_WithoutGlobal_FailsWithExactRustMessage()
+    {
+        using var tmp = new TempDir();
+        using var cwd = new CwdGuard(tmp.Root);
+        using var console = new ConsoleCapture();
+
+        var exit = InitCommand.Run(["--agent", "windsurf"]);
+
+        Assert.Equal(1, exit);
+        Assert.Equal("rtk: Windsurf support is global-only. Use: rtk init -g --agent windsurf\n", console.Error.ToString());
     }
 
     [Fact]

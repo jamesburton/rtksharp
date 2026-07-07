@@ -295,14 +295,20 @@ public static class InitCommand
             return 0;
         }
 
-        // Rust checks the cursor/windsurf global-only guard here too (init.rs:289-291) — cursor is
-        // rejected outright without --global, while windsurf's equivalent guard (init.rs:293-295) is
-        // deliberately NOT reproduced (see docs/superpowers/plans/2026-07-03-phase9b-init-hooks.md's
-        // "Windsurf Bug Adjudication": the guard protects nothing since run_windsurf_mode writes to
-        // the CWD regardless of --global, and Cline already establishes the correct guard-free pattern).
+        // Rust checks the cursor/windsurf global-only guards here (init.rs:285-295), both bailing
+        // outright without --global. Windsurf's guard is reproduced faithfully even though it's
+        // arguably pointless (run_windsurf_mode itself writes to the CWD regardless of --global) —
+        // a prior session's plan doc adjudicated dropping it, but that call was never signed off by
+        // the user, and this project's mandate is to match the oracle exactly, including its own
+        // inconsistencies, not to unilaterally "improve" on it.
         if (flags.Agent == "cursor" && !flags.Global)
         {
             throw new InitAbortException("Cursor hooks are global-only. Use: rtk init -g --agent cursor");
+        }
+
+        if (flags.Agent == "windsurf" && !flags.Global)
+        {
+            throw new InitAbortException("Windsurf support is global-only. Use: rtk init -g --agent windsurf");
         }
 
         if (flags.Agent == "windsurf")
