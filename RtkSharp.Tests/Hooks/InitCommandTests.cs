@@ -104,27 +104,54 @@ public sealed class InitCommandTests
         Assert.Contains("[dry-run] would add rtk instructions to", console.Out.ToString());
     }
 
-    // Note: "-g" (bare global default mode), "--show" (without --codex), and "--codex" are no longer
-    // deferred — global-scope Claude Code init/--show and the full Codex CLI path are implemented;
-    // see InitGlobalCommandTests.cs and CodexInitTests.cs. All three touch either the real ~/.claude
-    // or ~/.codex directory unless isolated via GlobalScopeGuard/CodexScopeGuard, which is why those
-    // cases moved rather than staying in this env-agnostic theory.
-    [Theory]
-    [InlineData(new object[] { new[] { "--gemini" } })]
-    [InlineData(new object[] { new[] { "--copilot" } })]
-    [InlineData(new object[] { new[] { "--agent", "cursor" } })]
-    [InlineData(new object[] { new[] { "--agent", "windsurf" } })]
-    [InlineData(new object[] { new[] { "--agent", "pi" } })]
-    public void OutOfScopeModes_FailLoudWithDeferredMessage(string[] args)
+    // Note: "-g" (bare global default mode), "--show" (without --codex), "--codex", "--gemini",
+    // "--copilot", "--opencode", and every "--agent <name>" value are all now implemented (see
+    // GeminiInitTests.cs, CopilotInitTests.cs, PluginInitTests.cs, CursorInitTests.cs,
+    // WorkspaceRulesInitTests.cs, HermesInitTests.cs, and InitGlobalCommandTests.cs/CodexInitTests.cs
+    // for their dedicated, properly home/CWD-isolated coverage). The two dispatch-routing smoke tests
+    // below only exercise cases that are safe to run without an env-var scope guard: Windsurf/Cline
+    // write to the process CWD (already isolated by CwdGuard here), and the Cursor global-only guard
+    // throws before touching any filesystem path at all.
+
+    [Fact]
+    public void AgentWindsurf_DispatchesToWorkspaceRulesInit()
     {
         using var tmp = new TempDir();
         using var cwd = new CwdGuard(tmp.Root);
         using var console = new ConsoleCapture();
 
-        var exit = InitCommand.Run(args);
+        var exit = InitCommand.Run(["--agent", "windsurf"]);
+
+        Assert.Equal(0, exit);
+        Assert.True(File.Exists(Path.Combine(tmp.Root, ".windsurfrules")));
+        Assert.Contains("RTK configured for Windsurf Cascade", console.Out.ToString());
+    }
+
+    [Fact]
+    public void AgentCline_DispatchesToWorkspaceRulesInit()
+    {
+        using var tmp = new TempDir();
+        using var cwd = new CwdGuard(tmp.Root);
+        using var console = new ConsoleCapture();
+
+        var exit = InitCommand.Run(["--agent", "cline"]);
+
+        Assert.Equal(0, exit);
+        Assert.True(File.Exists(Path.Combine(tmp.Root, ".clinerules")));
+        Assert.Contains("RTK configured for Cline", console.Out.ToString());
+    }
+
+    [Fact]
+    public void AgentCursor_WithoutGlobal_FailsWithExactRustMessage()
+    {
+        using var tmp = new TempDir();
+        using var cwd = new CwdGuard(tmp.Root);
+        using var console = new ConsoleCapture();
+
+        var exit = InitCommand.Run(["--agent", "cursor"]);
 
         Assert.Equal(1, exit);
-        Assert.Contains("not yet implemented", console.Error.ToString());
+        Assert.Equal("rtk: Cursor hooks are global-only. Use: rtk init -g --agent cursor\n", console.Error.ToString());
     }
 
     [Fact]
@@ -161,19 +188,20 @@ public sealed class InitCommandTests
     }
 
     [Fact]
-    public void Uninstall_WithAgentPi_FailsWithHonestNotImplementedMessage()
+    public void Uninstall_WithAgentPi_ReportsNothingToRemove()
     {
         using var tmp = new TempDir();
         using var cwd = new CwdGuard(tmp.Root);
         using var console = new ConsoleCapture();
 
         // Rust dispatches --agent pi into uninstall_pi(global, ctx) unconditionally (init.rs:664-667),
-        // regardless of --global. That agent-specific uninstall body isn't ported yet, so this must
-        // fail loud with an honest "not yet implemented" diagnostic.
+        // regardless of --global. Local scope (".pi/extensions/rtk.ts") is CWD-relative, so this is
+        // safe to run without an env-var scope guard; PiInit.Uninstall's fuller coverage (including
+        // the global scope, which needs PI_CODING_AGENT_DIR isolation) lives in PluginInitTests.cs.
         var exit = InitCommand.Run(["--uninstall", "--agent", "pi"]);
 
-        Assert.Equal(1, exit);
-        Assert.Contains("not yet implemented", console.Error.ToString());
+        Assert.Equal(0, exit);
+        Assert.Contains("RTK Pi extension was not installed (nothing to remove)", console.Out.ToString());
     }
 
     [Fact]

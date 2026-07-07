@@ -23,11 +23,12 @@ namespace RtkSharp.Hooks;
 /// <c>settings.json</c> deep-merge patching via <see cref="SettingsPatcher"/>, and the user-global
 /// filters template), plus global-scope <c>--uninstall</c> and <c>--show</c> for Claude Code. It also
 /// implements the full <b>Codex CLI</b> path (project- and global-scope <c>--codex</c>, its own
-/// <c>--uninstall --codex</c> and <c>--show --codex</c>) via <see cref="CodexInit"/>. Every other
-/// mode — Gemini, Copilot, OpenCode, Cursor, Windsurf, Cline, Kilocode, Antigravity, Pi, and Hermes —
-/// is parsed (so the CLI surface matches Rust's <c>clap</c> definition) but rejected with a clear
-/// "not yet implemented" diagnostic rather than silently doing nothing or guessing at behavior. Those
-/// modes land in follow-up tasks; see <c>docs/superpowers/plans/2026-07-03-phase9b-init-hooks.md</c>.
+/// <c>--uninstall --codex</c> and <c>--show --codex</c>) via <see cref="CodexInit"/>. All nine agent
+/// targets originally deferred by <c>docs/superpowers/plans/2026-07-03-phase9b-init-hooks.md</c>
+/// ("9c" scope) are now also wired here: <see cref="GeminiInit"/>, <see cref="CopilotInit"/>,
+/// <see cref="RtkSharp.Hooks.OpenCodeInit"/>, <see cref="CursorInit"/>,
+/// <see cref="RtkSharp.Hooks.WorkspaceRulesInit"/> (Windsurf/Cline/Kilocode/Antigravity),
+/// <see cref="RtkSharp.Hooks.PiInit"/>, and <see cref="HermesInit"/>.
 /// </para>
 /// <para>
 /// <b>Fail-loud, not never-block.</b> <c>init</c> is a user command, not a runtime hook — the
@@ -91,16 +92,31 @@ public static class InitCommand
         {
             if (flags.Copilot)
             {
-                throw Deferred("--uninstall --copilot");
+                if (flags.Global)
+                {
+                    CopilotInit.UninstallCopilotGlobal(ctx);
+                }
+                else
+                {
+                    CopilotInit.UninstallCopilot(ctx);
+                }
+
+                return 0;
+            }
+
+            // Rust's uninstall_init_dispatch (main.rs) checks --agent hermes FIRST — before even
+            // codex/cursor/pi — since Hermes has no scope concept and ignores --global/--codex.
+            if (flags.Agent == "hermes")
+            {
+                HermesInit.UninstallHermes(ctx);
+                return 0;
             }
 
             // Rust's uninstall() (init.rs:620) checks codex/cursor/pi BEFORE the generic
             // !global bail, in that order. Codex dispatches unconditionally into its own
             // uninstall body (uninstall_codex, init.rs:629-635) regardless of --global — that
             // body itself bails with a Codex-specific message when !global (init.rs:851-855).
-            // Pi is not ported yet (Task 3+ territory), so it still fails loud with an honest
-            // "not yet implemented" message rather than fabricating its behavior.
-            // Cursor, however, bails right here in Rust (init.rs:637-640) when !global with
+            // Cursor bails right here in Rust (init.rs:637-640) when !global with
             // its own distinct message, so that exact text is reproduced below.
             if (flags.Codex)
             {
@@ -121,12 +137,18 @@ public static class InitCommand
                     throw new InitAbortException("Cursor uninstall only works with --global flag");
                 }
 
-                throw Deferred("--uninstall --agent cursor --global");
+                // CursorInit.UninstallCursor prints its own dry-run footer (mirrors Rust's cursor
+                // branch of uninstall(), which calls print_dry_run_footer() itself, init.rs:659-660).
+                CursorInit.UninstallCursor(ctx);
+                return 0;
             }
 
             if (flags.Agent == "pi")
             {
-                throw Deferred("--uninstall --agent pi");
+                // PiInit.Uninstall handles its own reporting with no extra footer call at this level
+                // (Rust: `if pi { uninstall_pi(global, ctx)?; return Ok(()); }`, init.rs:661-664).
+                PiInit.Uninstall(flags.Global, ctx);
+                return 0;
             }
 
             if (!flags.Global)
@@ -137,9 +159,16 @@ public static class InitCommand
 
             // Rust checks --gemini AFTER the !global bail (init.rs:676-700) — i.e. `--uninstall
             // --gemini` without --global hits the generic bail above, not this deferral.
+            // Kilocode/Antigravity/Windsurf/Cline have no dedicated Rust uninstall path (confirmed:
+            // uninstall_standard only special-cases cursor/pi) — `--uninstall --agent kilocode
+            // --global` therefore falls through to the generic Claude uninstall below, exactly as
+            // the oracle does; this is not an oversight, see compatibility-ledger.md.
             if (flags.Gemini)
             {
-                throw Deferred("--uninstall --gemini --global");
+                // GeminiInit.Uninstall prints its own dry-run footer (mirrors Rust's gemini branch of
+                // uninstall(), init.rs:695-699).
+                GeminiInit.Uninstall(ctx);
+                return 0;
             }
 
             RunGlobalUninstall(ctx);
@@ -152,22 +181,63 @@ public static class InitCommand
             return 0;
         }
 
+        var patchMode = flags.AutoPatch ? PatchMode.Auto : flags.NoPatch ? PatchMode.Skip : PatchMode.Ask;
+
         if (flags.Gemini)
         {
-            throw Deferred("--gemini");
+            GeminiInit.Run(flags.Global, flags.HookOnly, patchMode, ctx);
+            return 0;
         }
 
         if (flags.Copilot)
         {
-            throw Deferred("--copilot");
+            if (flags.Global)
+            {
+                CopilotInit.RunCopilotGlobal(ctx);
+            }
+            else
+            {
+                CopilotInit.RunCopilot(ctx);
+            }
+
+            return 0;
         }
 
-        if (flags.Agent is "pi" or "kilocode" or "antigravity" or "hermes" or "cursor" or "windsurf" or "cline")
+        if (flags.Agent == "pi")
         {
-            throw Deferred($"--agent {flags.Agent}");
+            PiInit.Run(flags.Global, ctx);
+            return 0;
         }
 
-        if (flags.Agent is not null and not "claude")
+        if (flags.Agent == "kilocode")
+        {
+            if (flags.Global)
+            {
+                throw new InitAbortException("Kilo Code is project-scoped. Use: rtk init --agent kilocode");
+            }
+
+            WorkspaceRulesInit.RunKilocode(ctx);
+            return 0;
+        }
+
+        if (flags.Agent == "antigravity")
+        {
+            if (flags.Global)
+            {
+                throw new InitAbortException("Antigravity is project-scoped. Use: rtk init --agent antigravity");
+            }
+
+            WorkspaceRulesInit.RunAntigravity(ctx);
+            return 0;
+        }
+
+        if (flags.Agent == "hermes")
+        {
+            HermesInit.RunHermes(flags.Global, ctx);
+            return 0;
+        }
+
+        if (flags.Agent is not null and not "claude" and not "cursor" and not "windsurf" and not "cline")
         {
             throw new InitAbortException($"unknown --agent value: {flags.Agent}");
         }
@@ -221,7 +291,50 @@ public static class InitCommand
 
         if (flags.Opencode)
         {
-            throw Deferred("--opencode");
+            OpenCodeInit.Run(ctx);
+            return 0;
+        }
+
+        // Rust checks the cursor/windsurf global-only guard here too (init.rs:289-291) — cursor is
+        // rejected outright without --global, while windsurf's equivalent guard (init.rs:293-295) is
+        // deliberately NOT reproduced (see docs/superpowers/plans/2026-07-03-phase9b-init-hooks.md's
+        // "Windsurf Bug Adjudication": the guard protects nothing since run_windsurf_mode writes to
+        // the CWD regardless of --global, and Cline already establishes the correct guard-free pattern).
+        if (flags.Agent == "cursor" && !flags.Global)
+        {
+            throw new InitAbortException("Cursor hooks are global-only. Use: rtk init -g --agent cursor");
+        }
+
+        if (flags.Agent == "windsurf")
+        {
+            WorkspaceRulesInit.RunWindsurf(ctx);
+
+            if (ctx.DryRun)
+            {
+                InitArtifacts.PrintDryRunFooter();
+            }
+            else
+            {
+                Console.Out.Write("\n");
+            }
+
+            return 0;
+        }
+
+        if (flags.Agent == "cline")
+        {
+            WorkspaceRulesInit.RunCline(ctx);
+
+            if (ctx.DryRun)
+            {
+                InitArtifacts.PrintDryRunFooter();
+            }
+            else
+            {
+                Console.Out.Write("\n");
+            }
+
+            return 0;
         }
 
         if (flags.ClaudeMd && flags.HookOnly)
@@ -236,11 +349,9 @@ public static class InitCommand
 
         if (flags.Global)
         {
-            // Rust's run() mode-selection match (init.rs:303) reduces, once --opencode is deferred
-            // above (so install_opencode is always false by the time we reach here), to a plain
-            // switch on claude_md vs hook_only vs default — global scope for all three.
-            var patchMode = flags.AutoPatch ? PatchMode.Auto : flags.NoPatch ? PatchMode.Skip : PatchMode.Ask;
-
+            // Rust's run() mode-selection match (init.rs:303) reduces, once opencode/windsurf/cline
+            // are dispatched above, to a plain switch on claude_md vs hook_only vs default — global
+            // scope for all three.
             if (flags.ClaudeMd)
             {
                 RunGlobalClaudeMdMode(ctx);
@@ -252,6 +363,14 @@ public static class InitCommand
             else
             {
                 RunGlobalDefaultMode(patchMode, ctx);
+            }
+
+            // Cursor hooks are additive, installed alongside Claude Code (Rust init.rs:320-322) —
+            // not an exclusive mode. RunCursor prints its own success block; the shared footer below
+            // still fires exactly once afterward, matching Rust's run() shared tail.
+            if (flags.Agent == "cursor")
+            {
+                CursorInit.RunCursor(ctx);
             }
 
             if (ctx.DryRun)
@@ -897,9 +1016,23 @@ public static class InitCommand
 
         var cursorDir = ResolveHomeSubdir(".cursor");
         var cursorHook = Path.Combine(cursorDir, "hooks", "rtk-rewrite.sh");
-        Console.Out.Write(File.Exists(cursorHook)
-            ? $"[warn] Cursor hook: {cursorHook} (legacy script — run `rtk init -g --agent cursor` to upgrade)\n"
-            : "[--] Cursor hook: not found\n");
+        var cursorHooksJsonPath = Path.Combine(cursorDir, "hooks.json");
+        var cursorBinaryRegistered = File.Exists(cursorHooksJsonPath) &&
+            TryReadCursorHooksJson(cursorHooksJsonPath, out var cursorRoot) &&
+            CursorInit.HookAlreadyPresent(cursorRoot!);
+
+        if (cursorBinaryRegistered)
+        {
+            Console.Out.Write("[ok] Cursor hook: registered in hooks.json\n");
+        }
+        else if (File.Exists(cursorHook))
+        {
+            Console.Out.Write($"[warn] Cursor hook: {cursorHook} (legacy script — run `rtk init -g --agent cursor` to upgrade)\n");
+        }
+        else
+        {
+            Console.Out.Write("[--] Cursor hook: not found\n");
+        }
 
         Console.Out.Write("\nUsage:\n");
         Console.Out.Write("  rtk init              # Full injection into local CLAUDE.md\n");
@@ -967,11 +1100,30 @@ public static class InitCommand
         }
     }
 
-    /// <summary>Builds the "not yet implemented" abort for a mode deferred to a follow-up task.</summary>
-    /// <param name="feature">The flag/mode name, e.g. <c>"--gemini"</c>.</param>
-    /// <returns>An <see cref="InitAbortException"/> carrying the deferred-mode diagnostic.</returns>
-    private static InitAbortException Deferred(string feature) =>
-        new($"{feature} is not yet implemented in this port (tracked for a follow-up task)");
+    /// <summary>
+    /// Attempts to read and parse <paramref name="hooksJsonPath"/> as a JSON object for the
+    /// <c>--show</c> Cursor status check. Matches Rust's exact lenient fallback: any read/parse
+    /// failure (missing file, malformed JSON, non-object root) just means "not registered" — no
+    /// exception, no diagnostic (init.rs:3467-3474: <c>serde_json::from_str::&lt;Value&gt;(...)</c>
+    /// wrapped in <c>if let Ok(...)</c>, not the fail-loud parse Claude's own settings.json uses).
+    /// </summary>
+    /// <param name="hooksJsonPath">The Cursor <c>hooks.json</c> path.</param>
+    /// <param name="root">The parsed object on success; otherwise <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> if the file existed and parsed as a JSON object.</returns>
+    private static bool TryReadCursorHooksJson(string hooksJsonPath, out JsonObject? root)
+    {
+        root = null;
+        try
+        {
+            var content = File.ReadAllText(hooksJsonPath);
+            root = JsonNode.Parse(content) as JsonObject;
+            return root is not null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>The parsed <c>rtk init</c> flags, mirroring Rust's <c>Commands::Init</c> struct variant.</summary>
     private sealed class InitFlags
