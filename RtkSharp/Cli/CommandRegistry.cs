@@ -4,10 +4,16 @@ using RtkSharp.Commands.Dotnet;
 using RtkSharp.Core;
 using RtkSharp.Commands.Gh;
 using RtkSharp.Commands.Git;
+using RtkSharp.Commands.Go;
 using RtkSharp.Commands.Js;
+using RtkSharp.Commands.Jvm;
+using RtkSharp.Commands.Python;
+using RtkSharp.Commands.Ruby;
 using RtkSharp.Commands.Rust;
 using RtkSharp.Commands.System;
+using RtkSharp.Discover;
 using RtkSharp.Hooks;
+using RtkSharp.Learn;
 using RtkSharp.Rewrite;
 
 namespace RtkSharp.Cli;
@@ -103,6 +109,63 @@ public static class CommandRegistry
         // RTK_META_COMMANDS list doesn't include "env" either, but the registry-hit-always-wins
         // behavior already gives it the sufficient substitute established in Phase 6.
         Register("env", EnvCommand.RunAsync);
+
+        // Python ecosystem - all PASSTHROUGH-classified in Rust (not in RTK_META_COMMANDS),
+        // registered as normal dispatch entries like "git"/"gh"/"dotnet"/"cargo" above.
+        Register("ruff", RuffCommand.RunAsync);
+        Register("pytest", PytestCommand.RunAsync);
+        Register("mypy", MypyCommand.RunAsync);
+        Register("pip", PipCommand.RunAsync);
+
+        // Ruby ecosystem - PASSTHROUGH-classified, normal dispatch entries.
+        Register("rake", RakeCommand.RunAsync);
+        Register("rubocop", RubocopCommand.RunAsync);
+        Register("rspec", RspecCommand.RunAsync);
+
+        // JVM ecosystem - PASSTHROUGH-classified, normal dispatch entries.
+        Register("gradlew", GradlewCommand.RunAsync);
+        Register("mvn", MvnCommand.RunAsync);
+
+        // Go ecosystem + Graphite (gt, git-adjacent) - PASSTHROUGH-classified, normal dispatch
+        // entries. Clap derives "golangci-lint" (kebab-case) from the `GolangciLint` enum variant.
+        Register("go", GoCommand.RunAsync);
+        Register("golangci-lint", GolangciLintCommand.RunAsync);
+        Register("gt", GtCommand.RunAsync);
+
+        // Cloud CLIs - PASSTHROUGH-classified, normal dispatch entries. Kubectl/Oc share the same
+        // Rust module (`cmds::cloud::container`) that Docker uses; their C# ports likewise share
+        // RtkSharp/Commands/Cloud/ContainerFilters.cs rather than duplicating Docker's logic.
+        Register("aws", AwsCommand.RunAsync);
+        Register("kubectl", args => KubectlCommand.RunAsync(args, RuntimeOptions.Verbosity));
+        Register("oc", args => OcCommand.RunAsync(args, RuntimeOptions.Verbosity));
+        Register("glab", GlabCommand.RunAsync);
+
+        // JS-ecosystem additions + the system-level "format" multi-tool dispatcher -
+        // PASSTHROUGH-classified, normal dispatch entries. FormatCommand calls into
+        // PrettierCommand's filter directly for the prettier case, mirroring Rust's own
+        // format_cmd.rs importing prettier_cmd::filter_prettier_output.
+        Register("next", NextCommand.RunAsync);
+        Register("prettier", PrettierCommand.RunAsync);
+        Register("format", FormatCommand.RunAsync);
+
+        // "diff" and "summary" are PASSTHROUGH-classified - normal dispatch entries, like
+        // "git"/"gh"/"dotnet"/"cargo" above.
+        Register("diff", DiffCommand.RunAsync);
+        Register("summary", SummaryCommand.RunAsync);
+
+        // "json"/"deps" are RTK_META_COMMANDS (main.rs's RTK_META_COMMANDS list) - registering them
+        // here gives them the same registry-hit-always-wins guarantee as "gain"/"run"/"proxy"/"pipe"
+        // above: a bad flag can never fall back to executing a literal "json"/"deps" binary from
+        // $PATH.
+        Register("json", JsonCommand.RunAsync);
+        Register("deps", DepsCommand.RunAsync);
+
+        // "smart"/"cc-economics"/"discover"/"learn" are RTK_META_COMMANDS - same
+        // registry-hit-always-wins guarantee as "gain"/"json"/"deps" above.
+        Register("smart", args => Task.FromResult(SmartCommand.Run(args)));
+        Register("cc-economics", CcEconomicsCommand.RunAsync);
+        Register("discover", args => Task.FromResult(DiscoverCommand.Run(args)));
+        Register("learn", args => Task.FromResult(LearnCommand.Run(args)));
     }
 
     /// <summary>
