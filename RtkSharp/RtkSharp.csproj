@@ -121,6 +121,35 @@
     <EmbeddedResource Include="../src/filters/*.toml">
       <LogicalName>RtkSharp.Filters.Builtin.%(Filename)%(Extension)</LogicalName>
     </EmbeddedResource>
+    <!--
+      Embeds the exact bytes of the Rust oracle's `include_str!("../../hooks/pi/rtk.ts")` source
+      file (src/hooks/init.rs PI_PLUGIN constant), the same byte-exact pattern as the awareness
+      docs above.
+    -->
+    <EmbeddedResource Include="../hooks/pi/rtk.ts">
+      <LogicalName>RtkSharp.Hooks.pi-rtk.ts</LogicalName>
+    </EmbeddedResource>
+    <!--
+      Embeds the exact bytes of the Rust oracle's `include_str!("../../hooks/opencode/rtk.ts")`
+      source file (src/hooks/init.rs OPENCODE_PLUGIN constant).
+    -->
+    <EmbeddedResource Include="../hooks/opencode/rtk.ts">
+      <LogicalName>RtkSharp.Hooks.opencode-rtk.ts</LogicalName>
+    </EmbeddedResource>
+    <!--
+      Embeds the exact bytes of the Rust oracle's `include_str!("../../hooks/hermes/rtk-rewrite/__init__.py")`
+      and `include_str!("../../hooks/hermes/rtk-rewrite/plugin.yaml")` source files (src/hooks/init.rs
+      HERMES_PLUGIN_INIT/HERMES_PLUGIN_YAML constants), the same way as the Claude Code/Codex
+      rtk-awareness.md templates above: loaded verbatim (no line-ending normalization) so both builds
+      pick up whatever CRLF/LF the current git checkout produced for these un-gitattributes-protected
+      files.
+    -->
+    <EmbeddedResource Include="../hooks/hermes/rtk-rewrite/__init__.py">
+      <LogicalName>RtkSharp.Hooks.hermes-rtk-rewrite-init.py</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="../hooks/hermes/rtk-rewrite/plugin.yaml">
+      <LogicalName>RtkSharp.Hooks.hermes-rtk-rewrite-plugin.yaml</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>

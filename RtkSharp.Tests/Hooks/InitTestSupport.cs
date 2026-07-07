@@ -143,6 +143,40 @@ internal sealed class CodexScopeGuard : IDisposable
     }
 }
 
+/// <summary>
+/// Redirects <c>COPILOT_HOME</c> so Copilot-mode global-scope tests never touch the real
+/// <c>~/.copilot</c> directory on the machine running the tests. Same shape as
+/// <see cref="CodexScopeGuard"/>: <c>RtkSharp.Hooks.CopilotInit.CopilotUserDir</c> reads
+/// <c>$COPILOT_HOME</c> directly via a plain environment-variable lookup, honored identically on
+/// every platform, so no platform-specific redirection machinery is needed here.
+/// </summary>
+internal sealed class CopilotScopeGuard : IDisposable
+{
+    private const string CopilotHomeEnvVar = "COPILOT_HOME";
+
+    private readonly string? _previousCopilotHome;
+
+    /// <summary>The throwaway directory standing in for <c>$COPILOT_HOME</c> (i.e. <c>~/.copilot</c>).</summary>
+    public string CopilotDir { get; }
+
+    public CopilotScopeGuard(TempDir tmp)
+    {
+        InitTestSupport.EnterEnvLock();
+
+        CopilotDir = Path.Combine(tmp.Root, ".copilot");
+        Directory.CreateDirectory(CopilotDir);
+
+        _previousCopilotHome = Environment.GetEnvironmentVariable(CopilotHomeEnvVar);
+        Environment.SetEnvironmentVariable(CopilotHomeEnvVar, CopilotDir);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable(CopilotHomeEnvVar, _previousCopilotHome);
+        InitTestSupport.ExitEnvLock();
+    }
+}
+
 /// <summary>A throwaway directory, deleted best-effort on disposal.</summary>
 internal sealed class TempDir : IDisposable
 {
