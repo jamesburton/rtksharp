@@ -140,6 +140,11 @@ public static class CommandRegistry
         Register("oc", args => OcCommand.RunAsync(args, RuntimeOptions.Verbosity));
         Register("glab", GlabCommand.RunAsync);
 
+        // "psql"/"wget" - the two remaining "Defer"-classified commands, now ported for full
+        // coverage. Both PASSTHROUGH-classified in Rust, normal dispatch entries.
+        Register("psql", PsqlCommand.RunAsync);
+        Register("wget", WgetCommand.RunAsync);
+
         // JS-ecosystem additions + the system-level "format" multi-tool dispatcher -
         // PASSTHROUGH-classified, normal dispatch entries. FormatCommand calls into
         // PrettierCommand's filter directly for the prettier case, mirroring Rust's own

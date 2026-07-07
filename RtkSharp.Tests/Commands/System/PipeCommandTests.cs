@@ -134,26 +134,112 @@ public sealed class PipeCommandTests
     }
 
     // -----------------------------------------------------------------------
-    // Disclosed-gap ecosystem filters: identity passthrough, not a faked filter.
+    // Ecosystem filters: real delegation to each ported filter module, not identity
+    // passthrough (was a disclosed gap before those modules existed; now resolved).
     // -----------------------------------------------------------------------
 
-    [Theory]
-    [InlineData("cargo-test")]
-    [InlineData("pytest")]
-    [InlineData("go-test")]
-    [InlineData("go-build")]
-    [InlineData("tsc")]
-    [InlineData("vitest")]
-    [InlineData("log")]
-    [InlineData("mypy")]
-    [InlineData("ruff-check")]
-    [InlineData("ruff-format")]
-    [InlineData("prettier")]
-    public void ResolveFilter_DisclosedGapAlias_ResolvesToIdentityPassthrough(string alias)
+    [Fact]
+    public void ResolveFilter_CargoTest_DelegatesToCargoBuildTestFilters()
     {
-        var f = PipeCommand.ResolveFilter(alias)!;
-        var input = "arbitrary unrelated content that a real filter would compact\n";
-        Assert.Equal(input, f(input));
+        var f = PipeCommand.ResolveFilter("cargo-test")!;
+        const string input = "running 15 tests\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n";
+        var output = f(input);
+        Assert.NotEqual(input, output);
+        Assert.Contains("cargo test: 15 passed", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveFilter_Cargo_SameAsCargoTest()
+    {
+        Assert.Same(PipeCommand.ResolveFilter("cargo"), PipeCommand.ResolveFilter("cargo-test"));
+    }
+
+    [Fact]
+    public void ResolveFilter_Pytest_DelegatesToPytestFilters()
+    {
+        var f = PipeCommand.ResolveFilter("pytest")!;
+        const string input = "=== test session starts ===\ncollected 3 items\n3 passed in 0.01s\n";
+        var output = f(input);
+        Assert.NotEqual(input, output);
+    }
+
+    [Fact]
+    public void ResolveFilter_Mypy_DelegatesToMypyFilters()
+    {
+        var f = PipeCommand.ResolveFilter("mypy")!;
+        const string input = "src/app.py:42: error: Argument 1 has incompatible type [arg-type]\nFound 1 errors in 1 files\n";
+        var output = f(input);
+        Assert.Contains("mypy:", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveFilter_RuffCheck_DelegatesToRuffFilters()
+    {
+        var f = PipeCommand.ResolveFilter("ruff-check")!;
+        var output = f("[]");
+        Assert.Contains("No issues found", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveFilter_RuffFormat_DelegatesToRuffFilters()
+    {
+        var f = PipeCommand.ResolveFilter("ruff-format")!;
+        var output = f("2 files would be reformatted, 1 file already formatted\n");
+        Assert.NotNull(output);
+    }
+
+    [Fact]
+    public void ResolveFilter_GoTest_DelegatesToGoFilters()
+    {
+        var f = PipeCommand.ResolveFilter("go-test")!;
+        const string input = "{\"Time\":\"2024-01-01T00:00:00Z\",\"Action\":\"run\",\"Package\":\"example/pkg\"}\n" +
+                              "{\"Time\":\"2024-01-01T00:00:01Z\",\"Action\":\"pass\",\"Package\":\"example/pkg\"}\n";
+        var output = f(input);
+        Assert.NotEqual(input, output);
+        Assert.Contains("Go test", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveFilter_GoBuild_DelegatesToGoFilters()
+    {
+        var f = PipeCommand.ResolveFilter("go-build")!;
+        Assert.Equal("Go build: Success", f(""));
+    }
+
+    [Fact]
+    public void ResolveFilter_Tsc_DelegatesToTscCommand()
+    {
+        var f = PipeCommand.ResolveFilter("tsc")!;
+        const string input = "src/auth.ts(10,5): error TS2322: Type 'string' is not assignable to type 'number'.\n";
+        var output = f(input);
+        Assert.NotEqual(input, output);
+    }
+
+    [Fact]
+    public void ResolveFilter_Vitest_DelegatesToVitestParser_CompactFormat()
+    {
+        var f = PipeCommand.ResolveFilter("vitest")!;
+        const string input = """{"testResults":[],"numTotalTests":0,"numPassedTests":0,"numFailedTests":0,"success":true}""";
+        var output = f(input);
+        Assert.NotEqual(input, output);
+    }
+
+    [Fact]
+    public void ResolveFilter_Prettier_DelegatesToPrettierCommand()
+    {
+        var f = PipeCommand.ResolveFilter("prettier")!;
+        const string input = "All matched files use Prettier code style!\n";
+        var output = f(input);
+        Assert.Contains("Prettier", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ResolveFilter_Log_DelegatesToLogCommand()
+    {
+        var f = PipeCommand.ResolveFilter("log")!;
+        const string input = "ERROR: something failed\nERROR: something failed\nERROR: something failed\n";
+        var output = f(input);
+        Assert.NotEqual(input, output);
     }
 
     // -----------------------------------------------------------------------
@@ -161,46 +247,52 @@ public sealed class PipeCommandTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void AutoDetectFilter_CargoTestSignature_ResolvesToIdentityGap()
+    public void AutoDetectFilter_CargoTestSignature_DelegatesToCargoFilter()
     {
         var input = "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured\n";
         var f = PipeCommand.AutoDetectFilter(input);
-        Assert.Equal(input, f(input));
+        var output = f(input);
+        Assert.NotEqual(input, output);
     }
 
     [Fact]
-    public void AutoDetectFilter_PytestSignature_ResolvesToIdentityGap()
+    public void AutoDetectFilter_PytestSignature_DelegatesToPytestFilter()
     {
-        var input = "=== test session starts ===\ncollected 3 items\n";
+        var input = "=== test session starts ===\ncollected 3 items\n3 passed in 0.01s\n";
         var f = PipeCommand.AutoDetectFilter(input);
-        Assert.Equal(input, f(input));
+        var output = f(input);
+        Assert.NotEqual(input, output);
     }
 
     [Fact]
-    public void AutoDetectFilter_GoTestNdjsonSignature_ResolvesToIdentityGap()
+    public void AutoDetectFilter_GoTestNdjsonSignature_DelegatesToGoFilter()
     {
         var input = "{\"Time\":\"2024-01-01T00:00:00Z\",\"Action\":\"run\",\"Package\":\"example/pkg\"}\n" +
                     "{\"Time\":\"2024-01-01T00:00:01Z\",\"Action\":\"pass\",\"Package\":\"example/pkg\"}\n";
         var f = PipeCommand.AutoDetectFilter(input);
-        Assert.Equal(input, f(input));
+        var output = f(input);
+        Assert.NotEqual(input, output);
+        Assert.Contains("Go test", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AutoDetectFilter_MypySignature_ResolvesToIdentityGap()
+    public void AutoDetectFilter_MypySignature_DelegatesToMypyFilter()
     {
         var input = "src/app.py:42: error: Argument 1 has incompatible type [arg-type]\n" +
                     "src/utils.py:10: error: Missing return statement [return]\n" +
                     "Found 2 errors in 2 files\n";
         var f = PipeCommand.AutoDetectFilter(input);
-        Assert.Equal(input, f(input));
+        var output = f(input);
+        Assert.Contains("mypy:", output, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void AutoDetectFilter_VitestJsonSignature_ResolvesToIdentityGap()
+    public void AutoDetectFilter_VitestJsonSignature_DelegatesToVitestWrapper()
     {
-        var input = "{\"testResults\":[],\"numTotalTests\":0}\n";
+        const string input = """{"testResults":[],"numTotalTests":0,"numPassedTests":0,"numFailedTests":0,"success":true}""";
         var f = PipeCommand.AutoDetectFilter(input);
-        Assert.Equal(input, f(input));
+        var output = f(input);
+        Assert.NotEqual(input, output);
     }
 
     [Fact]

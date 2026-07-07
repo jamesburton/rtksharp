@@ -1,6 +1,11 @@
 using System.Globalization;
 using System.Text;
 using RtkSharp.Commands.Git;
+using RtkSharp.Commands.Go;
+using RtkSharp.Commands.Js;
+using RtkSharp.Commands.Python;
+using RtkSharp.Commands.Rust;
+using RtkSharp.Parser;
 
 namespace RtkSharp.Commands.System;
 
@@ -12,18 +17,23 @@ namespace RtkSharp.Commands.System;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Ecosystem-filter delegation status (Phase 6, Task 5 — resolved, do not re-litigate).</b>
-/// Only <c>git-log</c>/<c>git-diff</c>/<c>git-status</c> delegate to a genuinely-ported ecosystem
-/// filter (<see cref="GitCommand"/>'s <c>FilterLogOutput</c>/<c>CompactDiff</c>/
-/// <c>FormatStatusOutput</c>) — <c>Git</c> is the only ecosystem module ported as of this phase.
-/// None of the Rust/Cargo, Python (pytest/mypy/ruff), Go, or JS (tsc/vitest/prettier) filter
-/// modules exist in RtkSharp yet (the JS stack is Phase 8; Go/Python/Rust ecosystems have no
-/// scoped phase yet), so every alias that would delegate to one of those in Rust instead
-/// resolves to <see cref="IdentityFilter"/> here — an intentional, disclosed passthrough (never
-/// blocks the caller, matches this codebase's fallback-pattern convention), not a faked filter.
-/// See <c>docs/parity/compatibility-ledger.md</c> for the ledgered gap. The two pipe-specific
-/// mini filters (<see cref="GrepWrapper"/>/<see cref="FindWrapper"/>) have no ecosystem-module
-/// delegation target in Rust either — they're pipe-only helpers there too — and are fully ported.
+/// <b>Ecosystem-filter delegation — now fully wired (was disclosed-gap, resolved).</b> Every
+/// alias delegates to its real ported ecosystem filter: <c>cargo-test</c>/<c>cargo</c> →
+/// <see cref="CargoBuildTestFilters.FilterCargoTest"/>, <c>pytest</c> →
+/// <see cref="PytestFilters.FilterPytestOutput"/>, <c>mypy</c> →
+/// <see cref="MypyFilters.FilterMypyOutput"/>, <c>ruff-check</c>/<c>ruff-format</c> →
+/// <see cref="RuffFilters.FilterRuffCheckJson"/>/<see cref="RuffFilters.FilterRuffFormat"/>,
+/// <c>go-test</c>/<c>go-build</c> → <see cref="GoFilters.FilterGoTestJson"/>/
+/// <see cref="GoFilters.FilterGoBuild"/>, <c>tsc</c> → <see cref="TscCommand.FilterTscOutput"/>,
+/// <c>vitest</c> → <see cref="VitestWrapper"/> (mirrors Rust's own <c>vitest_wrapper</c>: parses
+/// via the shared <see cref="VitestCommand.VitestParser"/> then always formats
+/// <see cref="FormatMode.Compact"/>, regardless of the process's own verbosity — pipe has no
+/// verbosity concept of its own), <c>prettier</c> → <see cref="PrettierCommand.FilterPrettierOutput"/>,
+/// and <c>log</c> → <see cref="LogCommand.AnalyzeLogs"/> (Rust's <c>run_stdin_str</c> equivalent).
+/// <c>git-log</c>/<c>git-diff</c>/<c>git-status</c> already delegated to <see cref="GitCommand"/>'s
+/// filters. The two pipe-specific mini filters (<see cref="GrepWrapper"/>/<see cref="FindWrapper"/>)
+/// have no ecosystem-module delegation target in Rust either — they're pipe-only helpers there
+/// too — and were already fully ported.
 /// </para>
 /// <para>
 /// <b>Exception-safety is a deliberate feature, not a bug.</b> <see cref="ApplyFilter"/> wraps
@@ -254,26 +264,21 @@ public static class PipeCommand
     /// <returns>The resolved filter function, or null if <paramref name="name"/> is not a known alias.</returns>
     internal static Func<string, string>? ResolveFilter(string name) => name switch
     {
-        // Gap-disclosed: no Rust/Cargo ecosystem filter module ported in RtkSharp yet.
-        "cargo-test" or "cargo" => IdentityFilter,
+        "cargo-test" or "cargo" => CargoBuildTestFilters.FilterCargoTest,
 
-        // Gap-disclosed: no Python ecosystem filter module ported in RtkSharp yet.
-        "pytest" => IdentityFilter,
-        "mypy" => IdentityFilter,
-        "ruff-check" => IdentityFilter,
-        "ruff-format" => IdentityFilter,
+        "pytest" => PytestFilters.FilterPytestOutput,
+        "mypy" => MypyFilters.FilterMypyOutput,
+        "ruff-check" => RuffFilters.FilterRuffCheckJson,
+        "ruff-format" => RuffFilters.FilterRuffFormat,
 
-        // Gap-disclosed: no Go ecosystem filter module ported in RtkSharp yet.
-        "go-test" => IdentityFilter,
-        "go-build" => IdentityFilter,
+        "go-test" => GoFilters.FilterGoTestJson,
+        "go-build" => GoFilters.FilterGoBuild,
 
-        // Gap-disclosed: JS ecosystem filters are scoped to Phase 8, not yet ported.
-        "tsc" => IdentityFilter,
-        "vitest" => IdentityFilter,
-        "prettier" => IdentityFilter,
+        "tsc" => TscCommand.FilterTscOutput,
+        "vitest" => VitestWrapper,
+        "prettier" => PrettierCommand.FilterPrettierOutput,
 
-        // Gap-disclosed: no dedicated `rtk log` command ported in RtkSharp yet.
-        "log" => IdentityFilter,
+        "log" => LogCommand.AnalyzeLogs,
 
         // Genuinely ported: fresh pipe-only mini filters (no Rust ecosystem delegation either).
         "grep" or "rg" => GrepWrapper,
@@ -286,6 +291,28 @@ public static class PipeCommand
 
         _ => null,
     };
+
+    /// <summary>
+    /// Faithful port of <c>vitest_wrapper</c> (<c>pipe_cmd.rs</c>:48-56): parses via the shared
+    /// <see cref="VitestCommand.VitestParser"/> and always renders
+    /// <see cref="FormatMode.Compact"/>, regardless of any process-level verbosity (unlike
+    /// <c>rtk vitest</c> itself, which scales its format mode with <c>--verbose</c>) — <c>rtk pipe</c>
+    /// has no verbosity concept of its own, matching Rust's hardcoded <c>FormatMode::Compact</c> here.
+    /// </summary>
+    /// <param name="input">The raw vitest/jest JSON reporter output.</param>
+    /// <returns>The compact-formatted test summary, or the raw input on a Passthrough-tier parse.</returns>
+    private static string VitestWrapper(string input)
+    {
+        var parser = new VitestCommand.VitestParser();
+        var result = parser.Parse(input);
+        return result switch
+        {
+            ParseResult<TestResult>.Full full => full.Data.FormatCompact(),
+            ParseResult<TestResult>.Degraded degraded => degraded.Data.FormatCompact(),
+            ParseResult<TestResult>.Passthrough passthrough => passthrough.Raw,
+            _ => input,
+        };
+    }
 
     private static string GitLogWrapper(string input) =>
         GitCommand.FilterLogOutput(input, limit: 50, userSetLimit: false, userFormat: false);
@@ -452,28 +479,24 @@ public static class PipeCommand
         if (first1K.Contains("test result:", StringComparison.Ordinal) &&
             first1K.Contains("passed;", StringComparison.Ordinal))
         {
-            // Gap-disclosed: would be cargo-test in Rust; resolves to identity here (see ResolveFilter).
-            return IdentityFilter;
+            return CargoBuildTestFilters.FilterCargoTest;
         }
 
         if (first1K.Contains("=== test session starts", StringComparison.Ordinal))
         {
-            // Gap-disclosed: would be pytest in Rust; resolves to identity here (see ResolveFilter).
-            return IdentityFilter;
+            return PytestFilters.FilterPytestOutput;
         }
 
         var firstTrimmed = first1K.TrimStart();
         if (firstTrimmed.StartsWith('{') && first1K.Contains("\"Action\"", StringComparison.Ordinal))
         {
-            // Gap-disclosed: would be go-test in Rust; resolves to identity here (see ResolveFilter).
-            return IdentityFilter;
+            return GoFilters.FilterGoTestJson;
         }
 
         if (first1K.Contains(": error:", StringComparison.Ordinal) &&
             first1K.Contains(".py:", StringComparison.Ordinal))
         {
-            // Gap-disclosed: would be mypy in Rust; resolves to identity here (see ResolveFilter).
-            return IdentityFilter;
+            return MypyFilters.FilterMypyOutput;
         }
 
         // grep/rg: at least one of the first 5 non-empty lines matches file:number:content.
@@ -488,8 +511,7 @@ public static class PipeCommand
         if (first1K.Contains("\"testResults\"", StringComparison.Ordinal) ||
             first1K.Contains("\"numTotalTests\"", StringComparison.Ordinal))
         {
-            // Gap-disclosed: would be vitest in Rust; resolves to identity here (see ResolveFilter).
-            return IdentityFilter;
+            return VitestWrapper;
         }
 
         // find/fd: every non-empty line looks like a file path, minimum 3 lines.
