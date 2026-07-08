@@ -1422,6 +1422,16 @@ Not scoped or scheduled — captured here so they aren't lost, not yet designed.
   packaging as a second NuGet artifact alongside the `RtkSharp` tool package vs. a
   shared internal project; whether this conflicts with or reinforces the `dnx`
   zero-install CLI thesis in §1).
+  - **Concrete consumer identified 2026-07-08: CodeSharp** (the user's own C# Agent CLI).
+    Motivation is conversation/tool-use compression — CodeSharp could call RtkSharp's
+    filter pipeline in-process on tool-call output before it ever enters the model's
+    context, rather than round-tripping through a subprocess the way Claude Code's hook
+    integration does today. This is a second, independent driver for the library-boundary
+    work above (agent-host-in-.NET, not just "any external process"), so the eventual
+    brainstorming/scoping pass should treat CodeSharp as a first-class consumer — e.g.
+    check whether CodeSharp's tool-use loop wants per-call filtering (one command's output
+    at a time, matching today's CLI-proxy granularity) or whole-conversation-history
+    compaction (a broader surface RTK doesn't currently address at all).
 
 ## 12. Immediate Next Steps
 
