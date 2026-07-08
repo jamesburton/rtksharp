@@ -268,8 +268,10 @@ git commit -m "refactor(cloud): extract JsonCompaction.Compact from AwsFilters f
 - Consumes: `RtkSharp.Commands.Cloud.AwsFilters.FilterResult` (reused type — `New(string)`/`Truncated(string)` factory methods).
 - Produces: `AzFilters.FilterAccountShow(string) : AwsFilters.FilterResult?`,
   `AzFilters.FilterAccountList(string) : AwsFilters.FilterResult?`, and the shared private JSON
-  helpers (`TryParse`, `TryGetProp`, `JStr`, `JStrOr`, `JNestedStr`, `JBoolStr`, `IsSimpleJson`,
-  `JoinWithOverflow`) that Tasks 3-6 build on.
+  helpers (`TryParse`, `TryGetProp`, `JStr`, `JNestedStr`, `JBoolStr`, `IsSimpleJson`,
+  `JoinWithOverflow`) that Tasks 3-6 build on. (`JStrOr` was listed here in an earlier draft but
+  is not needed by any az filter — none require an OR-fallback between two field names — and was
+  correctly omitted from Task 2's own Step 3 code and every later task's code.)
 
 - [ ] **Step 1: Write the failing tests**
 
