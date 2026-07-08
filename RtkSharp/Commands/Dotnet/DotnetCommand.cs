@@ -266,18 +266,27 @@ public static class DotnetCommand
     private static async Task<int> RunPassthroughAsync(string[] args, IProcessExecutor executor)
     {
         // args[0] is the subcommand; args are already non-empty (checked by the caller).
+        var result = await ExecuteDotnetAsync(args, executor).ConfigureAwait(false);
+
+        Console.Out.Write(result.Stdout);
+        Console.Error.Write(result.Stderr);
+        return result.ExitCode;
+    }
+
+    /// <summary>
+    /// Executes <c>dotnet &lt;invocationArgs&gt;</c> with the shared <see cref="DotnetCliUiLanguage"/>
+    /// environment override and <see cref="ExecutionCaptureMode.Separate"/> capture. Shared by
+    /// <see cref="RunPassthroughAsync"/> and <see cref="RunFileBasedAppAsync"/>, whose invocations
+    /// are otherwise byte-for-byte identical (DRY extraction; see project CLAUDE.md).
+    /// </summary>
+    private static ValueTask<ExecutionResult> ExecuteDotnetAsync(IReadOnlyList<string> invocationArgs, IProcessExecutor executor)
+    {
         var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
         {
             [DotnetCliUiLanguage] = DotnetCliUiLanguageValue,
         };
 
-        var result = await executor
-            .ExecuteAsync(new ExecutionRequest("dotnet", args, Environment: environment, CaptureMode: ExecutionCaptureMode.Separate))
-            .ConfigureAwait(false);
-
-        Console.Out.Write(result.Stdout);
-        Console.Error.Write(result.Stderr);
-        return result.ExitCode;
+        return executor.ExecuteAsync(new ExecutionRequest("dotnet", invocationArgs, Environment: environment, CaptureMode: ExecutionCaptureMode.Separate));
     }
 
     // --- file-based app path (dotnet run <file>.cs / dotnet <file>.cs; .NET 10+ only, no Rust equivalent) ---
@@ -322,14 +331,7 @@ public static class DotnetCommand
     /// </remarks>
     private static async Task<int> RunFileBasedAppAsync(string[] args, string fileDisplayName, IProcessExecutor executor)
     {
-        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
-        {
-            [DotnetCliUiLanguage] = DotnetCliUiLanguageValue,
-        };
-
-        var result = await executor
-            .ExecuteAsync(new ExecutionRequest("dotnet", args, Environment: environment, CaptureMode: ExecutionCaptureMode.Separate))
-            .ConfigureAwait(false);
+        var result = await ExecuteDotnetAsync(args, executor).ConfigureAwait(false);
 
         if (result.ExitCode == 0)
         {
