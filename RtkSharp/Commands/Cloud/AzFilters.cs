@@ -22,6 +22,11 @@ internal static class AzFilters
     // Secret-shaped key names — starting list per the design spec, applied to both quoted
     // (JsonCompaction.Compact's "key: \"value\"" rendering) and unquoted ("key=value", used by
     // FormatDeployment's params line) styles.
+    //
+    // This is a deliberate, documented heuristic, not an exhaustive taxonomy: real-world secret
+    // key names are effectively unbounded (any org can name a deployment parameter anything), so
+    // this list only covers the shapes seen in practice so far. Extend it as new secret-shaped
+    // key names are discovered in the wild rather than treating this as a closed set.
     private static readonly string[] SensitiveKeyNames =
     {
         "connectionString", "key", "keys", "password", "secret", "token", "sasToken",
@@ -39,16 +44,28 @@ internal static class AzFilters
         @"(?<=keyName:\s*""key\d+"",?\s*\n\s*permissions:\s*""[^""]*"",?\s*\n\s*value:\s*"")[^""]*",
         RegexOptions.Compiled);
 
+    // The `(?<![A-Za-z0-9_])[A-Za-z0-9]*` left side (in place of a plain `\b`) lets the key-name
+    // alternation match as a case-insensitive SUFFIX of a longer camelCase identifier —
+    // `adminPassword`, `sqlAdminPassword`, `clientSecret` — not just an exact whole-word key,
+    // since that's the naming convention real Azure deployment parameters overwhelmingly use.
+    // The lookbehind still anchors the match to the start of an identifier (so it can't begin
+    // mid-word), and the trailing `\b` still rejects a sensitive word used as a PREFIX of an
+    // unrelated word (`passwordless` does not match) because the next character after the
+    // candidate suffix must be a non-identifier character (`:`/`=`/whitespace).
     private static Regex BuildSensitiveKeyRegexQuoted()
     {
         var joined = string.Join('|', SensitiveKeyNames.Select(Regex.Escape));
-        return new Regex($@"(?<prefix>\b(?:{joined})\b\s*:\s*"")(?<value>[^""]*)(?="")", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        return new Regex(
+            $@"(?<prefix>(?<![A-Za-z0-9_])[A-Za-z0-9]*(?:{joined})\b\s*:\s*"")(?<value>[^""]*)(?="")",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
     }
 
     private static Regex BuildSensitiveKeyRegexUnquoted()
     {
         var joined = string.Join('|', SensitiveKeyNames.Select(Regex.Escape));
-        return new Regex($@"(?<prefix>\b(?:{joined})\b\s*=\s*)(?<value>[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        return new Regex(
+            $@"(?<prefix>(?<![A-Za-z0-9_])[A-Za-z0-9]*(?:{joined})\b\s*=\s*)(?<value>[^\s,;]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
     }
 
     // ===================== account show / account list =====================

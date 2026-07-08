@@ -436,6 +436,34 @@ public sealed class AzCommandTests
         Assert.DoesNotContain("AccountKey=abc123", result, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Redact_CamelCaseSuffixParamNames_AreRedacted()
+    {
+        // Real Azure deployment parameters overwhelmingly use camelCase names like
+        // `adminPassword`/`sqlAdminPassword`/`clientSecret` rather than a bare `password` — the
+        // sensitive-key regex must match these as a suffix, not just an exact whole word.
+        var input = "params: adminPassword=hunter2, sqlAdminPassword=hunter3, clientSecret=x, name=foo";
+        var result = AzFilters.Redact(input);
+
+        Assert.Contains("adminPassword=[REDACTED]", result, StringComparison.Ordinal);
+        Assert.Contains("sqlAdminPassword=[REDACTED]", result, StringComparison.Ordinal);
+        Assert.Contains("clientSecret=[REDACTED]", result, StringComparison.Ordinal);
+        Assert.Contains("name=foo", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter3", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Redact_SensitiveWordAsPrefixOfUnrelatedWord_IsNotRedacted()
+    {
+        // `passwordless` contains "password" as a PREFIX of an unrelated word, not as a suffix of
+        // a real camelCase identifier — the suffix-matching fix must not over-redact this.
+        var input = "params: passwordless=true, name=foo";
+        var result = AzFilters.Redact(input);
+
+        Assert.Equal(input, result);
+    }
+
     // ===================== AzCommand dispatch =====================
 
     private static ExecutionResult Ok(string stdout, string stderr = "") =>
@@ -565,6 +593,59 @@ public sealed class AzCommandTests
 
         Assert.Equal(1, exit);
         Assert.Contains("ERROR: subscription not found", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_GenericFallback_RedactsSecretValueBeforePrintingToConsole()
+    {
+        // `storage account keys list` is a 3-part subcommand that doesn't match any of the 10
+        // named dispatch arms, so it routes through RunGenericAsync (JsonCompaction.Compact +
+        // AzFilters.Redact). This proves Redact()'s output actually reaches Console.Out through
+        // the full dispatch, not just that Redact() works in isolation.
+        const string secret = "abcdEXAMPLESECRET==";
+        var raw = $$"""
+            [{"creationTime": "2022-11-18T14:56:52.706532+00:00", "keyName": "key1", "permissions": "FULL", "value": "{{secret}}"}]
+            """;
+        var executor = new RecordingExecutor(_ => Ok(raw));
+
+        var stdout = await CaptureStdoutAsync(() => AzCommand.RunAsync(["storage", "account", "keys", "list"], verbose: 0, executor));
+
+        Assert.DoesNotContain(secret, stdout, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED]", stdout, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_NamedFilteredOp_RedactsSecretValueBeforePrintingToConsole()
+    {
+        // `deployment group list` is a named dispatch arm (RunAzFilteredAsync). This proves
+        // Redact()'s output reaches Console.Out through THAT path too, not just the generic
+        // fallback covered above — both call sites are exercised end-to-end.
+        var raw = DeploymentGroupListRaw.Replace(
+            "\"authenticationMode\": { \"type\": \"String\", \"value\": \"Pass-through\" },",
+            "\"authenticationMode\": { \"type\": \"String\", \"value\": \"Pass-through\" }, \"password\": { \"type\": \"String\", \"value\": \"hunter2\" },",
+            StringComparison.Ordinal);
+        var executor = new RecordingExecutor(_ => Ok(raw));
+
+        var stdout = await CaptureStdoutAsync(() => AzCommand.RunAsync(["deployment", "group", "list"], verbose: 0, executor));
+
+        Assert.DoesNotContain("hunter2", stdout, StringComparison.Ordinal);
+        Assert.Contains("password=[REDACTED]", stdout, StringComparison.Ordinal);
+    }
+
+    private static async Task<string> CaptureStdoutAsync(Func<Task<int>> action)
+    {
+        var previous = Console.Out;
+        var writer = new StringWriter { NewLine = "\n" };
+        Console.SetOut(writer);
+        try
+        {
+            await action();
+            return writer.ToString();
+        }
+        finally
+        {
+            Console.SetOut(previous);
+        }
     }
 
     private sealed class RecordingExecutor(Func<ExecutionRequest, ExecutionResult> responder) : IProcessExecutor
