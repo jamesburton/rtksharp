@@ -561,4 +561,75 @@ public sealed class DotnetCommandTests
         Assert.Equal(0, exitCode);
         Assert.Equal(new[] { "run", "--project", "MyApp.csproj", "--", "somearg.cs" }, executor.Requests[0].Arguments);
     }
+
+    // ---- FilterFileBasedApp: tier 1 (IssueRegex-shaped) + tier 2 (no-location diagnostics) ----
+
+    // Captured from a real `dotnet run syntax.cs` with a genuine missing-semicolon syntax error.
+    private const string FileBasedAppSyntaxErrorRaw =
+        "C:\\scratch\\syntax.cs(1,24): error CS1002: ; expected\n" +
+        "\n" +
+        "The build failed. Fix the build errors and run again.\n";
+
+    // Captured from a real `dotnet run boom2.cs` where an ambient ~/NuGet.Config with two
+    // package sources triggered a central-package-management source-mapping error — a
+    // no-location MSBuild/NuGet diagnostic that already matches the existing
+    // RestoreDiagnosticRegex used by ParseRestoreIssuesFromText (file + numeric code, no line/col).
+    private const string FileBasedAppNuGetDiagnosticRaw =
+        "C:\\scratch\\boom2.cs.csproj : error NU1507: Warning As Error: There are 2 package sources defined in your configuration. When using central package management, please map your package sources with package source mapping (https://aka.ms/nuget-package-source-mapping) or specify a single package source. The following sources are defined: nuget.org, QHubPackages\n" +
+        "\n" +
+        "The build failed. Fix the build errors and run again.\n";
+
+    // Captured from a real `dotnet run ok.cs` on a trivial one-line program on this SDK, which
+    // fails a Roslyn analyzer-config check with no source location and no numeric diagnostic code.
+    private const string FileBasedAppNoCodeDiagnosticRaw =
+        "CSC : error EnableGenerateDocumentationFile: Set MSBuild property 'GenerateDocumentationFile' to 'true' in project file to enable IDE0005 (Remove unnecessary usings/imports) on build (https://github.com/dotnet/roslyn/issues/41640)\n" +
+        "\n" +
+        "The build failed. Fix the build errors and run again.\n";
+
+    [Fact]
+    public void FilterFileBasedApp_SyntaxError_ReusesIssueRegexPath()
+    {
+        var output = DotnetCommand.FilterFileBasedApp(FileBasedAppSyntaxErrorRaw, "syntax.cs");
+
+        Assert.Equal(
+            "Errors:\n" +
+            "  C:\\scratch\\syntax.cs(1,24) error CS1002: ; expected\n" +
+            "\n" +
+            "fail dotnet run: syntax.cs (1 errors, 0 warnings)",
+            output);
+    }
+
+    [Fact]
+    public void FilterFileBasedApp_NuGetDiagnostic_ReusesRestoreDiagnosticPath()
+    {
+        var output = DotnetCommand.FilterFileBasedApp(FileBasedAppNuGetDiagnosticRaw, "boom2.cs");
+
+        // NOTE: the message is truncated to 180 chars by the existing, already-tested
+        // Truncate() helper (FormatIssue), and the file field is populated because the raw
+        // line's "boom2.cs.csproj : error NU1507: ..." shape matches RestoreDiagnosticRegex's
+        // optional file-capture group — both confirmed against real test output, not
+        // hand-computed (see task report).
+        Assert.Equal(
+            "Errors:\n" +
+            "  C:\\scratch\\boom2.cs.csproj(0,0) error NU1507: Warning As Error: There are 2 package sources defined in your configuration. When using central package management, please map your package sources with package source mapping (...\n" +
+            "\n" +
+            "fail dotnet run: boom2.cs (1 errors, 0 warnings)",
+            output);
+    }
+
+    [Fact]
+    public void FilterFileBasedApp_NoCodeDiagnostic_UsesNewFallbackRegex()
+    {
+        var output = DotnetCommand.FilterFileBasedApp(FileBasedAppNoCodeDiagnosticRaw, "ok.cs");
+
+        // NOTE: the message is truncated to 180 chars by the existing, already-tested
+        // Truncate() helper (FormatIssue) — confirmed against real test output, not
+        // hand-computed (see task report).
+        Assert.Equal(
+            "Errors:\n" +
+            "  error EnableGenerateDocumentationFile: Set MSBuild property 'GenerateDocumentationFile' to 'true' in project file to enable IDE0005 (Remove unnecessary usings/imports) on build (https...\n" +
+            "\n" +
+            "fail dotnet run: ok.cs (1 errors, 0 warnings)",
+            output);
+    }
 }

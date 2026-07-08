@@ -128,6 +128,14 @@ public static class DotnetCommand
         @"^\s*(?:(?<file>.+?)\s+:\s+)?(?<kind>warning|error)\s+(?<code>[A-Za-z]{2,}\d{3,})\s*:\s*(?<msg>.+)$",
         RegexOptions.Multiline | RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // New regex, not ported from Rust (no oracle for file-based apps): matches a no-location
+    // Roslyn/MSBuild diagnostic of the shape "CSC : error <NonNumericName>: <msg>" — narrower
+    // than RestoreDiagnosticRegex (which requires a numeric code like NU1507 and already covers
+    // that shape for free) because this one has no digits in its "code" position at all.
+    private static readonly Regex FileBasedAppNoCodeDiagnosticRegex = new(
+        @"^\s*CSC\s*:\s*error\s+(?<name>\S+):\s*(?<msg>.*)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     private static readonly Regex ProjectPathRegex = new(
         @"^\s*([A-Za-z]:)?[^\r\n]*\.csproj(?:\s|$)",
         RegexOptions.Multiline | RegexOptions.Compiled);
@@ -356,8 +364,47 @@ public static class DotnetCommand
         return result.ExitCode;
     }
 
-    private static string FilterFileBasedApp(string raw, string fileDisplayName) =>
-        throw new NotImplementedException("implemented in Task 2");
+    internal static string FilterFileBasedApp(string raw, string fileDisplayName)
+    {
+        // Tier 1: same IssueRegex-driven parsing dotnet build/restore already use — covers
+        // genuine source-level compile errors/warnings for free (identical output shape).
+        var buildSummary = ParseBuildFromText(raw);
+        if (buildSummary.Errors.Count > 0 || buildSummary.Warnings.Count > 0)
+        {
+            return FormatFileBasedAppIssues(buildSummary.Errors, buildSummary.Warnings, fileDisplayName);
+        }
+
+        // Tier 2a: no-location MSBuild/NuGet diagnostics with a numeric code (e.g. NU1507) —
+        // already matched by the existing restore-diagnostic parser, zero new regex needed.
+        var (restoreErrors, restoreWarnings) = ParseRestoreIssuesFromText(raw);
+        if (restoreErrors.Count > 0 || restoreWarnings.Count > 0)
+        {
+            return FormatFileBasedAppIssues(restoreErrors, restoreWarnings, fileDisplayName);
+        }
+
+        // Tier 2b: no-location diagnostics with no numeric code at all (e.g. Roslyn
+        // analyzer-config errors like EnableGenerateDocumentationFile).
+        var noCodeMatches = FileBasedAppNoCodeDiagnosticRegex.Matches(raw);
+        if (noCodeMatches.Count > 0)
+        {
+            var errors = noCodeMatches
+                .Select(m => new BinlogIssue(string.Empty, string.Empty, 0, 0, $"{m.Groups["name"].Value}: {m.Groups["msg"].Value.Trim()}"))
+                .ToList();
+            return FormatFileBasedAppIssues(errors, new List<BinlogIssue>(), fileDisplayName);
+        }
+
+        // Tier 3 (unhandled exception) and tier 4 (unrecognized -> raw fallback) added in Task 3.
+        throw new InvalidOperationException("unrecognized dotnet run failure output shape");
+    }
+
+    private static string FormatFileBasedAppIssues(List<BinlogIssue> errors, List<BinlogIssue> warnings, string fileDisplayName)
+    {
+        var errorsSection = FormatIssueSection(errors, "error", "Errors:", CapBuildErrors, "dotnet-run-errors");
+        var warningsSection = FormatIssueSection(warnings, "warning", "Warnings:", CapBuildWarnings, "dotnet-run-warnings");
+        var verdict = $"fail dotnet run: {fileDisplayName} ({errors.Count} errors, {warnings.Count} warnings)";
+
+        return JoinNonEmpty(warningsSection, errorsSection, verdict);
+    }
 
     // --- format path (ported from run_format in dotnet_cmd.rs) ---
 
