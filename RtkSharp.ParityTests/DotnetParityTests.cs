@@ -68,6 +68,29 @@ namespace RtkSharp.ParityTests;
 /// sides and the failure summary is byte-identical once the TRX path is masked.
 /// </para>
 /// <para>
+/// <b>KNOWN HAZARD — this test can crash the testhost when run ISOLATED via
+/// <c>dotnet test --filter</c> on a loaded machine; it is safe as part of the full suite.</b>
+/// Diagnosed directly via live process-tree tracing (not just reasoned about): this is a HEAVY
+/// test — it runs the full 3275-test <c>RtkSharp.Tests</c> suite TWICE (once oracle-wrapped, once
+/// port-wrapped) as one battery entry, then immediately runs <c>dotnet format RtkSharp.slnx
+/// --verify-no-changes</c> twice more (Roslyn workspace analysis, memory-intensive) on the same
+/// already-memory-heavy testhost process. On a machine with many concurrent MSBuild
+/// <c>/nodeReuse:true</c> server processes and other background load, the testhost has crashed
+/// (<c>Test host process crashed</c> / <c>Test Run Aborted</c>) within ~3 minutes of an isolated
+/// <c>--filter</c> run — reproducibly, but NOT from any code bug in this test or in
+/// <c>DotnetCommand</c>'s format handling (both were verified working correctly in isolation
+/// outside the testhost). A previous investigation misattributed this to a self-referential
+/// MSBuild build-lock (the warm-up's <c>dotnet build RtkSharp.slnx</c> allegedly deadlocking on
+/// its own loaded <c>RtkSharp.ParityTests.dll</c>) — that theory is WRONG and was directly
+/// disproven: running with <c>dotnet test --no-build --filter ...</c> (which skips the outer
+/// rebuild entirely) still crashes identically. The real pattern points to resource exhaustion
+/// (likely OOM-class) under memory pressure, not a lock. <b>Before debugging this test in
+/// isolation</b>: kill stray <c>dotnet.exe</c>/<c>MSBuild.exe</c>/<c>VBCSCompiler.exe</c>
+/// processes first (<c>tasklist | grep -i dotnet</c>), or just run the FULL
+/// <c>RtkSharp.ParityTests</c> suite (no filter) instead, which has completed successfully
+/// end-to-end in prior sessions. Do not re-litigate the build-lock theory without new evidence.
+/// </para>
+/// <para>
 /// Stderr is intentionally ignored (the oracle prints a <c>[rtk] /!\ No hook installed</c> warning
 /// there). Line endings are CRLF/LF-normalized and tee-hint lines stripped, per the established
 /// harness rules in <see cref="SystemParityTests"/>.
