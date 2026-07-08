@@ -670,6 +670,27 @@ public sealed class DotnetCommandTests
             output);
     }
 
+    // Regression test: a "   at ..."-shaped line appearing in the program's own PRECEDING
+    // output (before the "Unhandled exception." marker) must not be miscounted as a stack
+    // frame, and must not be selected as the "first" frame — only lines at/after the exception
+    // header are real stack-trace frames.
+    [Fact]
+    public void FilterFileBasedApp_UnhandledException_IgnoresLookalikeAtLineInPrecedingOutput()
+    {
+        const string raw =
+            "   at the beginning, things were fine\n" +
+            "Unhandled exception. System.InvalidOperationException: boom\n" +
+            "   at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2\n";
+
+        var output = DotnetCommand.FilterFileBasedApp(raw, "boom.cs");
+
+        Assert.Equal(
+            "at the beginning, things were fine\n" +
+            "\n" +
+            "exception: System.InvalidOperationException: boom (1 frames, first: at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2)",
+            output);
+    }
+
     [Fact]
     public void FilterFileBasedApp_UnrecognizedFailureShape_Throws()
     {

@@ -422,7 +422,12 @@ public static class DotnetCommand
         var type = exceptionMatch.Groups["type"].Value.Trim();
         var message = exceptionMatch.Groups["message"].Value.Trim();
 
-        var frames = FileBasedAppStackFrameRegex.Matches(raw);
+        // Scope frame matching to the text at/after the exception header only — matching
+        // against the whole `raw` buffer would let a coincidentally "   at ..."-shaped line in
+        // the program's own preceding output (e.g. an indented log line) be miscounted as a
+        // stack frame, or even wrongly picked as the "first" frame.
+        var tail = raw[exceptionMatch.Index..];
+        var frames = FileBasedAppStackFrameRegex.Matches(tail);
         var firstFrame = frames.Count > 0 ? frames[0].Value.Trim() : "unknown";
         var summary = $"exception: {type}: {message} ({frames.Count} frames, first: {firstFrame})";
 
