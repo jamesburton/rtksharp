@@ -9,6 +9,28 @@ using RtkSharp.Execution;
 namespace RtkSharp.Commands.Dotnet;
 
 /// <summary>
+/// How the targeted test project(s) run tests — determines which TRX-reporting flags to inject.
+/// Ported from Rust's <c>TestRunnerMode</c> in <c>dotnet_cmd.rs</c>.
+/// </summary>
+internal enum TestRunnerMode
+{
+    /// <summary>Classic VSTest runner. Inject <c>--logger trx --results-directory</c>.</summary>
+    Classic,
+
+    /// <summary>
+    /// Native Microsoft.Testing.Platform runner (global.json MTP mode). <c>--logger trx</c> breaks
+    /// the run; inject <c>--report-trx</c> directly.
+    /// </summary>
+    MtpNative,
+
+    /// <summary>
+    /// VSTest bridge for MTP (project-file / <c>Directory.Build.props</c> properties). MTP args must
+    /// come after the <c>--</c> separator; inject <c>-- --report-trx</c>.
+    /// </summary>
+    MtpVsTestBridge,
+}
+
+/// <summary>
 /// Filters <c>dotnet</c> CLI output. This verb dispatches on its first argument (the
 /// dotnet subcommand) and mirrors the Rust <c>src/cmds/dotnet/dotnet_cmd.rs</c> routing:
 /// <c>build</c>/<c>restore</c> get text-based summary filters, everything else falls
@@ -54,28 +76,6 @@ namespace RtkSharp.Commands.Dotnet;
 /// design rationale and empirical findings this is based on.
 /// </para>
 /// </remarks>
-/// <summary>
-/// How the targeted test project(s) run tests — determines which TRX-reporting flags to inject.
-/// Ported from Rust's <c>TestRunnerMode</c> in <c>dotnet_cmd.rs</c>.
-/// </summary>
-internal enum TestRunnerMode
-{
-    /// <summary>Classic VSTest runner. Inject <c>--logger trx --results-directory</c>.</summary>
-    Classic,
-
-    /// <summary>
-    /// Native Microsoft.Testing.Platform runner (global.json MTP mode). <c>--logger trx</c> breaks
-    /// the run; inject <c>--report-trx</c> directly.
-    /// </summary>
-    MtpNative,
-
-    /// <summary>
-    /// VSTest bridge for MTP (project-file / <c>Directory.Build.props</c> properties). MTP args must
-    /// come after the <c>--</c> separator; inject <c>-- --report-trx</c>.
-    /// </summary>
-    MtpVsTestBridge,
-}
-
 public static class DotnetCommand
 {
     private const string DotnetCliUiLanguage = "DOTNET_CLI_UI_LANGUAGE";
@@ -239,9 +239,9 @@ public static class DotnetCommand
             "test" => await RunTestAsync(rest, executor).ConfigureAwait(false),
             "format" => await RunFormatAsync(rest, executor).ConfigureAwait(false),
             "run" when FindFileBasedAppArg(rest) is { } csFile =>
-                await RunFileBasedAppAsync(args, csFile, executor).ConfigureAwait(false),
+                await RunFileBasedAppAsync(args, csFile, executor, usedRunKeyword: true).ConfigureAwait(false),
             _ when subcommand.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) =>
-                await RunFileBasedAppAsync(args, subcommand, executor).ConfigureAwait(false),
+                await RunFileBasedAppAsync(args, subcommand, executor, usedRunKeyword: false).ConfigureAwait(false),
             _ => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
         };
     }
@@ -330,6 +330,13 @@ public static class DotnetCommand
     /// Returns null for ordinary project-based <c>dotnet run</c> (no <c>.cs</c> argument, or
     /// a <c>.cs</c>-looking token that is actually a post-<c>--</c> program argument).
     /// </summary>
+    /// <remarks>
+    /// Known, accepted limitation: this heuristic cannot distinguish the file-based-app path
+    /// from an option's *value* — e.g. a hypothetical future <c>dotnet run --someopt value.cs</c>
+    /// flag whose value happens to end in <c>.cs</c> would be misdetected as the app file. No
+    /// real <c>dotnet run</c> flag takes a <c>.cs</c>-suffixed value today, so this is not
+    /// treated as a bug; revisit if that ever changes.
+    /// </remarks>
     private static string? FindFileBasedAppArg(string[] rest)
     {
         foreach (var arg in rest)
@@ -362,7 +369,7 @@ public static class DotnetCommand
     /// propagates <c>result.ExitCode</c> verbatim regardless of which tier matched, so that
     /// uncertainty has no effect on correctness here.
     /// </remarks>
-    private static async Task<int> RunFileBasedAppAsync(string[] args, string fileDisplayName, IProcessExecutor executor)
+    private static async Task<int> RunFileBasedAppAsync(string[] args, string fileDisplayName, IProcessExecutor executor, bool usedRunKeyword)
     {
         var result = await ExecuteDotnetAsync(args, executor).ConfigureAwait(false);
 
@@ -376,7 +383,7 @@ public static class DotnetCommand
         var raw = result.Stdout + "\n" + result.Stderr;
         try
         {
-            var filtered = FilterFileBasedApp(raw, fileDisplayName);
+            var filtered = FilterFileBasedApp(raw, fileDisplayName, usedRunKeyword);
             Console.Out.Write(filtered + "\n");
         }
         catch (Exception ex)
@@ -389,14 +396,14 @@ public static class DotnetCommand
         return result.ExitCode;
     }
 
-    internal static string FilterFileBasedApp(string raw, string fileDisplayName)
+    internal static string FilterFileBasedApp(string raw, string fileDisplayName, bool usedRunKeyword = true)
     {
         // Tier 1: same IssueRegex-driven parsing dotnet build/restore already use — covers
         // genuine source-level compile errors/warnings for free (identical output shape).
         var buildSummary = ParseBuildFromText(raw);
         if (buildSummary.Errors.Count > 0 || buildSummary.Warnings.Count > 0)
         {
-            return FormatFileBasedAppIssues(buildSummary.Errors, buildSummary.Warnings, fileDisplayName);
+            return FormatFileBasedAppIssues(buildSummary.Errors, buildSummary.Warnings, fileDisplayName, usedRunKeyword);
         }
 
         // Tier 2a: no-location MSBuild/NuGet diagnostics with a numeric code (e.g. NU1507) —
@@ -404,7 +411,7 @@ public static class DotnetCommand
         var (restoreErrors, restoreWarnings) = ParseRestoreIssuesFromText(raw);
         if (restoreErrors.Count > 0 || restoreWarnings.Count > 0)
         {
-            return FormatFileBasedAppIssues(restoreErrors, restoreWarnings, fileDisplayName);
+            return FormatFileBasedAppIssues(restoreErrors, restoreWarnings, fileDisplayName, usedRunKeyword);
         }
 
         // Tier 2b: no-location diagnostics with no numeric code at all (e.g. Roslyn
@@ -415,7 +422,7 @@ public static class DotnetCommand
             var errors = noCodeMatches
                 .Select(m => new BinlogIssue(string.Empty, string.Empty, 0, 0, $"{m.Groups["name"].Value}: {m.Groups["msg"].Value.Trim()}"))
                 .ToList();
-            return FormatFileBasedAppIssues(errors, new List<BinlogIssue>(), fileDisplayName);
+            return FormatFileBasedAppIssues(errors, new List<BinlogIssue>(), fileDisplayName, usedRunKeyword);
         }
 
         // Tier 3: an unhandled runtime exception (not a compile-time failure at all).
@@ -449,11 +456,17 @@ public static class DotnetCommand
         return preceding.Length > 0 ? $"{preceding}\n\n{summary}" : summary;
     }
 
-    private static string FormatFileBasedAppIssues(List<BinlogIssue> errors, List<BinlogIssue> warnings, string fileDisplayName)
+    private static string FormatFileBasedAppIssues(List<BinlogIssue> errors, List<BinlogIssue> warnings, string fileDisplayName, bool usedRunKeyword)
     {
         var errorsSection = FormatIssueSection(errors, "error", "Errors:", CapBuildErrors, "dotnet-run-errors");
         var warningsSection = FormatIssueSection(warnings, "warning", "Warnings:", CapBuildWarnings, "dotnet-run-warnings");
-        var verdict = $"fail dotnet run: {fileDisplayName} ({errors.Count} errors, {warnings.Count} warnings)";
+
+        // The verdict must name the command the user actually typed: "dotnet run <file>.cs"
+        // when the "run" keyword was used, or the bare "dotnet <file>.cs" shorthand (.NET 10+)
+        // otherwise — never claim "run" was typed when it wasn't.
+        var verdict = usedRunKeyword
+            ? $"fail dotnet run: {fileDisplayName} ({errors.Count} errors, {warnings.Count} warnings)"
+            : $"fail dotnet {fileDisplayName} ({errors.Count} errors, {warnings.Count} warnings)";
 
         return JoinNonEmpty(warningsSection, errorsSection, verdict);
     }

@@ -562,6 +562,36 @@ public sealed class DotnetCommandTests
         Assert.Equal(new[] { "run", "--project", "MyApp.csproj", "--", "somearg.cs" }, executor.Requests[0].Arguments);
     }
 
+    [Fact]
+    public async Task RunAsync_BareCsFileShorthandFailure_VerdictDoesNotClaimRun()
+    {
+        // Real `dotnet <file>.cs` failure output, no "run" keyword typed by the user.
+        var executor = new RecordingExecutor(new ExecutionResult(
+            string.Empty,
+            "C:\\scratch\\syntax.cs(1,24): error CS1002: ; expected\n\nThe build failed. Fix the build errors and run again.\n",
+            1,
+            TimeSpan.Zero,
+            true,
+            null,
+            false));
+        var originalOut = Console.Out;
+        var outWriter = new StringWriter();
+        Console.SetOut(outWriter);
+        int exitCode;
+        try
+        {
+            exitCode = await DotnetCommand.RunAsync(new[] { "syntax.cs" }, executor);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("fail dotnet syntax.cs (1 errors, 0 warnings)", outWriter.ToString());
+        Assert.DoesNotContain("fail dotnet run:", outWriter.ToString());
+    }
+
     // ---- FilterFileBasedApp: tier 1 (IssueRegex-shaped) + tier 2 (no-location diagnostics) ----
 
     // Captured from a real `dotnet run syntax.cs` with a genuine missing-semicolon syntax error.
@@ -596,6 +626,21 @@ public sealed class DotnetCommandTests
             "  C:\\scratch\\syntax.cs(1,24) error CS1002: ; expected\n" +
             "\n" +
             "fail dotnet run: syntax.cs (1 errors, 0 warnings)",
+            output);
+    }
+
+    [Fact]
+    public void FilterFileBasedApp_SyntaxError_BareShorthand_VerdictNamesShorthandNotRun()
+    {
+        // The bare `dotnet app.cs` shorthand (no "run" keyword) must not claim "dotnet run"
+        // in the verdict line, since the user never typed "run".
+        var output = DotnetCommand.FilterFileBasedApp(FileBasedAppSyntaxErrorRaw, "syntax.cs", usedRunKeyword: false);
+
+        Assert.Equal(
+            "Errors:\n" +
+            "  C:\\scratch\\syntax.cs(1,24) error CS1002: ; expected\n" +
+            "\n" +
+            "fail dotnet syntax.cs (1 errors, 0 warnings)",
             output);
     }
 
@@ -689,6 +734,46 @@ public sealed class DotnetCommandTests
             "\n" +
             "exception: System.InvalidOperationException: boom (1 frames, first: at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2)",
             output);
+    }
+
+    // Integration-boundary regression test: unlike the pure-function tests above (which feed a
+    // single pre-combined fixture string straight into FilterFileBasedApp), this test drives
+    // the exception path through RunAsync/RunFileBasedAppAsync with genuinely separate
+    // Stdout/Stderr fields on the ExecutionResult — matching how real `dotnet run` sends the
+    // program's own output to stdout and the unhandled-exception trace to stderr. Locks in that
+    // RunFileBasedAppAsync's `raw = result.Stdout + "\n" + result.Stderr` concatenation produces
+    // the expected "preceding output, then exception summary" layout, not just the pure filter.
+    [Fact]
+    public async Task RunAsync_UnhandledExceptionAcrossSeparateStdoutStderrStreams_SummarizesCorrectly()
+    {
+        var executor = new RecordingExecutor(new ExecutionResult(
+            "before crash\n",
+            "Unhandled exception. System.InvalidOperationException: boom\n" +
+            "   at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2\n",
+            1,
+            TimeSpan.Zero,
+            true,
+            null,
+            false));
+        var originalOut = Console.Out;
+        var outWriter = new StringWriter();
+        Console.SetOut(outWriter);
+        int exitCode;
+        try
+        {
+            exitCode = await DotnetCommand.RunAsync(new[] { "run", "boom.cs" }, executor);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(
+            "before crash\n" +
+            "\n" +
+            "exception: System.InvalidOperationException: boom (1 frames, first: at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2)\n",
+            outWriter.ToString());
     }
 
     [Fact]
