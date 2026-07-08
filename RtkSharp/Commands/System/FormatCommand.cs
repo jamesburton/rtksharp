@@ -131,20 +131,20 @@ public static class FormatCommand
         switch (formatter)
         {
             case "prettier":
-            {
-                var pm = PackageManagerDetection.PackageManagerExec("prettier");
-                fileName = pm.FileName;
-                cmdArgs.AddRange(pm.BaseArguments);
-                break;
-            }
+                {
+                    var pm = PackageManagerDetection.PackageManagerExec("prettier");
+                    fileName = pm.FileName;
+                    cmdArgs.AddRange(pm.BaseArguments);
+                    break;
+                }
 
             case "biome":
-            {
-                var pm = PackageManagerDetection.PackageManagerExec("biome");
-                fileName = pm.FileName;
-                cmdArgs.AddRange(pm.BaseArguments);
-                break;
-            }
+                {
+                    var pm = PackageManagerDetection.PackageManagerExec("biome");
+                    fileName = pm.FileName;
+                    cmdArgs.AddRange(pm.BaseArguments);
+                    break;
+                }
 
             // "black" | "ruff" | anything else (Rust's wildcard `_` arm): resolved_command(formatter).
             default:

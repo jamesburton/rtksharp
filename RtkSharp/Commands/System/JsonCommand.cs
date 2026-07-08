@@ -221,86 +221,86 @@ public static class JsonCommand
                 return $"{indent}{value.GetRawText()}";
 
             case JsonValueKind.String:
-            {
-                var s = value.GetString() ?? string.Empty;
-                if (Utf8ByteLength(s) > CompactStringByteThreshold)
                 {
-                    var truncated = FloorCharBoundaryTruncate(s, CompactStringTruncateByteOffset);
-                    return $"{indent}\"{truncated}...\"";
-                }
+                    var s = value.GetString() ?? string.Empty;
+                    if (Utf8ByteLength(s) > CompactStringByteThreshold)
+                    {
+                        var truncated = FloorCharBoundaryTruncate(s, CompactStringTruncateByteOffset);
+                        return $"{indent}\"{truncated}...\"";
+                    }
 
-                return $"{indent}\"{s}\"";
-            }
+                    return $"{indent}\"{s}\"";
+                }
 
             case JsonValueKind.Array:
-            {
-                var items = value.EnumerateArray().ToList();
-                if (items.Count == 0)
                 {
-                    return $"{indent}[]";
-                }
+                    var items = value.EnumerateArray().ToList();
+                    if (items.Count == 0)
+                    {
+                        return $"{indent}[]";
+                    }
 
-                if (items.Count > MaxArrayItemsInline)
-                {
-                    var first = CompactJson(items[0], depth + 1, maxDepth);
-                    return $"{indent}[{first.Trim()}, ... +{items.Count - 1} more]";
-                }
+                    if (items.Count > MaxArrayItemsInline)
+                    {
+                        var first = CompactJson(items[0], depth + 1, maxDepth);
+                        return $"{indent}[{first.Trim()}, ... +{items.Count - 1} more]";
+                    }
 
-                var allSimple = items.All(IsSimpleValue);
-                if (allSimple)
-                {
-                    var inline = items.Select(v => CompactJson(v, depth + 1, maxDepth).Trim());
-                    return $"{indent}[{string.Join(", ", inline)}]";
-                }
+                    var allSimple = items.All(IsSimpleValue);
+                    if (allSimple)
+                    {
+                        var inline = items.Select(v => CompactJson(v, depth + 1, maxDepth).Trim());
+                        return $"{indent}[{string.Join(", ", inline)}]";
+                    }
 
-                var lines = new List<string> { $"{indent}[" };
-                foreach (var item in items)
-                {
-                    lines.Add($"{CompactJson(item, depth + 1, maxDepth)},");
-                }
+                    var lines = new List<string> { $"{indent}[" };
+                    foreach (var item in items)
+                    {
+                        lines.Add($"{CompactJson(item, depth + 1, maxDepth)},");
+                    }
 
-                lines.Add($"{indent}]");
-                return string.Join("\n", lines);
-            }
+                    lines.Add($"{indent}]");
+                    return string.Join("\n", lines);
+                }
 
             case JsonValueKind.Object:
-            {
-                var properties = value.EnumerateObject().ToList();
-                if (properties.Count == 0)
                 {
-                    return $"{indent}{{}}";
+                    var properties = value.EnumerateObject().ToList();
+                    if (properties.Count == 0)
+                    {
+                        return $"{indent}{{}}";
+                    }
+
+                    var lines = new List<string> { $"{indent}{{" };
+                    var keys = properties.Select(p => p.Name).OrderBy(k => k, StringComparer.Ordinal).ToList();
+
+                    for (var i = 0; i < keys.Count; i++)
+                    {
+                        var key = keys[i];
+                        var val = value.GetProperty(key);
+                        var isSimple = IsSimpleValue(val);
+
+                        if (isSimple)
+                        {
+                            var valStr = CompactJson(val, 0, maxDepth);
+                            lines.Add($"{indent}  {key}: {valStr.Trim()}");
+                        }
+                        else
+                        {
+                            lines.Add($"{indent}  {key}:");
+                            lines.Add(CompactJson(val, depth + 1, maxDepth));
+                        }
+
+                        if (i >= MaxObjectKeysCompact)
+                        {
+                            lines.Add($"{indent}  ... +{keys.Count - i - 1} more keys");
+                            break;
+                        }
+                    }
+
+                    lines.Add($"{indent}}}");
+                    return string.Join("\n", lines);
                 }
-
-                var lines = new List<string> { $"{indent}{{" };
-                var keys = properties.Select(p => p.Name).OrderBy(k => k, StringComparer.Ordinal).ToList();
-
-                for (var i = 0; i < keys.Count; i++)
-                {
-                    var key = keys[i];
-                    var val = value.GetProperty(key);
-                    var isSimple = IsSimpleValue(val);
-
-                    if (isSimple)
-                    {
-                        var valStr = CompactJson(val, 0, maxDepth);
-                        lines.Add($"{indent}  {key}: {valStr.Trim()}");
-                    }
-                    else
-                    {
-                        lines.Add($"{indent}  {key}:");
-                        lines.Add(CompactJson(val, depth + 1, maxDepth));
-                    }
-
-                    if (i >= MaxObjectKeysCompact)
-                    {
-                        lines.Add($"{indent}  ... +{keys.Count - i - 1} more keys");
-                        break;
-                    }
-                }
-
-                lines.Add($"{indent}}}");
-                return string.Join("\n", lines);
-            }
 
             default:
                 return $"{indent}null";
@@ -343,88 +343,88 @@ public static class JsonCommand
                 return $"{indent}{(IsI64(value) ? "int" : "float")}";
 
             case JsonValueKind.String:
-            {
-                var s = value.GetString() ?? string.Empty;
-                var byteLen = Utf8ByteLength(s);
-                if (byteLen > SchemaStringByteThreshold)
                 {
-                    return $"{indent}string[{byteLen}]";
-                }
+                    var s = value.GetString() ?? string.Empty;
+                    var byteLen = Utf8ByteLength(s);
+                    if (byteLen > SchemaStringByteThreshold)
+                    {
+                        return $"{indent}string[{byteLen}]";
+                    }
 
-                if (s.Length == 0)
-                {
+                    if (s.Length == 0)
+                    {
+                        return $"{indent}string";
+                    }
+
+                    if (s.StartsWith("http", StringComparison.Ordinal))
+                    {
+                        return $"{indent}url";
+                    }
+
+                    if (s.Contains('-', StringComparison.Ordinal) && byteLen == SchemaDateLikeByteLength)
+                    {
+                        return $"{indent}date?";
+                    }
+
                     return $"{indent}string";
                 }
 
-                if (s.StartsWith("http", StringComparison.Ordinal))
-                {
-                    return $"{indent}url";
-                }
-
-                if (s.Contains('-', StringComparison.Ordinal) && byteLen == SchemaDateLikeByteLength)
-                {
-                    return $"{indent}date?";
-                }
-
-                return $"{indent}string";
-            }
-
             case JsonValueKind.Array:
-            {
-                var items = value.EnumerateArray().ToList();
-                if (items.Count == 0)
                 {
-                    return $"{indent}[]";
-                }
+                    var items = value.EnumerateArray().ToList();
+                    if (items.Count == 0)
+                    {
+                        return $"{indent}[]";
+                    }
 
-                var firstSchema = ExtractSchema(items[0], depth + 1, maxDepth);
-                var trimmed = firstSchema.Trim();
-                return items.Count == 1
-                    ? $"{indent}[\n{firstSchema}\n{indent}]"
-                    : $"{indent}[{trimmed}] ({items.Count})";
-            }
+                    var firstSchema = ExtractSchema(items[0], depth + 1, maxDepth);
+                    var trimmed = firstSchema.Trim();
+                    return items.Count == 1
+                        ? $"{indent}[\n{firstSchema}\n{indent}]"
+                        : $"{indent}[{trimmed}] ({items.Count})";
+                }
 
             case JsonValueKind.Object:
-            {
-                var properties = value.EnumerateObject().ToList();
-                if (properties.Count == 0)
                 {
-                    return $"{indent}{{}}";
+                    var properties = value.EnumerateObject().ToList();
+                    if (properties.Count == 0)
+                    {
+                        return $"{indent}{{}}";
+                    }
+
+                    var lines = new List<string> { $"{indent}{{" };
+                    var keys = properties.Select(p => p.Name).OrderBy(k => k, StringComparer.Ordinal).ToList();
+
+                    for (var i = 0; i < keys.Count; i++)
+                    {
+                        var key = keys[i];
+                        var val = value.GetProperty(key);
+                        var valSchema = ExtractSchema(val, depth + 1, maxDepth);
+                        var valTrimmed = valSchema.Trim();
+                        var isSimple = IsSimpleValue(val);
+
+                        if (isSimple)
+                        {
+                            lines.Add(i < keys.Count - 1
+                                ? $"{indent}  {key}: {valTrimmed},"
+                                : $"{indent}  {key}: {valTrimmed}");
+                        }
+                        else
+                        {
+                            lines.Add($"{indent}  {key}:");
+                            lines.Add(valSchema);
+                        }
+
+                        if (i >= MaxObjectKeysSchema)
+                        {
+                            lines.Add($"{indent}  ... +{keys.Count - i - 1} more keys");
+                            break;
+                        }
+                    }
+
+                    lines.Add($"{indent}}}");
+                    return string.Join("\n", lines);
                 }
-
-                var lines = new List<string> { $"{indent}{{" };
-                var keys = properties.Select(p => p.Name).OrderBy(k => k, StringComparer.Ordinal).ToList();
-
-                for (var i = 0; i < keys.Count; i++)
-                {
-                    var key = keys[i];
-                    var val = value.GetProperty(key);
-                    var valSchema = ExtractSchema(val, depth + 1, maxDepth);
-                    var valTrimmed = valSchema.Trim();
-                    var isSimple = IsSimpleValue(val);
-
-                    if (isSimple)
-                    {
-                        lines.Add(i < keys.Count - 1
-                            ? $"{indent}  {key}: {valTrimmed},"
-                            : $"{indent}  {key}: {valTrimmed}");
-                    }
-                    else
-                    {
-                        lines.Add($"{indent}  {key}:");
-                        lines.Add(valSchema);
-                    }
-
-                    if (i >= MaxObjectKeysSchema)
-                    {
-                        lines.Add($"{indent}  ... +{keys.Count - i - 1} more keys");
-                        break;
-                    }
-                }
-
-                lines.Add($"{indent}}}");
-                return string.Join("\n", lines);
-            }
 
             default:
                 return $"{indent}null";

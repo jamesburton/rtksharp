@@ -442,21 +442,21 @@ public static class SummaryCommand
                     break;
 
                 case JsonValueKind.Object:
-                {
-                    var properties = value.EnumerateObject().ToList();
-                    result.Add($"   Object with {properties.Count} keys:");
-                    foreach (var prop in properties.Take(MaxSummaryKeys))
                     {
-                        result.Add($"   • {prop.Name}");
-                    }
+                        var properties = value.EnumerateObject().ToList();
+                        result.Add($"   Object with {properties.Count} keys:");
+                        foreach (var prop in properties.Take(MaxSummaryKeys))
+                        {
+                            result.Add($"   • {prop.Name}");
+                        }
 
-                    if (properties.Count > MaxSummaryKeys)
-                    {
-                        result.Add($"   ... +{properties.Count - MaxSummaryKeys} more keys");
-                    }
+                        if (properties.Count > MaxSummaryKeys)
+                        {
+                            result.Add($"   ... +{properties.Count - MaxSummaryKeys} more keys");
+                        }
 
-                    break;
-                }
+                        break;
+                    }
 
                 default:
                     result.Add($"   {Utils.Truncate(RawValueText(value), 100)}");

@@ -341,7 +341,7 @@ internal static partial class RspecFilters
             }
         }
 
-        doneReadingLines:
+    doneReadingLines:
 
         // Capture remaining failure.
         if (currentFailure.ToString().Trim().Length > 0 && state == TextState.Failures)

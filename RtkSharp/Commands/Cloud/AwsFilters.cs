@@ -1615,84 +1615,84 @@ internal static class AwsFilters
             case JsonValueKind.Number:
                 return $"{indent}{value.GetRawText()}";
             case JsonValueKind.String:
-            {
-                var s = value.GetString() ?? string.Empty;
-                if (s.Length > 80)
                 {
-                    var end = Math.Min(77, s.Length);
-                    return $"{indent}\"{s[..end]}...\"";
-                }
+                    var s = value.GetString() ?? string.Empty;
+                    if (s.Length > 80)
+                    {
+                        var end = Math.Min(77, s.Length);
+                        return $"{indent}\"{s[..end]}...\"";
+                    }
 
-                return $"{indent}\"{s}\"";
-            }
+                    return $"{indent}\"{s}\"";
+                }
 
             case JsonValueKind.Array:
-            {
-                var arr = value.EnumerateArray().ToList();
-                if (arr.Count == 0)
                 {
-                    return $"{indent}[]";
-                }
+                    var arr = value.EnumerateArray().ToList();
+                    if (arr.Count == 0)
+                    {
+                        return $"{indent}[]";
+                    }
 
-                if (arr.Count > 5)
-                {
-                    var first = CompactJson(arr[0], depth + 1, maxDepth).Trim();
-                    return $"{indent}[{first}, ... +{arr.Count - 1} more]";
-                }
+                    if (arr.Count > 5)
+                    {
+                        var first = CompactJson(arr[0], depth + 1, maxDepth).Trim();
+                        return $"{indent}[{first}, ... +{arr.Count - 1} more]";
+                    }
 
-                if (arr.All(IsSimpleJson))
-                {
-                    var inline = arr.Select(x => CompactJson(x, 0, maxDepth).Trim());
-                    return $"{indent}[{string.Join(", ", inline)}]";
-                }
+                    if (arr.All(IsSimpleJson))
+                    {
+                        var inline = arr.Select(x => CompactJson(x, 0, maxDepth).Trim());
+                        return $"{indent}[{string.Join(", ", inline)}]";
+                    }
 
-                var arrLines = new List<string> { $"{indent}[" };
-                foreach (var item in arr)
-                {
-                    arrLines.Add($"{CompactJson(item, depth + 1, maxDepth)},");
-                }
+                    var arrLines = new List<string> { $"{indent}[" };
+                    foreach (var item in arr)
+                    {
+                        arrLines.Add($"{CompactJson(item, depth + 1, maxDepth)},");
+                    }
 
-                arrLines.Add($"{indent}]");
-                return string.Join('\n', arrLines);
-            }
+                    arrLines.Add($"{indent}]");
+                    return string.Join('\n', arrLines);
+                }
 
             case JsonValueKind.Object:
-            {
-                var props = value.EnumerateObject().ToList();
-                if (props.Count == 0)
                 {
-                    return $"{indent}{{}}";
+                    var props = value.EnumerateObject().ToList();
+                    if (props.Count == 0)
+                    {
+                        return $"{indent}{{}}";
+                    }
+
+                    var keys = props.Select(p => p.Name).OrderBy(k => k, StringComparer.Ordinal).ToList();
+                    var map = props.ToDictionary(p => p.Name, p => p.Value);
+                    var objLines = new List<string> { $"{indent}{{" };
+
+                    for (var i = 0; i < keys.Count; i++)
+                    {
+                        var key = keys[i];
+                        var val = map[key];
+                        if (IsSimpleJson(val))
+                        {
+                            var valStr = CompactJson(val, 0, maxDepth).Trim();
+                            objLines.Add($"{indent}  {key}: {valStr}");
+                        }
+                        else
+                        {
+                            objLines.Add($"{indent}  {key}:");
+                            objLines.Add(CompactJson(val, depth + 1, maxDepth));
+                        }
+
+                        if (i >= 20)
+                        {
+                            objLines.Add($"{indent}  ... +{keys.Count - i - 1} more keys");
+                            break;
+                        }
+                    }
+
+                    objLines.Add($"{indent}}}");
+                    return string.Join('\n', objLines);
                 }
-
-                var keys = props.Select(p => p.Name).OrderBy(k => k, StringComparer.Ordinal).ToList();
-                var map = props.ToDictionary(p => p.Name, p => p.Value);
-                var objLines = new List<string> { $"{indent}{{" };
-
-                for (var i = 0; i < keys.Count; i++)
-                {
-                    var key = keys[i];
-                    var val = map[key];
-                    if (IsSimpleJson(val))
-                    {
-                        var valStr = CompactJson(val, 0, maxDepth).Trim();
-                        objLines.Add($"{indent}  {key}: {valStr}");
-                    }
-                    else
-                    {
-                        objLines.Add($"{indent}  {key}:");
-                        objLines.Add(CompactJson(val, depth + 1, maxDepth));
-                    }
-
-                    if (i >= 20)
-                    {
-                        objLines.Add($"{indent}  ... +{keys.Count - i - 1} more keys");
-                        break;
-                    }
-                }
-
-                objLines.Add($"{indent}}}");
-                return string.Join('\n', objLines);
-            }
 
             default:
                 return $"{indent}null";

@@ -37,7 +37,7 @@ public class TeeTests : IDisposable
         Assert.Equal("cargo_test", Tee.SanitizeSlug("cargo test"));
         Assert.Equal("cargo-test", Tee.SanitizeSlug("cargo-test"));
         Assert.Equal("go_test___pkg", Tee.SanitizeSlug("go/test/./pkg"));
-        
+
         var longSlug = new string('a', 50);
         Assert.Equal(40, Tee.SanitizeSlug(longSlug).Length);
     }

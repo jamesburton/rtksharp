@@ -140,90 +140,90 @@ public static class RewriteEngine
             switch (tok.Kind)
             {
                 case TokenKind.Operator:
-                {
-                    string seg = cmd[segStart..tok.Offset].Trim();
-                    string rewritten = RewriteSegment(seg, excluded, transparentPrefixes) ?? seg;
-                    if (rewritten != seg)
                     {
-                        anyChanged = true;
-                    }
-                    result.Append(rewritten);
-                    if (tok.Value == ";")
-                    {
-                        result.Append(';');
-                        int after = tok.Offset + tok.Value.Length;
-                        if (after < cmd.Length)
+                        string seg = cmd[segStart..tok.Offset].Trim();
+                        string rewritten = RewriteSegment(seg, excluded, transparentPrefixes) ?? seg;
+                        if (rewritten != seg)
+                        {
+                            anyChanged = true;
+                        }
+                        result.Append(rewritten);
+                        if (tok.Value == ";")
+                        {
+                            result.Append(';');
+                            int after = tok.Offset + tok.Value.Length;
+                            if (after < cmd.Length)
+                            {
+                                result.Append(' ');
+                            }
+                        }
+                        else
                         {
                             result.Append(' ');
+                            result.Append(tok.Value);
+                            result.Append(' ');
                         }
+                        segStart = tok.Offset + tok.Value.Length;
+                        while (segStart < cmd.Length && cmd[segStart] == ' ')
+                        {
+                            segStart++;
+                        }
+                        break;
                     }
-                    else
-                    {
-                        result.Append(' ');
-                        result.Append(tok.Value);
-                        result.Append(' ');
-                    }
-                    segStart = tok.Offset + tok.Value.Length;
-                    while (segStart < cmd.Length && cmd[segStart] == ' ')
-                    {
-                        segStart++;
-                    }
-                    break;
-                }
 
                 case TokenKind.Pipe:
-                {
-                    string seg = cmd[segStart..tok.Offset].Trim();
-                    bool isPipeIncompatible = seg.StartsWith("find ")
-                        || seg == "find"
-                        || seg.StartsWith("fd ")
-                        || seg == "fd";
-                    string rewritten = isPipeIncompatible
-                        ? seg
-                        : RewriteSegment(seg, excluded, transparentPrefixes) ?? seg;
-                    if (rewritten != seg)
                     {
-                        anyChanged = true;
-                    }
-                    result.Append(rewritten);
+                        string seg = cmd[segStart..tok.Offset].Trim();
+                        bool isPipeIncompatible = seg.StartsWith("find ")
+                            || seg == "find"
+                            || seg.StartsWith("fd ")
+                            || seg == "fd";
+                        string rewritten = isPipeIncompatible
+                            ? seg
+                            : RewriteSegment(seg, excluded, transparentPrefixes) ?? seg;
+                        if (rewritten != seg)
+                        {
+                            anyChanged = true;
+                        }
+                        result.Append(rewritten);
 
-                    ParsedToken? pipeGroupEnd = tokens.FirstOrDefault(t =>
-                        t.Offset > tok.Offset
-                        && (t.Kind == TokenKind.Operator
-                            || (t.Kind == TokenKind.Shellism && t.Value == "&")));
+                        ParsedToken? pipeGroupEnd = tokens.FirstOrDefault(t =>
+                            t.Offset > tok.Offset
+                            && (t.Kind == TokenKind.Operator
+                                || (t.Kind == TokenKind.Shellism && t.Value == "&")));
 
-                    if (pipeGroupEnd is not null)
-                    {
-                        result.Append(' ');
-                        result.Append(cmd[tok.Offset..pipeGroupEnd.Offset].Trim());
-                        segStart = pipeGroupEnd.Offset;
+                        if (pipeGroupEnd is not null)
+                        {
+                            result.Append(' ');
+                            result.Append(cmd[tok.Offset..pipeGroupEnd.Offset].Trim());
+                            segStart = pipeGroupEnd.Offset;
+                        }
+                        else
+                        {
+                            result.Append(' ');
+                            result.Append(cmd[tok.Offset..].TrimStart());
+                            return anyChanged ? result.ToString() : null;
+                        }
+                        break;
                     }
-                    else
-                    {
-                        result.Append(' ');
-                        result.Append(cmd[tok.Offset..].TrimStart());
-                        return anyChanged ? result.ToString() : null;
-                    }
-                    break;
-                }
 
                 case TokenKind.Shellism when tok.Value == "&":
-                {
-                    string seg = cmd[segStart..tok.Offset].Trim();
-                    string rewritten = RewriteSegment(seg, excluded, transparentPrefixes) ?? seg;
-                    if (rewritten != seg)
                     {
-                        anyChanged = true;
+                        string seg = cmd[segStart..tok.Offset].Trim();
+                        string rewritten = RewriteSegment(seg, excluded, transparentPrefixes) ?? seg;
+                        if (rewritten != seg)
+                        {
+                            anyChanged = true;
+                        }
+                        result.Append(rewritten);
+                        result.Append(" & ");
+                        segStart = tok.Offset + tok.Value.Length;
+                        while (segStart < cmd.Length && cmd[segStart] == ' ')
+                        {
+                            segStart++;
+                        }
+                        break;
                     }
-                    result.Append(rewritten);
-                    result.Append(" & ");
-                    segStart = tok.Offset + tok.Value.Length;
-                    while (segStart < cmd.Length && cmd[segStart] == ' ')
-                    {
-                        segStart++;
-                    }
-                    break;
-                }
             }
         }
 

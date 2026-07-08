@@ -182,25 +182,25 @@ public static class Ccusage
         switch (granularity)
         {
             case Granularity.Daily:
-            {
-                var resp = System.Text.Json.JsonSerializer.Deserialize(json, CcusageJsonContext.Default.DailyResponse)
-                    ?? throw new InvalidOperationException("Invalid JSON structure for daily data");
-                return resp.Daily.Select(e => new CcusagePeriod(e.Date, ToMetrics(e))).ToList();
-            }
+                {
+                    var resp = System.Text.Json.JsonSerializer.Deserialize(json, CcusageJsonContext.Default.DailyResponse)
+                        ?? throw new InvalidOperationException("Invalid JSON structure for daily data");
+                    return resp.Daily.Select(e => new CcusagePeriod(e.Date, ToMetrics(e))).ToList();
+                }
 
             case Granularity.Weekly:
-            {
-                var resp = System.Text.Json.JsonSerializer.Deserialize(json, CcusageJsonContext.Default.WeeklyResponse)
-                    ?? throw new InvalidOperationException("Invalid JSON structure for weekly data");
-                return resp.Weekly.Select(e => new CcusagePeriod(e.Week, ToMetrics(e))).ToList();
-            }
+                {
+                    var resp = System.Text.Json.JsonSerializer.Deserialize(json, CcusageJsonContext.Default.WeeklyResponse)
+                        ?? throw new InvalidOperationException("Invalid JSON structure for weekly data");
+                    return resp.Weekly.Select(e => new CcusagePeriod(e.Week, ToMetrics(e))).ToList();
+                }
 
             case Granularity.Monthly:
-            {
-                var resp = System.Text.Json.JsonSerializer.Deserialize(json, CcusageJsonContext.Default.MonthlyResponse)
-                    ?? throw new InvalidOperationException("Invalid JSON structure for monthly data");
-                return resp.Monthly.Select(e => new CcusagePeriod(e.Month, ToMetrics(e))).ToList();
-            }
+                {
+                    var resp = System.Text.Json.JsonSerializer.Deserialize(json, CcusageJsonContext.Default.MonthlyResponse)
+                        ?? throw new InvalidOperationException("Invalid JSON structure for monthly data");
+                    return resp.Monthly.Select(e => new CcusagePeriod(e.Month, ToMetrics(e))).ToList();
+                }
 
             default:
                 throw new ArgumentOutOfRangeException(nameof(granularity), granularity, null);

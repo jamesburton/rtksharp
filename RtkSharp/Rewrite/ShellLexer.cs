@@ -534,8 +534,8 @@ public static class ShellLexer
     /// <returns>The string without surrounding quotes, or unchanged if not quoted.</returns>
     public static string StripQuotes(string s)
     {
-        if (s.Length >= 2 && 
-            ((s[0] == '"' && s[s.Length - 1] == '"') || 
+        if (s.Length >= 2 &&
+            ((s[0] == '"' && s[s.Length - 1] == '"') ||
              (s[0] == '\'' && s[s.Length - 1] == '\'')))
         {
             return s.Substring(1, s.Length - 2);

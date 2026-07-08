@@ -140,44 +140,44 @@ public static class DiscoverCommand
                     switch (DiscoverRegistry.ClassifyCommand(part))
                     {
                         case Classification.Supported sup:
-                        {
-                            if (!supportedMap.TryGetValue(sup.RtkEquivalent, out var bucket))
                             {
-                                bucket = new SupportedBucket(sup.RtkEquivalent, sup.Category);
-                                supportedMap[sup.RtkEquivalent] = bucket;
+                                if (!supportedMap.TryGetValue(sup.RtkEquivalent, out var bucket))
+                                {
+                                    bucket = new SupportedBucket(sup.RtkEquivalent, sup.Category);
+                                    supportedMap[sup.RtkEquivalent] = bucket;
+                                }
+
+                                bucket.Count++;
+
+                                // Estimate tokens for this command: real tool_result length when known,
+                                // else a category/subcommand average.
+                                var outputTokens = extCmd.OutputLen is { } len
+                                    ? len / 4
+                                    : DiscoverRegistry.CategoryAvgTokens(sup.Category, ExtractSubcmd(part));
+
+                                var savings = (int)(outputTokens * sup.EstimatedSavingsPct / 100.0);
+                                bucket.TotalOutputTokens += savings;
+                                // Accumulate pre-savings tokens too, so the bucket's effective savings
+                                // rate can be derived as a weighted average across all sub-commands later.
+                                bucket.TotalRawOutputTokens += outputTokens;
+
+                                var displayName = TruncateCommand(part);
+                                var key = $"{displayName}:{sup.Status}";
+                                bucket.CommandCounts[key] = bucket.CommandCounts.GetValueOrDefault(key) + 1;
+                                break;
                             }
-
-                            bucket.Count++;
-
-                            // Estimate tokens for this command: real tool_result length when known,
-                            // else a category/subcommand average.
-                            var outputTokens = extCmd.OutputLen is { } len
-                                ? len / 4
-                                : DiscoverRegistry.CategoryAvgTokens(sup.Category, ExtractSubcmd(part));
-
-                            var savings = (int)(outputTokens * sup.EstimatedSavingsPct / 100.0);
-                            bucket.TotalOutputTokens += savings;
-                            // Accumulate pre-savings tokens too, so the bucket's effective savings
-                            // rate can be derived as a weighted average across all sub-commands later.
-                            bucket.TotalRawOutputTokens += outputTokens;
-
-                            var displayName = TruncateCommand(part);
-                            var key = $"{displayName}:{sup.Status}";
-                            bucket.CommandCounts[key] = bucket.CommandCounts.GetValueOrDefault(key) + 1;
-                            break;
-                        }
 
                         case Classification.Unsupported uns:
-                        {
-                            if (!unsupportedMap.TryGetValue(uns.BaseCommand, out var ubucket))
                             {
-                                ubucket = new UnsupportedBucket { Example = part };
-                                unsupportedMap[uns.BaseCommand] = ubucket;
-                            }
+                                if (!unsupportedMap.TryGetValue(uns.BaseCommand, out var ubucket))
+                                {
+                                    ubucket = new UnsupportedBucket { Example = part };
+                                    unsupportedMap[uns.BaseCommand] = ubucket;
+                                }
 
-                            ubucket.Count++;
-                            break;
-                        }
+                                ubucket.Count++;
+                                break;
+                            }
 
                         case Classification.Ignored:
                             if (part.Trim().StartsWith("rtk ", StringComparison.Ordinal))

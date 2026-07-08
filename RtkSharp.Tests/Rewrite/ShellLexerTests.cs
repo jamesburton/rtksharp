@@ -31,7 +31,7 @@ public class ShellLexerTests
     public void Test_Quoted_Operator_Not_Split()
     {
         var tokens = ShellLexer.Tokenize("git commit -m \"Fix && Bug\"");
-        Assert.False(tokens.Any(t => t.Kind == TokenKind.Operator && t.Value == "&&"));
+        Assert.DoesNotContain(tokens, t => t.Kind == TokenKind.Operator && t.Value == "&&");
         Assert.Contains(tokens, t => t.Value.Contains("Fix && Bug"));
     }
 

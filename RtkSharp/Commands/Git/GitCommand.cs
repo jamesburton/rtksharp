@@ -1820,91 +1820,91 @@ public static class GitCommand
         switch (subcommand)
         {
             case "list":
-            {
-                var listArgs = new List<string>(globalArgs) { "stash", "list" };
-                var result = await ExecAsync(executor, listArgs, null).ConfigureAwait(false);
-
-                if (result.Stdout.Trim().Length == 0)
                 {
-                    stdout.Write("No stashes\n");
+                    var listArgs = new List<string>(globalArgs) { "stash", "list" };
+                    var result = await ExecAsync(executor, listArgs, null).ConfigureAwait(false);
+
+                    if (result.Stdout.Trim().Length == 0)
+                    {
+                        stdout.Write("No stashes\n");
+                        return 0;
+                    }
+
+                    stdout.Write(FilterStashList(result.Stdout) + "\n");
                     return 0;
                 }
-
-                stdout.Write(FilterStashList(result.Stdout) + "\n");
-                return 0;
-            }
 
             case "show":
-            {
-                var showArgs = new List<string>(globalArgs) { "stash", "show", "-p" };
-                showArgs.AddRange(args);
-                var result = await ExecAsync(executor, showArgs, null).ConfigureAwait(false);
-
-                if (result.Stdout.Trim().Length == 0)
                 {
-                    stdout.Write("Empty stash\n");
+                    var showArgs = new List<string>(globalArgs) { "stash", "show", "-p" };
+                    showArgs.AddRange(args);
+                    var result = await ExecAsync(executor, showArgs, null).ConfigureAwait(false);
+
+                    if (result.Stdout.Trim().Length == 0)
+                    {
+                        stdout.Write("Empty stash\n");
+                        return 0;
+                    }
+
+                    stdout.Write(CompactDiff(result.Stdout, 100) + "\n");
                     return 0;
                 }
-
-                stdout.Write(CompactDiff(result.Stdout, 100) + "\n");
-                return 0;
-            }
 
             case not null when StashActionSubcommands.Contains(subcommand):
-            {
-                var actionArgs = new List<string>(globalArgs) { "stash", subcommand };
-                actionArgs.AddRange(args);
-                var result = await ExecAsync(executor, actionArgs, null).ConfigureAwait(false);
-
-                if (Succeeded(result))
                 {
-                    stdout.Write(FormatStashMessage(subcommand, result.Stdout, result.Stderr) + "\n");
-                    return 0;
-                }
+                    var actionArgs = new List<string>(globalArgs) { "stash", subcommand };
+                    actionArgs.AddRange(args);
+                    var result = await ExecAsync(executor, actionArgs, null).ConfigureAwait(false);
 
-                stderr.Write($"FAILED: git stash {subcommand}\n");
-                if (!string.IsNullOrWhiteSpace(result.Stderr))
-                {
-                    stderr.Write(result.Stderr.TrimEnd('\n') + "\n");
-                }
+                    if (Succeeded(result))
+                    {
+                        stdout.Write(FormatStashMessage(subcommand, result.Stdout, result.Stderr) + "\n");
+                        return 0;
+                    }
 
-                return result.ExitCode;
-            }
+                    stderr.Write($"FAILED: git stash {subcommand}\n");
+                    if (!string.IsNullOrWhiteSpace(result.Stderr))
+                    {
+                        stderr.Write(result.Stderr.TrimEnd('\n') + "\n");
+                    }
+
+                    return result.ExitCode;
+                }
 
             default:
-            {
-                // Bare stash, push/save, or an unknown token treated as a pathspec to `git stash push`.
-                var (sub, extra) = subcommand switch
                 {
-                    "save" => ("save", (string?)null),
-                    "push" => ("push", null),
-                    null => ("push", null),
-                    _ => ("push", subcommand),
-                };
+                    // Bare stash, push/save, or an unknown token treated as a pathspec to `git stash push`.
+                    var (sub, extra) = subcommand switch
+                    {
+                        "save" => ("save", (string?)null),
+                        "push" => ("push", null),
+                        null => ("push", null),
+                        _ => ("push", subcommand),
+                    };
 
-                var pushArgs = new List<string>(globalArgs) { "stash", sub };
-                if (extra is not null)
-                {
-                    pushArgs.Add(extra);
+                    var pushArgs = new List<string>(globalArgs) { "stash", sub };
+                    if (extra is not null)
+                    {
+                        pushArgs.Add(extra);
+                    }
+
+                    pushArgs.AddRange(args);
+                    var result = await ExecAsync(executor, pushArgs, null).ConfigureAwait(false);
+
+                    if (Succeeded(result))
+                    {
+                        stdout.Write(FormatStashMessage(subcommand, result.Stdout, result.Stderr) + "\n");
+                        return 0;
+                    }
+
+                    stderr.Write($"FAILED: git stash {sub}\n");
+                    if (!string.IsNullOrWhiteSpace(result.Stderr))
+                    {
+                        stderr.Write(result.Stderr.TrimEnd('\n') + "\n");
+                    }
+
+                    return result.ExitCode;
                 }
-
-                pushArgs.AddRange(args);
-                var result = await ExecAsync(executor, pushArgs, null).ConfigureAwait(false);
-
-                if (Succeeded(result))
-                {
-                    stdout.Write(FormatStashMessage(subcommand, result.Stdout, result.Stderr) + "\n");
-                    return 0;
-                }
-
-                stderr.Write($"FAILED: git stash {sub}\n");
-                if (!string.IsNullOrWhiteSpace(result.Stderr))
-                {
-                    stderr.Write(result.Stderr.TrimEnd('\n') + "\n");
-                }
-
-                return result.ExitCode;
-            }
         }
     }
 

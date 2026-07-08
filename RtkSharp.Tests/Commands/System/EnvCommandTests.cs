@@ -501,7 +501,7 @@ public sealed class EnvCommandTests
         try
         {
             Console.SetOut(capture);
-            exitCode = EnvCommand.Run([ "-f", "zzz_no_such_match_zzz" ], vars, verbosity: 0);
+            exitCode = EnvCommand.Run(["-f", "zzz_no_such_match_zzz"], vars, verbosity: 0);
         }
         finally
         {
