@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Text.Json;
 using RtkSharp.Commands.Cloud;
 using Xunit;
 
@@ -180,5 +181,79 @@ public sealed class AzCommandTests
         var result = AzFilters.FilterGroupList(GroupListRaw)!;
         var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(GroupListRaw) * 100.0);
         Assert.True(savings >= 60.0, $"group list filter: expected >=60% savings, got {savings:F1}%");
+    }
+
+    // ===================== deployment group list / deployment group show =====================
+
+    private const string DeploymentGroupListRaw = """
+        [
+          {
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/fnz-qhub-test/providers/Microsoft.Resources/deployments/Microsoft.AppConfiguration-20251202161737-0352",
+            "name": "Microsoft.AppConfiguration-20251202161737-0352",
+            "properties": {
+              "correlationId": "d84d56d3-f66f-45d6-9e06-38bba4b0ec10",
+              "duration": "PT38.1221158S",
+              "error": null,
+              "mode": "Incremental",
+              "outputResources": [
+                {
+                  "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/fnz-qhub-test/providers/Microsoft.AppConfiguration/configurationStores/fnz-qhub-test-config",
+                  "resourceGroup": "fnz-qhub-test",
+                  "resourceType": "Microsoft.AppConfiguration/configurationStores"
+                }
+              ],
+              "parameters": {
+                "authenticationMode": { "type": "String", "value": "Pass-through" },
+                "disableLocalAuth": { "type": "Bool", "value": true },
+                "name": { "type": "String", "value": "fnz-qhub-test-config" },
+                "sku": { "type": "String", "value": "free" },
+                "tags": { "type": "Object", "value": {} }
+              },
+              "provisioningState": "Succeeded",
+              "timestamp": "2025-12-02T16:18:11.837245+00:00"
+            },
+            "resourceGroup": "fnz-qhub-test",
+            "type": "Microsoft.Resources/deployments"
+          }
+        ]
+        """;
+
+    [Fact]
+    public void FilterDeploymentGroupList_RealCapture_FormatsNameStateModeDurationResources()
+    {
+        var result = AzFilters.FilterDeploymentGroupList(DeploymentGroupListRaw)!;
+        Assert.Contains(
+            "Microsoft.AppConfiguration-20251202161737-0352 Succeeded Incremental dur:PT38.1221158S resources:1",
+            result.Text, StringComparison.Ordinal);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterDeploymentGroupList_RealCapture_RendersSimpleParametersOnly()
+    {
+        var result = AzFilters.FilterDeploymentGroupList(DeploymentGroupListRaw)!;
+        Assert.Contains("authenticationMode=Pass-through", result.Text, StringComparison.Ordinal);
+        Assert.Contains("sku=free", result.Text, StringComparison.Ordinal);
+        // "tags" parameter's value is an object ({}), not a simple JSON value — must be skipped.
+        Assert.DoesNotContain("tags=", result.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FilterDeploymentGroupShow_RealCapture_FormatsSingleDeployment()
+    {
+        // deployment group show returns the same object shape as one list element, unwrapped.
+        using var doc = JsonDocument.Parse(DeploymentGroupListRaw);
+        var showJson = doc.RootElement[0].GetRawText();
+
+        var result = AzFilters.FilterDeploymentGroupShow(showJson)!;
+        Assert.Contains("Succeeded Incremental", result.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FilterDeploymentGroupList_TokenSavings_MeetsSixtyPercent()
+    {
+        var result = AzFilters.FilterDeploymentGroupList(DeploymentGroupListRaw)!;
+        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(DeploymentGroupListRaw) * 100.0);
+        Assert.True(savings >= 60.0, $"deployment group list filter: expected >=60% savings, got {savings:F1}%");
     }
 }

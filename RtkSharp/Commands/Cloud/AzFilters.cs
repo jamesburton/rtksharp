@@ -163,6 +163,103 @@ internal static class AzFilters
         }
     }
 
+    // ===================== deployment group list / deployment group show =====================
+
+    private static string FormatDeployment(JsonElement d)
+    {
+        var name = JStr(d, "name", "?");
+        var state = JNestedStr(d, "properties", "provisioningState", "?");
+        var mode = JNestedStr(d, "properties", "mode", "?");
+        var duration = JNestedStr(d, "properties", "duration", "?");
+
+        var resourceCount = 0;
+        if (TryGetProp(d, "properties", out var props) && TryGetProp(props, "outputResources", out var outRes)
+            && outRes.ValueKind == JsonValueKind.Array)
+        {
+            resourceCount = outRes.GetArrayLength();
+        }
+
+        var line = $"{name} {state} {mode} dur:{duration} resources:{resourceCount}";
+
+        if (TryGetProp(d, "properties", out var props2) && TryGetProp(props2, "parameters", out var parameters)
+            && parameters.ValueKind == JsonValueKind.Object)
+        {
+            var paramPairs = new List<string>();
+            foreach (var p in parameters.EnumerateObject())
+            {
+                if (!TryGetProp(p.Value, "value", out var val) || !IsSimpleJson(val))
+                {
+                    continue;
+                }
+
+                var valStr = val.ValueKind == JsonValueKind.String ? val.GetString()! : val.GetRawText();
+                paramPairs.Add($"{p.Name}={valStr}");
+            }
+
+            if (paramPairs.Count > 0)
+            {
+                line += $"\n  params: {string.Join(", ", paramPairs)}";
+            }
+        }
+
+        return line;
+    }
+
+    /// <summary>Formats <c>az deployment group list</c>'s bare top-level array of deployment objects.</summary>
+    public static AwsFilters.FilterResult? FilterDeploymentGroupList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var total = v.GetArrayLength();
+            var result = new List<string>();
+            var i = 0;
+            foreach (var d in v.EnumerateArray())
+            {
+                if (i >= MaxItems)
+                {
+                    break;
+                }
+
+                result.Add(FormatDeployment(d));
+                i++;
+            }
+
+            var text = JoinWithOverflow(result, total, MaxItems, "deployments");
+            return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+        }
+    }
+
+    /// <summary>Formats <c>az deployment group show</c>'s single deployment object (same shape as one <c>list</c> element).</summary>
+    public static AwsFilters.FilterResult? FilterDeploymentGroupShow(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return AwsFilters.FilterResult.New(FormatDeployment(v));
+        }
+    }
+
     // ===================== shared JSON helpers (local copy — not shared with AwsFilters, per spec) =====================
 
     private static bool TryParse(string jsonStr, out JsonDocument doc)
