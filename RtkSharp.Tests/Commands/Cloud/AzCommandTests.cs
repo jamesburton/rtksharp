@@ -1,7 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using RtkSharp.Commands.Cloud;
+using RtkSharp.Execution;
 using Xunit;
 
 namespace RtkSharp.Tests.Commands.Cloud;
@@ -431,5 +434,147 @@ public sealed class AzCommandTests
         var input = "connectionString: \"DefaultEndpointsProtocol=https;AccountKey=abc123\"";
         var result = AzFilters.Redact(input);
         Assert.DoesNotContain("AccountKey=abc123", result, StringComparison.Ordinal);
+    }
+
+    // ===================== AzCommand dispatch =====================
+
+    private static ExecutionResult Ok(string stdout, string stderr = "") =>
+        new(stdout, stderr, ExitCode: 0, TimedDuration: TimeSpan.Zero, WasStarted: true, Failure: null, TimedOut: false);
+
+    [Fact]
+    public async Task RunAsync_AccountShow_DispatchesToFilterAccountShow()
+    {
+        var executor = new RecordingExecutor(_ => Ok(AccountShowRaw));
+        var exit = await AzCommand.RunAsync(["account", "show"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["account", "show"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_DeploymentGroupList_DispatchesThreeLevelSubcommand()
+    {
+        var executor = new RecordingExecutor(_ => Ok(DeploymentGroupListRaw));
+        var exit = await AzCommand.RunAsync(["deployment", "group", "list", "-g", "fnz-qhub-test"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["deployment", "group", "list", "-g", "fnz-qhub-test"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_StorageAccountShow_DispatchesThreeLevelSubcommand()
+    {
+        var executor = new RecordingExecutor(_ => Ok(StorageAccountShowRaw));
+        var exit = await AzCommand.RunAsync(["storage", "account", "show", "-n", "csb1003200244ccb05c"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["storage", "account", "show", "-n", "csb1003200244ccb05c"], request.Arguments);
+    }
+
+    [Theory]
+    [InlineData("group", "list")]
+    [InlineData("group", "show")]
+    [InlineData("webapp", "list")]
+    [InlineData("webapp", "show")]
+    public async Task RunAsync_NamedOps_ExitZeroOnSuccess(string subcommand, string op)
+    {
+        var executor = new RecordingExecutor(_ => Ok("{}"));
+        var exit = await AzCommand.RunAsync([subcommand, op], verbose: 0, executor);
+        Assert.Equal(0, exit);
+    }
+
+    [Fact]
+    public async Task RunAsync_UnrecognizedSubcommand_UsesGenericJsonCompactionFallback()
+    {
+        var executor = new RecordingExecutor(_ => Ok("""{"foo": "bar"}"""));
+        var exit = await AzCommand.RunAsync(["monitor", "activity-log", "list"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["monitor", "activity-log", "list"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_ExplicitOutputTable_PassesThroughUnfiltered()
+    {
+        var executor = new RecordingExecutor(_ => Ok("Name    Location\n------  --------\nfoo     uksouth\n"));
+        var exit = await AzCommand.RunAsync(["group", "list", "--output", "table"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+        // Passthrough path runs the ORIGINAL args unchanged — no filter dispatch, no injection.
+        Assert.Equal(["group", "list", "--output", "table"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_ExplicitOutputEqualsTsv_PassesThroughUnfiltered()
+    {
+        var executor = new RecordingExecutor(_ => Ok("foo\tuksouth\n"));
+        var exit = await AzCommand.RunAsync(["group", "list", "--output=tsv"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task RunAsync_ExplicitOutputJson_StillFiltered()
+    {
+        var executor = new RecordingExecutor(_ => Ok(AccountShowRaw));
+        var exit = await AzCommand.RunAsync(["account", "show", "--output", "json"], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(ExecutionCaptureMode.Separate, request.CaptureMode);
+    }
+
+    [Fact]
+    public async Task RunAsync_ZeroArgs_PassesThroughRaw()
+    {
+        var executor = new RecordingExecutor(_ => Ok(""));
+        var exit = await AzCommand.RunAsync([], verbose: 0, executor);
+
+        Assert.Equal(0, exit);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(ExecutionCaptureMode.Inherit, request.CaptureMode);
+        Assert.Empty(request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_FilteredOpFailure_ReturnsExitCodeAndPrintsStderr()
+    {
+        var executor = new RecordingExecutor(_ =>
+            new ExecutionResult("", "ERROR: subscription not found", ExitCode: 1, TimedDuration: TimeSpan.Zero, WasStarted: true, Failure: null, TimedOut: false));
+
+        var previous = Console.Error;
+        var writer = new StringWriter { NewLine = "\n" };
+        Console.SetError(writer);
+        int exit;
+        try
+        {
+            exit = await AzCommand.RunAsync(["account", "show"], verbose: 0, executor);
+        }
+        finally
+        {
+            Console.SetError(previous);
+        }
+
+        Assert.Equal(1, exit);
+        Assert.Contains("ERROR: subscription not found", writer.ToString(), StringComparison.Ordinal);
+    }
+
+    private sealed class RecordingExecutor(Func<ExecutionRequest, ExecutionResult> responder) : IProcessExecutor
+    {
+        public List<ExecutionRequest> Requests { get; } = [];
+
+        public ValueTask<ExecutionResult> ExecuteAsync(ExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return ValueTask.FromResult(responder(request));
+        }
     }
 }
