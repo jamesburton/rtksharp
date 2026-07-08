@@ -139,6 +139,7 @@ public static class CommandRegistry
         Register("kubectl", args => KubectlCommand.RunAsync(args, RuntimeOptions.Verbosity));
         Register("oc", args => OcCommand.RunAsync(args, RuntimeOptions.Verbosity));
         Register("glab", GlabCommand.RunAsync);
+        Register("az", AzCommand.RunAsync);
 
         // "psql"/"wget" - the two remaining "Defer"-classified commands, now ported for full
         // coverage. Both PASSTHROUGH-classified in Rust, normal dispatch entries.
