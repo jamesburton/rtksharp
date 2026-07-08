@@ -205,6 +205,10 @@ public static class DotnetCommand
             "restore" => await RunTextFilteredAsync("restore", rest, executor).ConfigureAwait(false),
             "test" => await RunTestAsync(rest, executor).ConfigureAwait(false),
             "format" => await RunFormatAsync(rest, executor).ConfigureAwait(false),
+            "run" when FindFileBasedAppArg(rest) is { } csFile =>
+                await RunFileBasedAppAsync(args, csFile, executor).ConfigureAwait(false),
+            _ when subcommand.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) =>
+                await RunFileBasedAppAsync(args, subcommand, executor).ConfigureAwait(false),
             _ => await RunPassthroughAsync(args, executor).ConfigureAwait(false),
         };
     }
@@ -275,6 +279,83 @@ public static class DotnetCommand
         Console.Error.Write(result.Stderr);
         return result.ExitCode;
     }
+
+    // --- file-based app path (dotnet run <file>.cs / dotnet <file>.cs; .NET 10+ only, no Rust equivalent) ---
+
+    /// <summary>
+    /// Finds the first non-option argument ending in <c>.cs</c> before any bare <c>--</c>
+    /// separator, identifying a <c>dotnet run &lt;file&gt;.cs</c> file-based-app invocation.
+    /// Returns null for ordinary project-based <c>dotnet run</c> (no <c>.cs</c> argument, or
+    /// a <c>.cs</c>-looking token that is actually a post-<c>--</c> program argument).
+    /// </summary>
+    private static string? FindFileBasedAppArg(string[] rest)
+    {
+        foreach (var arg in rest)
+        {
+            if (arg == "--")
+            {
+                return null;
+            }
+
+            if (arg.Length > 0 && arg[0] != '-' && arg.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                return arg;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Runs a .NET 10 file-based app (<c>dotnet run &lt;file&gt;.cs</c> or the <c>dotnet
+    /// &lt;file&gt;.cs</c> shorthand). A superset feature with no Rust equivalent: success is
+    /// pure passthrough (a working file-based app already prints nothing but its own program
+    /// output), failure is filtered by <see cref="FilterFileBasedApp"/>.
+    /// </summary>
+    /// <remarks>
+    /// Detection tiers in <see cref="FilterFileBasedApp"/> key off stdout/stderr content
+    /// markers, never off a specific exit-code value — an unhandled runtime exception was
+    /// observed to exit 127 during design-phase testing, which is unusual for .NET (typically
+    /// a large HRESULT-style code) and was not independently reconfirmed. This method always
+    /// propagates <c>result.ExitCode</c> verbatim regardless of which tier matched, so that
+    /// uncertainty has no effect on correctness here.
+    /// </remarks>
+    private static async Task<int> RunFileBasedAppAsync(string[] args, string fileDisplayName, IProcessExecutor executor)
+    {
+        var environment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [DotnetCliUiLanguage] = DotnetCliUiLanguageValue,
+        };
+
+        var result = await executor
+            .ExecuteAsync(new ExecutionRequest("dotnet", args, Environment: environment, CaptureMode: ExecutionCaptureMode.Separate))
+            .ConfigureAwait(false);
+
+        if (result.ExitCode == 0)
+        {
+            Console.Out.Write(result.Stdout);
+            Console.Error.Write(result.Stderr);
+            return result.ExitCode;
+        }
+
+        var raw = result.Stdout + "\n" + result.Stderr;
+        try
+        {
+            var filtered = FilterFileBasedApp(raw, fileDisplayName);
+            Console.Out.Write(filtered + "\n");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.Write($"rtk: filter warning: {ex.Message}\n");
+            Console.Out.Write(result.Stdout);
+            Console.Error.Write(result.Stderr);
+        }
+
+        return result.ExitCode;
+    }
+
+    private static string FilterFileBasedApp(string raw, string fileDisplayName) =>
+        throw new NotImplementedException("implemented in Task 2");
 
     // --- format path (ported from run_format in dotnet_cmd.rs) ---
 

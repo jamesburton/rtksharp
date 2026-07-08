@@ -1,4 +1,5 @@
 using RtkSharp.Commands.Dotnet;
+using RtkSharp.Execution;
 
 namespace RtkSharp.Tests.Commands;
 
@@ -475,5 +476,89 @@ public sealed class DotnetCommandTests
 
         Assert.Equal(5, merged.Passed);
         Assert.Equal(5, merged.Total);
+    }
+
+    // ---- File-based app dispatch (dotnet run <file>.cs / dotnet <file>.cs) ----
+
+    private sealed class RecordingExecutor : IProcessExecutor
+    {
+        private readonly ExecutionResult _result;
+
+        public RecordingExecutor(ExecutionResult result) => _result = result;
+
+        public List<ExecutionRequest> Requests { get; } = new();
+
+        public ValueTask<ExecutionResult> ExecuteAsync(ExecutionRequest request, CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return ValueTask.FromResult(_result);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_RunWithCsFile_DispatchesToFileBasedAppHandler()
+    {
+        var executor = new RecordingExecutor(new ExecutionResult("hello from file-based app\n", "", 0, TimeSpan.Zero, true, null, false));
+
+        var exitCode = await DotnetCommand.RunAsync(new[] { "run", "app.cs" }, executor);
+
+        Assert.Equal(0, exitCode);
+        Assert.Single(executor.Requests);
+        Assert.Equal(new[] { "run", "app.cs" }, executor.Requests[0].Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_BareCsFileShorthand_DispatchesToFileBasedAppHandler()
+    {
+        var executor = new RecordingExecutor(new ExecutionResult("shorthand works\n", "", 0, TimeSpan.Zero, true, null, false));
+
+        var exitCode = await DotnetCommand.RunAsync(new[] { "app.cs" }, executor);
+
+        Assert.Equal(0, exitCode);
+        Assert.Single(executor.Requests);
+        Assert.Equal(new[] { "app.cs" }, executor.Requests[0].Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_FileBasedAppSuccess_PassesOutputThroughUnmodified()
+    {
+        var executor = new RecordingExecutor(new ExecutionResult("hello from file-based app\n", "", 0, TimeSpan.Zero, true, null, false));
+        var originalOut = Console.Out;
+        var writer = new StringWriter();
+        Console.SetOut(writer);
+        try
+        {
+            await DotnetCommand.RunAsync(new[] { "run", "app.cs" }, executor);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        Assert.Equal("hello from file-based app\n", writer.ToString());
+    }
+
+    [Fact]
+    public async Task RunAsync_OrdinaryProjectRun_StillPassesThroughRaw()
+    {
+        // No .cs argument anywhere -> must NOT be treated as a file-based app.
+        var executor = new RecordingExecutor(new ExecutionResult("normal project run output\n", "", 0, TimeSpan.Zero, true, null, false));
+
+        var exitCode = await DotnetCommand.RunAsync(new[] { "run", "--project", "MyApp.csproj" }, executor);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(new[] { "run", "--project", "MyApp.csproj" }, executor.Requests[0].Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_RunWithCsFileAfterDoubleDash_NotTreatedAsFileBasedApp()
+    {
+        // "somearg.cs" is the invoked program's own argument, not the file-based app itself.
+        var executor = new RecordingExecutor(new ExecutionResult("ran\n", "", 0, TimeSpan.Zero, true, null, false));
+
+        var exitCode = await DotnetCommand.RunAsync(new[] { "run", "--project", "MyApp.csproj", "--", "somearg.cs" }, executor);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(new[] { "run", "--project", "MyApp.csproj", "--", "somearg.cs" }, executor.Requests[0].Arguments);
     }
 }
