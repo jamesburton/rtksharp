@@ -136,6 +136,17 @@ public static class DotnetCommand
         @"^\s*CSC\s*:\s*error\s+(?<name>\S+):\s*(?<msg>.*)$",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
+    // New regexes, not ported from Rust (no oracle for file-based apps). Matches .NET's
+    // single-line unhandled-exception header ("Unhandled exception. <Type>: <message>") and
+    // VSTest/CLR-style stack-trace frame lines ("   at <frame>").
+    private static readonly Regex FileBasedAppExceptionRegex = new(
+        @"^Unhandled exception\.\s*(?<type>[^\r\n:]+):\s*(?<message>.*)$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
+    private static readonly Regex FileBasedAppStackFrameRegex = new(
+        @"^\s+at\s+\S.*$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     private static readonly Regex ProjectPathRegex = new(
         @"^\s*([A-Za-z]:)?[^\r\n]*\.csproj(?:\s|$)",
         RegexOptions.Multiline | RegexOptions.Compiled);
@@ -393,8 +404,30 @@ public static class DotnetCommand
             return FormatFileBasedAppIssues(errors, new List<BinlogIssue>(), fileDisplayName);
         }
 
-        // Tier 3 (unhandled exception) and tier 4 (unrecognized -> raw fallback) added in Task 3.
+        // Tier 3: an unhandled runtime exception (not a compile-time failure at all).
+        var exceptionMatch = FileBasedAppExceptionRegex.Match(raw);
+        if (exceptionMatch.Success)
+        {
+            return FormatFileBasedAppException(raw, exceptionMatch);
+        }
+
+        // Tier 4: unrecognized failure shape -> throw, caught by RunFileBasedAppAsync's
+        // try/catch, which falls back to raw, unfiltered passthrough (mandatory fallback
+        // contract: a filter must never hide output it doesn't recognize).
         throw new InvalidOperationException("unrecognized dotnet run failure output shape");
+    }
+
+    private static string FormatFileBasedAppException(string raw, Match exceptionMatch)
+    {
+        var type = exceptionMatch.Groups["type"].Value.Trim();
+        var message = exceptionMatch.Groups["message"].Value.Trim();
+
+        var frames = FileBasedAppStackFrameRegex.Matches(raw);
+        var firstFrame = frames.Count > 0 ? frames[0].Value.Trim() : "unknown";
+        var summary = $"exception: {type}: {message} ({frames.Count} frames, first: {firstFrame})";
+
+        var preceding = raw[..exceptionMatch.Index].Trim();
+        return preceding.Length > 0 ? $"{preceding}\n\n{summary}" : summary;
     }
 
     private static string FormatFileBasedAppIssues(List<BinlogIssue> errors, List<BinlogIssue> warnings, string fileDisplayName)

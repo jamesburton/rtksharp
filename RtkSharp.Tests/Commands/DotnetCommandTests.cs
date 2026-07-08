@@ -632,4 +632,75 @@ public sealed class DotnetCommandTests
             "fail dotnet run: ok.cs (1 errors, 0 warnings)",
             output);
     }
+
+    // ---- FilterFileBasedApp: tier 3 (unhandled exception) + tier 4 (unrecognized -> throws) ----
+
+    // Captured from a real `dotnet run boom.cs` (Console.WriteLine then `throw new
+    // InvalidOperationException("boom")`). stdout/stderr were captured combined (2>&1); the
+    // implementation operates on the same combined `raw` convention this file already uses
+    // for every other filter, so this fixture models that combined stream faithfully.
+    private const string FileBasedAppExceptionRaw =
+        "before crash\n" +
+        "Unhandled exception. System.InvalidOperationException: boom\n" +
+        "   at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2\n";
+
+    [Fact]
+    public void FilterFileBasedApp_UnhandledException_SummarizesWithFrameCountAndPreservesPrecedingOutput()
+    {
+        var output = DotnetCommand.FilterFileBasedApp(FileBasedAppExceptionRaw, "boom.cs");
+
+        Assert.Equal(
+            "before crash\n" +
+            "\n" +
+            "exception: System.InvalidOperationException: boom (1 frames, first: at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2)",
+            output);
+    }
+
+    [Fact]
+    public void FilterFileBasedApp_UnhandledExceptionWithNoPrecedingOutput_OmitsBlankPrefix()
+    {
+        const string raw =
+            "Unhandled exception. System.InvalidOperationException: boom\n" +
+            "   at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2\n";
+
+        var output = DotnetCommand.FilterFileBasedApp(raw, "boom.cs");
+
+        Assert.Equal(
+            "exception: System.InvalidOperationException: boom (1 frames, first: at Program.<Main>$(String[] args) in C:\\scratch\\boom.cs:line 2)",
+            output);
+    }
+
+    [Fact]
+    public void FilterFileBasedApp_UnrecognizedFailureShape_Throws()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            DotnetCommand.FilterFileBasedApp("some completely unrecognized failure text\n", "mystery.cs"));
+    }
+
+    [Fact]
+    public async Task RunFileBasedAppAsync_UnrecognizedFailureShape_FallsBackToRawPassthrough()
+    {
+        var executor = new RecordingExecutor(new ExecutionResult(
+            "some completely unrecognized failure text\n", "", 1, TimeSpan.Zero, true, null, false));
+        var originalOut = Console.Out;
+        var originalErr = Console.Error;
+        var outWriter = new StringWriter();
+        var errWriter = new StringWriter();
+        Console.SetOut(outWriter);
+        Console.SetError(errWriter);
+        int exitCode;
+        try
+        {
+            exitCode = await DotnetCommand.RunAsync(new[] { "run", "mystery.cs" }, executor);
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+            Console.SetError(originalErr);
+        }
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("some completely unrecognized failure text", outWriter.ToString());
+        Assert.Contains("rtk: filter warning:", errWriter.ToString());
+    }
 }
