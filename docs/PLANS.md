@@ -1057,7 +1057,7 @@ acceptance records live once a phase starts.
 | Phase 3: Rewrite Engine and Shell Normalization | 10 | **Done** | Auto-rewrite is the main value path and the highest semantic-risk component. |
 | Phase 4: Filter and Module System | 9 | **Done** | Enables DRY parallel module development and avoids recreating upstream central coupling. |
 | Phase 5: System Commands and Script Parity | 8 | **Partial** — system commands ported (`ls`/`read`/`find`/`grep`/etc., full parity); PATHEXT/`.cmd`/`.ps1`/`.bat` *wrapper resolution* exists (`PathResolver.cs`), but no dedicated `.ps1`/`.bat`/`.sh` *content-filtering* layer as this phase originally envisioned. | Required for cross-platform agent usability, especially Windows parity. |
-| Phase 6: Best-in-Class C# and .NET Support | 9 | **Partial** — `dotnet build/test/restore/format` at full Rust parity plus Windows-drive-letter and binlog-fallback improvements (ledgered as disclosed superset gains); 10-language `--level ast` semantic filtering shipped as a genuine no-Rust-equivalent superset feature (C# via Roslyn, 9 others via TreeSitter). Not yet started: expanded `dotnet` subcommands (`publish`/`pack`/`clean`/`run`/`tool`/`new`/`workload`/`sln`/`ef`) and file-based `.cs` app handling — **file-based `.cs` execution is next up, see §12**. | Strategic differentiator for a .NET 10-first fork. |
+| Phase 6: Best-in-Class C# and .NET Support | 9 | **Partial** — `dotnet build/test/restore/format` at full Rust parity plus Windows-drive-letter and binlog-fallback improvements (ledgered as disclosed superset gains); 10-language `--level ast` semantic filtering shipped as a genuine no-Rust-equivalent superset feature (C# via Roslyn, 9 others via TreeSitter); file-based `.cs` app execution (`dotnet run <file>.cs` / `dotnet <file>.cs`) shipped 2026-07-08 as a genuine no-Rust-equivalent superset feature (compile-failure and unhandled-exception summaries, success is pure passthrough). Not yet started: expanded `dotnet` subcommands (`publish`/`pack`/`clean`/`run` for *project*-based apps/`tool`/`new`/`workload`/`sln`/`ef`). | Strategic differentiator for a .NET 10-first fork. |
 | Phase 7: GitHub (`gh`) Reference Module | 7 | **Done** | Existing upstream support makes this a low-risk reference implementation for modules. |
 | Phase 8: Azure CLI (`az`) Demonstration Module | 7 | **Not started** — no `az` command exists anywhere in `CommandRegistry.cs`; queued after file-based `.cs` execution, see §12. | Strong extension proof, but should wait until module contracts stabilize. |
 | Phase 9: Hooks, Agent Integration, and Windows Injection | 8 | **Done** | High value, but depends on rewrite and packaging stability. |
@@ -1434,13 +1434,13 @@ references stay valid). Steps 7, 9, and 10 are the real remaining backlog.
 4. ~~Implement the core execution model.~~ **Done.**
 5. ~~Port rewrite lexer and a small MVP rule set.~~ **Done** — full rewrite engine at 100% parity.
 6. ~~Add system, `gh`, and `dotnet` MVP modules.~~ **Done**, all at confirmed parity.
-7. Add `.cs`, `.ps1`, `.bat/.cmd`, and `.sh` script execution. **Partial** — only the
-   `.ps1`/`.bat/.cmd` *wrapper resolution* piece exists (`PathResolver.cs`); no `.cs`
-   file-based app support and no `.sh`/script *content*-filtering layer yet.
-   **In progress now: single-file `.cs` execution support** (`dotnet run app.cs` /
-   `dotnet app.cs` filtering) — picked as the quick win of this group since it reuses
-   the existing `dotnet build`-diagnostics text-parsing path rather than needing new
-   infrastructure.
+7. Add `.cs`, `.ps1`, `.bat/.cmd`, and `.sh` script execution. **Partial** — single-file `.cs`
+   execution (`dotnet run <file>.cs` / `dotnet <file>.cs`) **done** 2026-07-08 (see
+   `docs/superpowers/specs/2026-07-08-cs-file-based-app-execution-design.md` and
+   `docs/superpowers/plans/2026-07-08-cs-file-based-app-execution.md`). Still not started:
+   `.ps1`/`.bat`/`.sh` content-filtering layer (only wrapper *resolution* exists), and `dotnet
+   publish file.cs`/`dotnet pack file.cs` filtering (explicitly deferred as a non-goal of the
+   `.cs` design, see that spec's "Non-Goals" section).
 8. ~~Add the declarative module loader.~~ **Done** — TOML filter engine (`TomlFilterEngine`/`TomlFilterCompiler`), 63 built-in filters + project/global tiers.
 9. Add `az` as the first new module. **Not started.** Queued immediately after item 7
    above.

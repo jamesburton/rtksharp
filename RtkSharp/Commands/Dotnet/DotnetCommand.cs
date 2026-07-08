@@ -39,6 +39,20 @@ namespace RtkSharp.Commands.Dotnet;
 /// see the regex's own comment and <c>docs/parity/compatibility-ledger.md</c>. The "enrichment
 /// lost without binlog" statement above still holds for non-drive-letter paths.
 /// </para>
+/// <para>
+/// <b>File-based app support (superset feature, no Rust oracle).</b> <c>dotnet run
+/// &lt;file&gt;.cs</c> and the <c>dotnet &lt;file&gt;.cs</c> shorthand (.NET 10+) are detected
+/// and routed to <see cref="RunFileBasedAppAsync"/>. Success is pure passthrough (a working
+/// file-based app already prints nothing but its own program output). Failure is filtered by
+/// <see cref="FilterFileBasedApp"/>, which tries, in order: the same <see cref="IssueRegex"/>-
+/// driven parsing <c>build</c>/<c>restore</c> already use (covers genuine compile errors for
+/// free), a no-location MSBuild/NuGet-diagnostic path (reusing <see
+/// cref="ParseRestoreIssuesFromText"/> plus one narrow new regex for diagnostics with no
+/// numeric code), an unhandled-runtime-exception summary, and finally a raw-passthrough
+/// fallback for anything unrecognized. See
+/// <c>docs/superpowers/specs/2026-07-08-cs-file-based-app-execution-design.md</c> for the full
+/// design rationale and empirical findings this is based on.
+/// </para>
 /// </remarks>
 /// <summary>
 /// How the targeted test project(s) run tests — determines which TRX-reporting flags to inject.
