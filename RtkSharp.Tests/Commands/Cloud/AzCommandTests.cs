@@ -256,4 +256,71 @@ public sealed class AzCommandTests
         var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(DeploymentGroupListRaw) * 100.0);
         Assert.True(savings >= 60.0, $"deployment group list filter: expected >=60% savings, got {savings:F1}%");
     }
+
+    // ===================== webapp list / webapp show =====================
+
+    private const string WebappShowRaw = """
+        {
+          "defaultHostName": "qhub-mg-prufund-prod-uks-v3.azurewebsites.net",
+          "httpsOnly": true,
+          "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/qhub-mg-prufund-v3-prod-rg/providers/Microsoft.Web/sites/qhub-mg-prufund-prod-uks-v3",
+          "kind": "app,linux",
+          "location": "UK South",
+          "name": "qhub-mg-prufund-prod-uks-v3",
+          "resourceGroup": "qhub-mg-prufund-v3-prod-rg",
+          "sku": "PremiumV3",
+          "state": "Running",
+          "type": "Microsoft.Web/sites"
+        }
+        """;
+
+    private const string WebappListRaw = """
+        [
+          {
+            "defaultHostName": "qhub-mg-prufund-prod-uks-v3.azurewebsites.net",
+            "enabled": true,
+            "hostNames": [
+              "prod.mgprufund.cloud.fnz-qhub.com",
+              "prod.mgprufund.uks.cloud.fnz-qhub.com",
+              "qhub-mg-prufund-prod-uks-v3.azurewebsites.net"
+            ],
+            "httpsOnly": true,
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/qhub-mg-prufund-v3-prod-rg/providers/Microsoft.Web/sites/qhub-mg-prufund-prod-uks-v3",
+            "kind": "app,linux",
+            "location": "UK South",
+            "name": "qhub-mg-prufund-prod-uks-v3",
+            "reserved": true,
+            "resourceGroup": "qhub-mg-prufund-v3-prod-rg",
+            "sku": "PremiumV3",
+            "state": "Running",
+            "type": "Microsoft.Web/sites",
+            "usageState": "Normal"
+          }
+        ]
+        """;
+
+    [Fact]
+    public void FilterWebappShow_RealCapture_FormatsNameStateKindLocationSkuHttpsRgHost()
+    {
+        var result = AzFilters.FilterWebappShow(WebappShowRaw)!;
+        Assert.Equal(
+            "qhub-mg-prufund-prod-uks-v3 Running app,linux UK South sku:PremiumV3 https:true rg:qhub-mg-prufund-v3-prod-rg host:qhub-mg-prufund-prod-uks-v3.azurewebsites.net",
+            result.Text);
+    }
+
+    [Fact]
+    public void FilterWebappList_RealCapture_FormatsOneApp()
+    {
+        var result = AzFilters.FilterWebappList(WebappListRaw)!;
+        Assert.Contains("qhub-mg-prufund-prod-uks-v3 Running app,linux", result.Text, StringComparison.Ordinal);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterWebappList_TokenSavings_MeetsSixtyPercent()
+    {
+        var result = AzFilters.FilterWebappList(WebappListRaw)!;
+        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(WebappListRaw) * 100.0);
+        Assert.True(savings >= 60.0, $"webapp list filter: expected >=60% savings, got {savings:F1}%");
+    }
 }

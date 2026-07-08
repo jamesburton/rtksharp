@@ -260,6 +260,76 @@ internal static class AzFilters
         }
     }
 
+    // ===================== webapp list / webapp show =====================
+
+    private static string FormatWebapp(JsonElement w)
+    {
+        var name = JStr(w, "name", "?");
+        var state = JStr(w, "state", "?");
+        var kind = JStr(w, "kind", "?");
+        var location = JStr(w, "location", "?");
+        var sku = JStr(w, "sku", "?");
+        var https = JBoolStr(w, "httpsOnly", "?");
+        var rg = JStr(w, "resourceGroup", "?");
+        var host = JStr(w, "defaultHostName", "?");
+        return $"{name} {state} {kind} {location} sku:{sku} https:{https} rg:{rg} host:{host}";
+    }
+
+    /// <summary>Formats <c>az webapp list</c>'s bare top-level array of App Service site objects.</summary>
+    public static AwsFilters.FilterResult? FilterWebappList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var total = v.GetArrayLength();
+            var result = new List<string>();
+            var i = 0;
+            foreach (var w in v.EnumerateArray())
+            {
+                if (i >= MaxItems)
+                {
+                    break;
+                }
+
+                result.Add(FormatWebapp(w));
+                i++;
+            }
+
+            var text = JoinWithOverflow(result, total, MaxItems, "apps");
+            return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+        }
+    }
+
+    /// <summary>Formats <c>az webapp show</c>'s single App Service site object (same shape as one <c>list</c> element).</summary>
+    public static AwsFilters.FilterResult? FilterWebappShow(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return AwsFilters.FilterResult.New(FormatWebapp(v));
+        }
+    }
+
     // ===================== shared JSON helpers (local copy — not shared with AwsFilters, per spec) =====================
 
     private static bool TryParse(string jsonStr, out JsonDocument doc)
