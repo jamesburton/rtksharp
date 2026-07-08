@@ -378,4 +378,58 @@ public sealed class AzCommandTests
         var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(StorageAccountListRaw) * 100.0);
         Assert.True(savings >= 60.0, $"storage account list filter: expected >=60% savings, got {savings:F1}%");
     }
+
+    // ===================== Redact =====================
+
+    [Fact]
+    public void Redact_UnquotedParamStyle_RedactsPasswordButKeepsOtherParams()
+    {
+        var input = "some-deployment Succeeded Incremental dur:PT1S resources:1\n  params: password=hunter2, name=foo";
+        var result = AzFilters.Redact(input);
+        Assert.Contains("password=[REDACTED]", result, StringComparison.Ordinal);
+        Assert.Contains("name=foo", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("hunter2", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Redact_QuotedJsonCompactionStyle_RedactsSecretButPreservesQuoting()
+    {
+        var input = "{\n  name: \"foo\",\n  secret: \"topsecret\",\n}";
+        var result = AzFilters.Redact(input);
+        Assert.Contains("secret: \"[REDACTED]\"", result, StringComparison.Ordinal);
+        Assert.Contains("name: \"foo\"", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("topsecret", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Redact_StorageAccountKeysShape_RedactsValueButKeepsKeyNameAndPermissions()
+    {
+        // Reproduces JsonCompaction.Compact's rendering of `az storage account keys list`
+        // (alphabetical key order: creationTime, keyName, permissions, value).
+        var input =
+            "[\n  {\n    creationTime: \"2022-11-18T14:56:52.706532+00:00\",\n" +
+            "    keyName: \"key1\",\n    permissions: \"FULL\",\n    value: \"abcdEXAMPLEKEY123==\",\n  },\n]";
+
+        var result = AzFilters.Redact(input);
+
+        Assert.Contains("keyName: \"key1\"", result, StringComparison.Ordinal);
+        Assert.Contains("permissions: \"FULL\"", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("abcdEXAMPLEKEY123==", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Redact_SubscriptionAndTenantIds_AreNeverRedacted()
+    {
+        var input = "foo (c83a19df-6be1-4eba-9505-9ab469177af5) tenant:7cdbc4de-cf13-4b46-aeea-483d6fed189a state:Enabled";
+        var result = AzFilters.Redact(input);
+        Assert.Equal(input, result);
+    }
+
+    [Fact]
+    public void Redact_ConnectionStringKey_IsRedacted()
+    {
+        var input = "connectionString: \"DefaultEndpointsProtocol=https;AccountKey=abc123\"";
+        var result = AzFilters.Redact(input);
+        Assert.DoesNotContain("AccountKey=abc123", result, StringComparison.Ordinal);
+    }
 }

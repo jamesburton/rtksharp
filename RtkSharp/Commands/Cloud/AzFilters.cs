@@ -19,6 +19,38 @@ internal static class AzFilters
     // Matches AwsFilters.MaxItems (core/truncate.rs's CAP_LIST equivalent) for consistency.
     private const int MaxItems = 20;
 
+    // Secret-shaped key names — starting list per the design spec, applied to both quoted
+    // (JsonCompaction.Compact's "key: \"value\"" rendering) and unquoted ("key=value", used by
+    // FormatDeployment's params line) styles.
+    private static readonly string[] SensitiveKeyNames =
+    {
+        "connectionString", "key", "keys", "password", "secret", "token", "sasToken",
+        "primaryKey", "secondaryKey", "accessKey",
+    };
+
+    private static readonly Regex SensitiveKeyRegexQuoted = BuildSensitiveKeyRegexQuoted();
+    private static readonly Regex SensitiveKeyRegexUnquoted = BuildSensitiveKeyRegexUnquoted();
+
+    // Targets `az storage account keys list`'s real shape (confirmed via a live capture this
+    // session): the secret's JSON field name is literally `value`, too generic to redact by key
+    // name alone, so this instead anchors on the keyName/permissions/value sibling sequence that
+    // JsonCompaction.Compact's alphabetical key ordering always produces.
+    private static readonly Regex StorageAccountKeyValueRegex = new(
+        @"(?<=keyName:\s*""key\d+"",?\s*\n\s*permissions:\s*""[^""]*"",?\s*\n\s*value:\s*"")[^""]*",
+        RegexOptions.Compiled);
+
+    private static Regex BuildSensitiveKeyRegexQuoted()
+    {
+        var joined = string.Join('|', SensitiveKeyNames.Select(Regex.Escape));
+        return new Regex($@"(?<prefix>\b(?:{joined})\b\s*:\s*"")(?<value>[^""]*)(?="")", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    }
+
+    private static Regex BuildSensitiveKeyRegexUnquoted()
+    {
+        var joined = string.Join('|', SensitiveKeyNames.Select(Regex.Escape));
+        return new Regex($@"(?<prefix>\b(?:{joined})\b\s*=\s*)(?<value>[^\s,;]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    }
+
     // ===================== account show / account list =====================
 
     /// <summary>Formats <c>az account show</c>'s single-object JSON.</summary>
@@ -398,6 +430,21 @@ internal static class AzFilters
 
             return AwsFilters.FilterResult.New(FormatStorageAccount(v));
         }
+    }
+
+    /// <summary>
+    /// Redacts secret-shaped values from already-filtered <c>az</c> output. Deliberately does NOT
+    /// redact subscription/tenant IDs (see the design spec's Redaction section) — real ARM resource
+    /// IDs embed the subscription ID inline, and redacting them would break resource IDs users need
+    /// for follow-up <c>az</c> commands. Applied by <c>AzCommand</c> to every named filter's result
+    /// and to the generic JSON-compaction fallback's output, before printing.
+    /// </summary>
+    public static string Redact(string text)
+    {
+        text = StorageAccountKeyValueRegex.Replace(text, "[REDACTED]");
+        text = SensitiveKeyRegexQuoted.Replace(text, "${prefix}[REDACTED]");
+        text = SensitiveKeyRegexUnquoted.Replace(text, "${prefix}[REDACTED]");
+        return text;
     }
 
     // ===================== shared JSON helpers (local copy — not shared with AwsFilters, per spec) =====================
