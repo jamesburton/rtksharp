@@ -1004,13 +1004,23 @@ Add to `AzCommandTests.cs` (real field values from `az webapp show -g qhub-mg-pr
         [
           {
             "defaultHostName": "qhub-mg-prufund-prod-uks-v3.azurewebsites.net",
+            "enabled": true,
+            "hostNames": [
+              "prod.mgprufund.cloud.fnz-qhub.com",
+              "prod.mgprufund.uks.cloud.fnz-qhub.com",
+              "qhub-mg-prufund-prod-uks-v3.azurewebsites.net"
+            ],
             "httpsOnly": true,
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/qhub-mg-prufund-v3-prod-rg/providers/Microsoft.Web/sites/qhub-mg-prufund-prod-uks-v3",
             "kind": "app,linux",
             "location": "UK South",
             "name": "qhub-mg-prufund-prod-uks-v3",
+            "reserved": true,
             "resourceGroup": "qhub-mg-prufund-v3-prod-rg",
             "sku": "PremiumV3",
-            "state": "Running"
+            "state": "Running",
+            "type": "Microsoft.Web/sites",
+            "usageState": "Normal"
           }
         ]
         """;
