@@ -330,6 +330,76 @@ internal static class AzFilters
         }
     }
 
+    // ===================== storage account list / storage account show =====================
+
+    private static string FormatStorageAccount(JsonElement s)
+    {
+        var name = JStr(s, "name", "?");
+        var kind = JStr(s, "kind", "?");
+        var skuName = JNestedStr(s, "sku", "name", "?");
+        var location = JStr(s, "location", "?");
+        var tls = JStr(s, "minimumTlsVersion", "?");
+        var https = JBoolStr(s, "enableHttpsTrafficOnly", "?");
+        var tier = JStr(s, "accessTier", "?");
+        var rg = JStr(s, "resourceGroup", "?");
+        return $"{name} {kind} {skuName} {location} tls:{tls} https:{https} tier:{tier} rg:{rg}";
+    }
+
+    /// <summary>Formats <c>az storage account list</c>'s bare top-level array of storage account objects.</summary>
+    public static AwsFilters.FilterResult? FilterStorageAccountList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var total = v.GetArrayLength();
+            var result = new List<string>();
+            var i = 0;
+            foreach (var s in v.EnumerateArray())
+            {
+                if (i >= MaxItems)
+                {
+                    break;
+                }
+
+                result.Add(FormatStorageAccount(s));
+                i++;
+            }
+
+            var text = JoinWithOverflow(result, total, MaxItems, "storage accounts");
+            return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+        }
+    }
+
+    /// <summary>Formats <c>az storage account show</c>'s single storage account object (same shape as one <c>list</c> element).</summary>
+    public static AwsFilters.FilterResult? FilterStorageAccountShow(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return AwsFilters.FilterResult.New(FormatStorageAccount(v));
+        }
+    }
+
     // ===================== shared JSON helpers (local copy — not shared with AwsFilters, per spec) =====================
 
     private static bool TryParse(string jsonStr, out JsonDocument doc)

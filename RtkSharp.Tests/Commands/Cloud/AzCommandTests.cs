@@ -323,4 +323,59 @@ public sealed class AzCommandTests
         var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(WebappListRaw) * 100.0);
         Assert.True(savings >= 60.0, $"webapp list filter: expected >=60% savings, got {savings:F1}%");
     }
+
+    // ===================== storage account list / storage account show =====================
+
+    private const string StorageAccountShowRaw = """
+        {
+          "accessTier": "Hot",
+          "enableHttpsTrafficOnly": true,
+          "kind": "StorageV2",
+          "location": "westeurope",
+          "minimumTlsVersion": "TLS1_2",
+          "name": "csb1003200244ccb05c",
+          "resourceGroup": "cloud-shell-storage-westeurope",
+          "sku": { "name": "Standard_LRS", "tier": "Standard" }
+        }
+        """;
+
+    private const string StorageAccountListRaw = """
+        [
+          {
+            "accessTier": "Hot",
+            "enableHttpsTrafficOnly": true,
+            "kind": "StorageV2",
+            "location": "westeurope",
+            "minimumTlsVersion": "TLS1_2",
+            "name": "csb1003200244ccb05c",
+            "resourceGroup": "cloud-shell-storage-westeurope",
+            "sku": { "name": "Standard_LRS", "tier": "Standard" }
+          }
+        ]
+        """;
+
+    [Fact]
+    public void FilterStorageAccountShow_RealCapture_FormatsNameKindSkuLocationTlsHttpsTierRg()
+    {
+        var result = AzFilters.FilterStorageAccountShow(StorageAccountShowRaw)!;
+        Assert.Equal(
+            "csb1003200244ccb05c StorageV2 Standard_LRS westeurope tls:TLS1_2 https:true tier:Hot rg:cloud-shell-storage-westeurope",
+            result.Text);
+    }
+
+    [Fact]
+    public void FilterStorageAccountList_RealCapture_FormatsOneAccount()
+    {
+        var result = AzFilters.FilterStorageAccountList(StorageAccountListRaw)!;
+        Assert.Contains("csb1003200244ccb05c StorageV2 Standard_LRS", result.Text, StringComparison.Ordinal);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterStorageAccountList_TokenSavings_MeetsSixtyPercent()
+    {
+        var result = AzFilters.FilterStorageAccountList(StorageAccountListRaw)!;
+        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(StorageAccountListRaw) * 100.0);
+        Assert.True(savings >= 60.0, $"storage account list filter: expected >=60% savings, got {savings:F1}%");
+    }
 }
