@@ -120,4 +120,65 @@ public sealed class AzCommandTests
     {
         Assert.Null(AzFilters.FilterAccountList("{}"));
     }
+
+    // ===================== group list / group show =====================
+
+    private const string GroupListRaw = """
+        [
+          {
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/fnz-qhub-test",
+            "location": "uksouth",
+            "managedBy": null,
+            "name": "fnz-qhub-test",
+            "properties": { "provisioningState": "Succeeded" },
+            "tags": null,
+            "type": "Microsoft.Resources/resourceGroups"
+          },
+          {
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/fnz-qhub-qhub",
+            "location": "uksouth",
+            "managedBy": null,
+            "name": "fnz-qhub-qhub",
+            "properties": { "provisioningState": "Succeeded" },
+            "tags": {},
+            "type": "Microsoft.Resources/resourceGroups"
+          }
+        ]
+        """;
+
+    private const string GroupShowRaw = """
+        {
+          "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/fnz-qhub-test",
+          "location": "uksouth",
+          "managedBy": null,
+          "name": "fnz-qhub-test",
+          "properties": { "provisioningState": "Succeeded" },
+          "tags": null,
+          "type": "Microsoft.Resources/resourceGroups"
+        }
+        """;
+
+    [Fact]
+    public void FilterGroupList_RealCapture_FormatsNameLocationState()
+    {
+        var result = AzFilters.FilterGroupList(GroupListRaw)!;
+        Assert.Contains("fnz-qhub-test uksouth Succeeded", result.Text, StringComparison.Ordinal);
+        Assert.Contains("fnz-qhub-qhub uksouth Succeeded", result.Text, StringComparison.Ordinal);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterGroupShow_RealCapture_FormatsNameLocationState()
+    {
+        var result = AzFilters.FilterGroupShow(GroupShowRaw)!;
+        Assert.Equal("fnz-qhub-test uksouth Succeeded", result.Text);
+    }
+
+    [Fact]
+    public void FilterGroupList_TokenSavings_MeetsSixtyPercent()
+    {
+        var result = AzFilters.FilterGroupList(GroupListRaw)!;
+        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(GroupListRaw) * 100.0);
+        Assert.True(savings >= 60.0, $"group list filter: expected >=60% savings, got {savings:F1}%");
+    }
 }

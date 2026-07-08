@@ -87,6 +87,82 @@ internal static class AzFilters
         }
     }
 
+    // ===================== group list / group show =====================
+
+    private static string FormatGroup(JsonElement g)
+    {
+        var name = JStr(g, "name", "?");
+        var location = JStr(g, "location", "?");
+        var state = JNestedStr(g, "properties", "provisioningState", "?");
+
+        var tagKeys = new List<string>();
+        if (TryGetProp(g, "tags", out var tags) && tags.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var t in tags.EnumerateObject())
+            {
+                tagKeys.Add(t.Name);
+            }
+        }
+
+        var tagsSuffix = tagKeys.Count == 0 ? string.Empty : $" tags:[{string.Join(',', tagKeys)}]";
+        return $"{name} {location} {state}{tagsSuffix}";
+    }
+
+    /// <summary>Formats <c>az group list</c>'s bare top-level array of resource-group objects.</summary>
+    public static AwsFilters.FilterResult? FilterGroupList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var total = v.GetArrayLength();
+            var result = new List<string>();
+            var i = 0;
+            foreach (var g in v.EnumerateArray())
+            {
+                if (i >= MaxItems)
+                {
+                    break;
+                }
+
+                result.Add(FormatGroup(g));
+                i++;
+            }
+
+            var text = JoinWithOverflow(result, total, MaxItems, "resource groups");
+            return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+        }
+    }
+
+    /// <summary>Formats <c>az group show</c>'s single resource-group object (same shape as one <c>list</c> element).</summary>
+    public static AwsFilters.FilterResult? FilterGroupShow(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return AwsFilters.FilterResult.New(FormatGroup(v));
+        }
+    }
+
     // ===================== shared JSON helpers (local copy — not shared with AwsFilters, per spec) =====================
 
     private static bool TryParse(string jsonStr, out JsonDocument doc)
