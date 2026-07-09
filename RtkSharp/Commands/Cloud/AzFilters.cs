@@ -449,6 +449,82 @@ internal static class AzFilters
         }
     }
 
+    // ===================== functionapp list / functionapp show =====================
+
+    private static string FormatFunctionApp(JsonElement w)
+    {
+        var name = JStr(w, "name", "?");
+        var state = JStr(w, "state", "?");
+        var kind = JStr(w, "kind", "?");
+        var location = JStr(w, "location", "?");
+        var sku = JStr(w, "sku", "?");
+        var https = JBoolStr(w, "httpsOnly", "?");
+        var rg = JStr(w, "resourceGroup", "?");
+        var host = JStr(w, "defaultHostName", "?");
+        var runtime = JNestedStr(w, "siteConfig", "linuxFxVersion", string.Empty);
+        if (runtime.Length == 0)
+        {
+            runtime = JNestedStr(w, "siteConfig", "windowsFxVersion", "?");
+        }
+
+        return $"{name} {state} {kind} {location} sku:{sku} https:{https} rg:{rg} host:{host} runtime:{runtime}";
+    }
+
+    /// <summary>Formats <c>az functionapp list</c>'s bare top-level array of Function App site objects (same <c>Microsoft.Web/sites</c> shape as <c>webapp</c>, plus a runtime-stack field).</summary>
+    public static AwsFilters.FilterResult? FilterFunctionAppList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var total = v.GetArrayLength();
+            var result = new List<string>();
+            var i = 0;
+            foreach (var w in v.EnumerateArray())
+            {
+                if (i >= MaxItems)
+                {
+                    break;
+                }
+
+                result.Add(FormatFunctionApp(w));
+                i++;
+            }
+
+            var text = JoinWithOverflow(result, total, MaxItems, "function apps");
+            return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+        }
+    }
+
+    /// <summary>Formats <c>az functionapp show</c>'s single Function App site object (same shape as one <c>list</c> element).</summary>
+    public static AwsFilters.FilterResult? FilterFunctionAppShow(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            return AwsFilters.FilterResult.New(FormatFunctionApp(v));
+        }
+    }
+
     /// <summary>
     /// Redacts secret-shaped values from already-filtered <c>az</c> output. Deliberately does NOT
     /// redact subscription/tenant IDs (see the design spec's Redaction section) — real ARM resource

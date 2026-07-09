@@ -382,6 +382,110 @@ public sealed class AzCommandTests
         Assert.True(savings >= 60.0, $"storage account list filter: expected >=60% savings, got {savings:F1}%");
     }
 
+    // ===================== functionapp list / functionapp show =====================
+
+    private const string FunctionAppShowRaw = """
+        {
+          "defaultHostName": "terraform-backup-functions.azurewebsites.net",
+          "httpsOnly": false,
+          "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/terraform-backup-rg/providers/Microsoft.Web/sites/terraform-backup-functions",
+          "kind": "functionapp,linux",
+          "location": "UK South",
+          "name": "terraform-backup-functions",
+          "resourceGroup": "terraform-backup-rg",
+          "siteConfig": {
+            "linuxFxVersion": "PYTHON|3.9"
+          },
+          "sku": "Dynamic",
+          "state": "Running",
+          "type": "Microsoft.Web/sites"
+        }
+        """;
+
+    private const string FunctionAppListRaw = """
+        [
+          {
+            "defaultHostName": "qhub-teams-transcripts.azurewebsites.net",
+            "enabled": true,
+            "hostNames": [
+              "qhub-teams-transcripts.azurewebsites.net"
+            ],
+            "httpsOnly": false,
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/qhub-teams-transcripts/providers/Microsoft.Web/sites/qhub-teams-transcripts",
+            "kind": "functionapp,linux",
+            "location": "UK South",
+            "name": "qhub-teams-transcripts",
+            "reserved": true,
+            "resourceGroup": "qhub-teams-transcripts",
+            "siteConfig": {
+              "linuxFxVersion": "DOTNET-ISOLATED|10.0"
+            },
+            "sku": "Dynamic",
+            "state": "Running",
+            "type": "Microsoft.Web/sites",
+            "usageState": "Normal"
+          }
+        ]
+        """;
+
+    [Fact]
+    public void FilterFunctionAppShow_RealCapture_FormatsNameStateKindLocationSkuHttpsRgHostRuntime()
+    {
+        var result = AzFilters.FilterFunctionAppShow(FunctionAppShowRaw)!;
+        Assert.Equal(
+            "terraform-backup-functions Running functionapp,linux UK South sku:Dynamic https:false rg:terraform-backup-rg host:terraform-backup-functions.azurewebsites.net runtime:PYTHON|3.9",
+            result.Text);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterFunctionAppShow_MissingSiteConfig_UsesQuestionMarkForRuntime()
+    {
+        var result = AzFilters.FilterFunctionAppShow("{}")!;
+        Assert.Equal("? ? ? ? sku:? https:? rg:? host:? runtime:?", result.Text);
+    }
+
+    [Fact]
+    public void FilterFunctionAppShow_InvalidJson_ReturnsNull()
+    {
+        Assert.Null(AzFilters.FilterFunctionAppShow("not json"));
+    }
+
+    [Fact]
+    public void FilterFunctionAppList_RealCapture_FormatsOneAppWithRuntime()
+    {
+        var result = AzFilters.FilterFunctionAppList(FunctionAppListRaw)!;
+        Assert.Contains("qhub-teams-transcripts Running functionapp,linux", result.Text, StringComparison.Ordinal);
+        Assert.Contains("runtime:DOTNET-ISOLATED|10.0", result.Text, StringComparison.Ordinal);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterFunctionAppList_TokenSavings_MeetsSixtyPercent()
+    {
+        var result = AzFilters.FilterFunctionAppList(FunctionAppListRaw)!;
+        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(FunctionAppListRaw) * 100.0);
+        Assert.True(savings >= 60.0, $"functionapp list filter: expected >=60% savings, got {savings:F1}%");
+    }
+
+    [Fact]
+    public void FilterFunctionAppList_NotAnArray_ReturnsNull()
+    {
+        Assert.Null(AzFilters.FilterFunctionAppList("{}"));
+    }
+
+    [Fact]
+    public void FilterFunctionAppList_Overflow_TruncatesAfterTwenty()
+    {
+        var apps = Enumerable.Range(1, 25).Select(i => $$"""
+            {"name": "func-{{i}}", "state": "Running", "kind": "functionapp", "location": "UK South", "sku": "Dynamic", "httpsOnly": true, "resourceGroup": "rg", "defaultHostName": "func-{{i}}.azurewebsites.net"}
+            """);
+        var input = $"[{string.Join(',', apps)}]";
+        var result = AzFilters.FilterFunctionAppList(input)!;
+        Assert.Contains("… +5 more function apps", result.Text, StringComparison.Ordinal);
+        Assert.True(result.IsTruncated);
+    }
+
     // ===================== Redact =====================
 
     [Fact]
