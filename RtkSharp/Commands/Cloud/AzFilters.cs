@@ -574,6 +574,77 @@ internal static class AzFilters
         }
     }
 
+    // ===================== acr repository list / acr repository show-tags =====================
+
+    /// <summary>
+    /// Formats a bare top-level JSON array of strings (used by <c>acr repository list</c>/
+    /// <c>show-tags</c>, unlike every other filter in this file which handles arrays of objects)
+    /// as a single comma-joined line: <c>"{total} {label}: a, b, c"</c>, with an inline
+    /// <c>" (+N more)"</c> suffix past <paramref name="max"/> items. Returns <see langword="null"/>
+    /// if the root is not an array, or any element is not a string.
+    /// </summary>
+    private static AwsFilters.FilterResult? FormatStringArrayWithOverflow(JsonElement arr, int max, string label)
+    {
+        if (arr.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var total = arr.GetArrayLength();
+        var items = new List<string>();
+        var i = 0;
+        foreach (var el in arr.EnumerateArray())
+        {
+            if (el.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            if (i < max)
+            {
+                items.Add(el.GetString()!);
+            }
+
+            i++;
+        }
+
+        var text = $"{total} {label}: {string.Join(", ", items)}";
+        if (total > max)
+        {
+            text += $" (+{total - max} more)";
+        }
+
+        return total > max ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+    }
+
+    /// <summary>Formats <c>az acr repository list</c>'s bare top-level array of repository name strings.</summary>
+    public static AwsFilters.FilterResult? FilterAcrRepositoryList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            return FormatStringArrayWithOverflow(doc.RootElement, MaxItems, "repositories");
+        }
+    }
+
+    /// <summary>Formats <c>az acr repository show-tags</c>'s bare top-level array of tag name strings.</summary>
+    public static AwsFilters.FilterResult? FilterAcrRepositoryShowTags(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            return FormatStringArrayWithOverflow(doc.RootElement, MaxItems, "tags");
+        }
+    }
+
     /// <summary>
     /// Redacts secret-shaped values from already-filtered <c>az</c> output. Deliberately does NOT
     /// redact subscription/tenant IDs (see the design spec's Redaction section) — real ARM resource

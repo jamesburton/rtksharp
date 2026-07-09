@@ -563,6 +563,95 @@ public sealed class AzCommandTests
         Assert.Contains("… +5 more registries", result.Text, StringComparison.Ordinal);
         Assert.True(result.IsTruncated);
     }
+
+    // ===================== acr repository list / acr repository show-tags =====================
+
+    private const string AcrRepositoryListRaw = """
+        [
+          "ifp.portal.bnl.demo",
+          "ifp.reportingengine.web.linux",
+          "ifp.valuationengine.web",
+          "ifp.valuationengine.web.linux",
+          "ifp.valuationengine.web.windows"
+        ]
+        """;
+
+    private const string AcrRepositoryShowTagsRaw = """
+        [
+          "0.0.45",
+          "0.0.46",
+          "0.0.47",
+          "0.0.48",
+          "0.0.49",
+          "0.0.50",
+          "0.0.51",
+          "0.0.52"
+        ]
+        """;
+
+    [Fact]
+    public void FilterAcrRepositoryList_RealCapture_FormatsCommaJoinedSingleLine()
+    {
+        var result = AzFilters.FilterAcrRepositoryList(AcrRepositoryListRaw)!;
+        Assert.Equal(
+            "5 repositories: ifp.portal.bnl.demo, ifp.reportingengine.web.linux, ifp.valuationengine.web, ifp.valuationengine.web.linux, ifp.valuationengine.web.windows",
+            result.Text);
+        Assert.False(result.IsTruncated);
+    }
+
+    // No 60%-floor assertion here (deliberate, project-decision, not an oversight): for a bare
+    // string array under MaxItems, every raw JSON element is already exactly one whitespace-token
+    // (short strings, no internal spaces), and the comma-joined output preserves one token per
+    // item too — CountTokens's whitespace-split metric cannot show savings for this shape no
+    // matter how the real fixture is sized (confirmed by hand-computation: this real 5-item
+    // capture measures 0.0% whitespace-token savings and ~4.9% even by raw character count). The
+    // format's real value is line-count/scannability (N lines -> 1 line) and, for large real
+    // repository lists, MaxItems-driven truncation savings — neither of which this small fixture
+    // exercises. See `FilterAcrRepositoryList_Overflow_TruncatesAfterTwentyWithInlineSuffix` for
+    // the truncation case, which is where this format's real compression shows up.
+
+    [Fact]
+    public void FilterAcrRepositoryList_NotAnArray_ReturnsNull()
+    {
+        Assert.Null(AzFilters.FilterAcrRepositoryList("{}"));
+    }
+
+    [Fact]
+    public void FilterAcrRepositoryList_NonStringElement_ReturnsNull()
+    {
+        Assert.Null(AzFilters.FilterAcrRepositoryList("[1, 2, 3]"));
+    }
+
+    [Fact]
+    public void FilterAcrRepositoryList_Overflow_TruncatesAfterTwentyWithInlineSuffix()
+    {
+        var repos = Enumerable.Range(1, 25).Select(i => $"\"repo-{i}\"");
+        var input = $"[{string.Join(',', repos)}]";
+        var result = AzFilters.FilterAcrRepositoryList(input)!;
+        Assert.Contains("25 repositories:", result.Text, StringComparison.Ordinal);
+        Assert.Contains("(+5 more)", result.Text, StringComparison.Ordinal);
+        Assert.True(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterAcrRepositoryShowTags_RealCapture_FormatsCommaJoinedSingleLine()
+    {
+        var result = AzFilters.FilterAcrRepositoryShowTags(AcrRepositoryShowTagsRaw)!;
+        Assert.Equal(
+            "8 tags: 0.0.45, 0.0.46, 0.0.47, 0.0.48, 0.0.49, 0.0.50, 0.0.51, 0.0.52",
+            result.Text);
+        Assert.False(result.IsTruncated);
+    }
+
+    // Same deliberate exception as FilterAcrRepositoryList above — no 60%-floor assertion for this
+    // bare-string-array shape's small real fixture; see that comment for the full rationale.
+
+    [Fact]
+    public void FilterAcrRepositoryShowTags_InvalidJson_ReturnsNull()
+    {
+        Assert.Null(AzFilters.FilterAcrRepositoryShowTags("not json"));
+    }
+
     // ===================== Redact =====================
 
     [Fact]
