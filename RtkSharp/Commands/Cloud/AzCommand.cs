@@ -10,12 +10,14 @@ using RtkSharp.Execution;
 namespace RtkSharp.Commands.Cloud;
 
 /// <summary>
-/// Implements the <c>rtk az</c> CLI verb: compresses <c>az</c> JSON output via 10 named
-/// list/show filters (account, group, deployment group, webapp, storage account) plus a generic
+/// Implements the <c>rtk az</c> CLI verb: compresses <c>az</c> JSON output via 15 named filters
+/// (account, group, deployment group, webapp, storage account — each list/show; functionapp
+/// list/show; acr list, acr repository list, acr repository show-tags) plus a generic
 /// values-preserving JSON-compaction fallback, with secret redaction applied throughout. A pure
 /// RtkSharp superset feature — no Rust oracle exists for <c>az</c>. Design source of truth:
-/// <c>docs/superpowers/specs/2026-07-08-az-command-module-design.md</c>. Mirrors
-/// <see cref="AwsCommand"/>'s dispatch/execution skeleton.
+/// <c>docs/superpowers/specs/2026-07-08-az-command-module-design.md</c> (MVP) and
+/// <c>docs/superpowers/specs/2026-07-09-az-functionapp-acr-design.md</c> (functionapp/acr).
+/// Mirrors <see cref="AwsCommand"/>'s dispatch/execution skeleton.
 /// </summary>
 /// <remarks>
 /// <b>Unlike <c>aws</c>, no <c>--output json</c> injection is needed</b> — <c>az</c>'s factory
@@ -87,6 +89,16 @@ public static class AzCommand
                 ["storage", "account", "list"], opArgs[1..], verbose, executor, AzFilters.FilterStorageAccountList).ConfigureAwait(false),
             ("storage", "account") when opArgs.Length > 0 && opArgs[0] == "show" => await RunAzFilteredAsync(
                 ["storage", "account", "show"], opArgs[1..], verbose, executor, AzFilters.FilterStorageAccountShow).ConfigureAwait(false),
+            ("functionapp", "list") => await RunAzFilteredAsync(
+                ["functionapp", "list"], opArgs, verbose, executor, AzFilters.FilterFunctionAppList).ConfigureAwait(false),
+            ("functionapp", "show") => await RunAzFilteredAsync(
+                ["functionapp", "show"], opArgs, verbose, executor, AzFilters.FilterFunctionAppShow).ConfigureAwait(false),
+            ("acr", "list") => await RunAzFilteredAsync(
+                ["acr", "list"], opArgs, verbose, executor, AzFilters.FilterAcrList).ConfigureAwait(false),
+            ("acr", "repository") when opArgs.Length > 0 && opArgs[0] == "list" => await RunAzFilteredAsync(
+                ["acr", "repository", "list"], opArgs[1..], verbose, executor, AzFilters.FilterAcrRepositoryList).ConfigureAwait(false),
+            ("acr", "repository") when opArgs.Length > 0 && opArgs[0] == "show-tags" => await RunAzFilteredAsync(
+                ["acr", "repository", "show-tags"], opArgs[1..], verbose, executor, AzFilters.FilterAcrRepositoryShowTags).ConfigureAwait(false),
             _ => await RunGenericAsync(subcommand, rest, verbose, fullSub, executor).ConfigureAwait(false),
         };
     }

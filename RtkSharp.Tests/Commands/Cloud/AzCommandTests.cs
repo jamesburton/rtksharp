@@ -772,11 +772,67 @@ public sealed class AzCommandTests
         Assert.Equal(["storage", "account", "show", "-n", "csb1003200244ccb05c"], request.Arguments);
     }
 
+    [Fact]
+    public async Task RunAsync_FunctionAppShow_DispatchesToFilterFunctionAppShow()
+    {
+        // Asserts actual stdout content, not just that the request was forwarded: an unmatched
+        // op also falls through to RunGenericAsync (JsonCompaction.Compact), which forwards args
+        // identically but produces different, non-terse output — so this genuinely fails until
+        // the ("functionapp", "show") dispatch arm exists.
+        var executor = new RecordingExecutor(_ => Ok(FunctionAppShowRaw));
+        var stdout = await CaptureStdoutAsync(() => AzCommand.RunAsync(["functionapp", "show", "--name", "terraform-backup-functions"], verbose: 0, executor));
+
+        Assert.Equal(
+            "terraform-backup-functions Running functionapp,linux UK South sku:Dynamic https:false rg:terraform-backup-rg host:terraform-backup-functions.azurewebsites.net runtime:PYTHON|3.9\n",
+            stdout);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["functionapp", "show", "--name", "terraform-backup-functions"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_AcrRepositoryList_DispatchesThreeLevelSubcommand()
+    {
+        var executor = new RecordingExecutor(_ => Ok(AcrRepositoryListRaw));
+        var stdout = await CaptureStdoutAsync(() => AzCommand.RunAsync(["acr", "repository", "list", "--name", "icppi"], verbose: 0, executor));
+
+        Assert.Equal(
+            "5 repositories: ifp.portal.bnl.demo, ifp.reportingengine.web.linux, ifp.valuationengine.web, ifp.valuationengine.web.linux, ifp.valuationengine.web.windows\n",
+            stdout);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["acr", "repository", "list", "--name", "icppi"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_AcrRepositoryShowTags_DispatchesThreeLevelSubcommand()
+    {
+        var executor = new RecordingExecutor(_ => Ok(AcrRepositoryShowTagsRaw));
+        var stdout = await CaptureStdoutAsync(() => AzCommand.RunAsync(
+            ["acr", "repository", "show-tags", "--name", "icppi", "--repository", "ifp.valuationengine.web"], verbose: 0, executor));
+
+        Assert.Equal("8 tags: 0.0.45, 0.0.46, 0.0.47, 0.0.48, 0.0.49, 0.0.50, 0.0.51, 0.0.52\n", stdout);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(
+            ["acr", "repository", "show-tags", "--name", "icppi", "--repository", "ifp.valuationengine.web"], request.Arguments);
+    }
+
+    [Fact]
+    public async Task RunAsync_AcrList_DispatchesTwoLevelSubcommand()
+    {
+        var executor = new RecordingExecutor(_ => Ok(AcrListRaw));
+        var stdout = await CaptureStdoutAsync(() => AzCommand.RunAsync(["acr", "list"], verbose: 0, executor));
+
+        Assert.Contains("icppi icppi.azurecr.io Basic westeurope admin:true rg:iprotect-ifp state:Succeeded", stdout, StringComparison.Ordinal);
+        var request = Assert.Single(executor.Requests);
+        Assert.Equal(["acr", "list"], request.Arguments);
+    }
+
     [Theory]
     [InlineData("group", "list")]
     [InlineData("group", "show")]
     [InlineData("webapp", "list")]
     [InlineData("webapp", "show")]
+    [InlineData("functionapp", "list")]
+    [InlineData("functionapp", "show")]
     public async Task RunAsync_NamedOps_ExitZeroOnSuccess(string subcommand, string op)
     {
         var executor = new RecordingExecutor(_ => Ok("{}"));
