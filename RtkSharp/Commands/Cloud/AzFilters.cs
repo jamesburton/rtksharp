@@ -525,6 +525,55 @@ internal static class AzFilters
         }
     }
 
+
+    // ===================== acr list =====================
+
+    private static string FormatAcrRegistry(JsonElement r)
+    {
+        var name = JStr(r, "name", "?");
+        var loginServer = JStr(r, "loginServer", "?");
+        var skuName = JNestedStr(r, "sku", "name", "?");
+        var location = JStr(r, "location", "?");
+        var admin = JBoolStr(r, "adminUserEnabled", "?");
+        var rg = JStr(r, "resourceGroup", "?");
+        var state = JStr(r, "provisioningState", "?");
+        return $"{name} {loginServer} {skuName} {location} admin:{admin} rg:{rg} state:{state}";
+    }
+
+    /// <summary>Formats <c>az acr list</c>'s bare top-level array of container registry objects.</summary>
+    public static AwsFilters.FilterResult? FilterAcrList(string jsonStr)
+    {
+        if (!TryParse(jsonStr, out var doc))
+        {
+            return null;
+        }
+
+        using (doc)
+        {
+            var v = doc.RootElement;
+            if (v.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var total = v.GetArrayLength();
+            var result = new List<string>();
+            var i = 0;
+            foreach (var r in v.EnumerateArray())
+            {
+                if (i >= MaxItems)
+                {
+                    break;
+                }
+
+                result.Add(FormatAcrRegistry(r));
+                i++;
+            }
+
+            var text = JoinWithOverflow(result, total, MaxItems, "registries");
+            return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
+        }
+    }
     /// <summary>
     /// Redacts secret-shaped values from already-filtered <c>az</c> output. Deliberately does NOT
     /// redact subscription/tenant IDs (see the design spec's Redaction section) — real ARM resource

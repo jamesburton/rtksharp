@@ -486,6 +486,83 @@ public sealed class AzCommandTests
         Assert.True(result.IsTruncated);
     }
 
+
+    // ===================== acr list =====================
+
+    private const string AcrListRaw = """
+        [
+          {
+            "adminUserEnabled": true,
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/iprotect-ifp/providers/Microsoft.ContainerRegistry/registries/icppi",
+            "location": "westeurope",
+            "loginServer": "icppi.azurecr.io",
+            "name": "icppi",
+            "provisioningState": "Succeeded",
+            "resourceGroup": "iprotect-ifp",
+            "sku": {
+              "name": "Basic",
+              "tier": "Basic"
+            },
+            "type": "Microsoft.ContainerRegistry/registries"
+          },
+          {
+            "adminUserEnabled": true,
+            "id": "/subscriptions/c83a19df-6be1-4eba-9505-9ab469177af5/resourceGroups/iprotect-ifp/providers/Microsoft.ContainerRegistry/registries/icppipdn",
+            "location": "westeurope",
+            "loginServer": "icppipdn.azurecr.io",
+            "name": "icppipdn",
+            "provisioningState": "Succeeded",
+            "resourceGroup": "iprotect-ifp",
+            "sku": {
+              "name": "Basic",
+              "tier": "Basic"
+            },
+            "type": "Microsoft.ContainerRegistry/registries"
+          }
+        ]
+        """;
+
+    [Fact]
+    public void FilterAcrList_RealCapture_FormatsBothRegistries()
+    {
+        var result = AzFilters.FilterAcrList(AcrListRaw)!;
+        Assert.Contains("icppi icppi.azurecr.io Basic westeurope admin:true rg:iprotect-ifp state:Succeeded", result.Text, StringComparison.Ordinal);
+        Assert.Contains("icppipdn icppipdn.azurecr.io Basic westeurope admin:true rg:iprotect-ifp state:Succeeded", result.Text, StringComparison.Ordinal);
+        Assert.False(result.IsTruncated);
+    }
+
+    [Fact]
+    public void FilterAcrList_TokenSavings_MeetsSixtyPercent()
+    {
+        var result = AzFilters.FilterAcrList(AcrListRaw)!;
+        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(AcrListRaw) * 100.0);
+        Assert.True(savings >= 60.0, $"acr list filter: expected >=60% savings, got {savings:F1}%");
+    }
+
+    [Fact]
+    public void FilterAcrList_MissingFields_UsesQuestionMarks()
+    {
+        var result = AzFilters.FilterAcrList("[{}]")!;
+        Assert.Equal("? ? ? ? admin:? rg:? state:?", result.Text);
+    }
+
+    [Fact]
+    public void FilterAcrList_NotAnArray_ReturnsNull()
+    {
+        Assert.Null(AzFilters.FilterAcrList("{}"));
+    }
+
+    [Fact]
+    public void FilterAcrList_Overflow_TruncatesAfterTwenty()
+    {
+        var registries = Enumerable.Range(1, 25).Select(i => $$"""
+            {"name": "reg-{{i}}", "loginServer": "reg-{{i}}.azurecr.io", "sku": {"name": "Basic"}, "location": "westeurope", "resourceGroup": "rg", "adminUserEnabled": true, "provisioningState": "Succeeded"}
+            """);
+        var input = $"[{string.Join(',', registries)}]";
+        var result = AzFilters.FilterAcrList(input)!;
+        Assert.Contains("… +5 more registries", result.Text, StringComparison.Ordinal);
+        Assert.True(result.IsTruncated);
+    }
     // ===================== Redact =====================
 
     [Fact]
