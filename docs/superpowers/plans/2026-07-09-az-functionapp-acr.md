@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Design source of truth: `docs/superpowers/specs/2026-07-09-az-functionapp-acr-design.md`. Every fixture is a real (or trimmed-but-real-derived) capture from the `FNZ Q-Hub Azure subscription` (`c83a19df-6be1-4eba-9505-9ab469177af5`) — no synthetic data in the primary fixture/savings tests. Synthetic data is allowed only for structural edge-case tests (e.g. overflow-past-`MaxItems`), matching the existing `FilterAccountList_Overflow_TruncatesAfterTwenty` pattern.
-- Token savings floor: every list-filter fixture test must assert ≥60% savings (`CLAUDE.md`/`.claude/rules/cli-testing.md`). If a fixture as originally drafted in this plan falls short when actually run, **do not shrink the assertion** — add more real fields from the full captures quoted in this plan's Context comments until it clears 60%, mirroring how `WebappListRaw` was corrected during the MVP (`docs/superpowers/plans/2026-07-08-phase8-az-command-module.md` Task 5).
+- Token savings floor: every list-filter fixture test must assert ≥60% savings (`CLAUDE.md`/`.claude/rules/cli-testing.md`). If a fixture as originally drafted in this plan falls short when actually run, **do not shrink the assertion** — add more real fields from the full captures quoted in this plan's Context comments until it clears 60%, mirroring how `WebappListRaw` was corrected during the MVP (`docs/superpowers/plans/2026-07-08-phase8-az-command-module.md` Task 5). **Documented exception (confirmed with the user 2026-07-10):** `FilterAcrRepositoryList`/`FilterAcrRepositoryShowTags` (Task 3) have no savings-floor test — their bare-string-array real fixtures measure 0.0% whitespace-token savings, a structural property no fixture resizing can fix (each short array element is already one whitespace-token either way). This is the ONLY exception in this plan; every other list filter still requires the floor.
 - `MaxItems = 20` (existing `AzFilters.cs:20`) governs all list truncation — do not introduce a second constant.
 - Redaction: `AzFilters.Redact` is applied unconditionally to every named filter's output inside `RunAzFilteredAsync` (`AzCommand.cs:245`) — none of the filters added in this plan need to call it directly or add new redaction regexes.
 - Build verification after every task: `cargo` is not applicable (this is the C#/.NET port) — run `dotnet build` and `dotnet test` from the repo root; both must be clean (0 warnings introduced, 0 failures) before committing.
@@ -467,13 +467,16 @@ Insert into `RtkSharp.Tests/Commands/Cloud/AzCommandTests.cs`, immediately after
         Assert.False(result.IsTruncated);
     }
 
-    [Fact]
-    public void FilterAcrRepositoryList_TokenSavings_MeetsSixtyPercent()
-    {
-        var result = AzFilters.FilterAcrRepositoryList(AcrRepositoryListRaw)!;
-        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(AcrRepositoryListRaw) * 100.0);
-        Assert.True(savings >= 60.0, $"acr repository list filter: expected >=60% savings, got {savings:F1}%");
-    }
+    // No 60%-floor assertion here (deliberate, project-decision, not an oversight): for a bare
+    // string array under MaxItems, every raw JSON element is already exactly one whitespace-token
+    // (short strings, no internal spaces), and the comma-joined output preserves one token per
+    // item too — CountTokens's whitespace-split metric cannot show savings for this shape no
+    // matter how the real fixture is sized (confirmed by hand-computation: this real 5-item
+    // capture measures 0.0% whitespace-token savings and ~4.9% even by raw character count). The
+    // format's real value is line-count/scannability (N lines -> 1 line) and, for large real
+    // repository lists, MaxItems-driven truncation savings — neither of which this small fixture
+    // exercises. See `FilterAcrRepositoryList_Overflow_TruncatesAfterTwentyWithInlineSuffix` for
+    // the truncation case, which is where this format's real compression shows up.
 
     [Fact]
     public void FilterAcrRepositoryList_NotAnArray_ReturnsNull()
@@ -508,13 +511,8 @@ Insert into `RtkSharp.Tests/Commands/Cloud/AzCommandTests.cs`, immediately after
         Assert.False(result.IsTruncated);
     }
 
-    [Fact]
-    public void FilterAcrRepositoryShowTags_TokenSavings_MeetsSixtyPercent()
-    {
-        var result = AzFilters.FilterAcrRepositoryShowTags(AcrRepositoryShowTagsRaw)!;
-        var savings = 100.0 - ((double)CountTokens(result.Text) / CountTokens(AcrRepositoryShowTagsRaw) * 100.0);
-        Assert.True(savings >= 60.0, $"acr repository show-tags filter: expected >=60% savings, got {savings:F1}%");
-    }
+    // Same deliberate exception as FilterAcrRepositoryList above — no 60%-floor assertion for this
+    // bare-string-array shape's small real fixture; see that comment for the full rationale.
 
     [Fact]
     public void FilterAcrRepositoryShowTags_InvalidJson_ReturnsNull()
@@ -529,7 +527,7 @@ Insert into `RtkSharp.Tests/Commands/Cloud/AzCommandTests.cs`, immediately after
 Run: `dotnet test --filter "FullyQualifiedName~FilterAcrRepository"`
 Expected: FAIL — `AzFilters` does not contain a definition for `FilterAcrRepositoryList`/`FilterAcrRepositoryShowTags` (compile error).
 
-Note: `FilterAcrRepositoryList_TokenSavings_MeetsSixtyPercent` and the show-tags equivalent will very likely clear 60% comfortably by construction (a bare 5- or 8-string JSON array pretty-printed one-per-line is inherently token-heavy relative to one comma-joined line) — no fixture expansion is expected to be needed here, unlike Task 1's list filter, but verify the actual number when the test runs.
+Note: this task deliberately has NO token-savings-floor test for `FilterAcrRepositoryList`/`FilterAcrRepositoryShowTags` — see the inline comments in Step 1 for why (confirmed during execution: 0.0% whitespace-token savings on the real 5-item fixture, a structural property of small bare-string-array outputs, not a fixable fixture-sizing issue). This was a correction made mid-plan-execution on 2026-07-10 after the original plan draft incorrectly assumed these would "very likely clear 60% comfortably by construction" — that assumption was wrong; the design decision to keep the comma-joined format anyway (rather than redesign it) was confirmed with the user before this correction.
 
 - [ ] **Step 3: Implement the filters**
 
