@@ -128,6 +128,11 @@ still be caught — this is existing behavior, not a new mechanism.
 New tests added to the existing `RtkSharp.Tests/Commands/Cloud/AzCommandTests.cs` (no new
 test file), following the established pattern: real captured fixtures frozen as constants,
 one snapshot-style assertion per filter plus a ≥60%-savings assertion, and dispatch tests
+(**exception, found during implementation:** `FilterAcrRepositoryList`/`FilterAcrRepositoryShowTags`
+omit the savings assertion — their comma-joined bare-string-array output measures 0.0%
+whitespace-token savings on real fixtures, a structural property no fixture resizing fixes;
+confirmed with the user, documented in the implementation plan's Global Constraints and
+inline in the test file)
 extending the existing `RecordingExecutor`-based table to cover the 5 new op combinations
 (`functionapp list`, `functionapp show`, `acr list`, `acr repository list`, `acr repository
 show-tags`) plus confirming the explicit-`--output table` passthrough policy still holds for
