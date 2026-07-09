@@ -525,7 +525,6 @@ internal static class AzFilters
         }
     }
 
-
     // ===================== acr list =====================
 
     private static string FormatAcrRegistry(JsonElement r)
@@ -574,6 +573,7 @@ internal static class AzFilters
             return total > MaxItems ? AwsFilters.FilterResult.Truncated(text) : AwsFilters.FilterResult.New(text);
         }
     }
+
     /// <summary>
     /// Redacts secret-shaped values from already-filtered <c>az</c> output. Deliberately does NOT
     /// redact subscription/tenant IDs (see the design spec's Redaction section) — real ARM resource
