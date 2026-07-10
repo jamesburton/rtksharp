@@ -4,7 +4,7 @@ using System.IO;
 using System.Text;
 using RtkSharp.Hooks;
 
-namespace RtkSharp.Filters;
+namespace RtkSharp.Filters.Toml;
 
 // ---------------------------------------------------------------------------
 // Trust-check test seam (Task 4 lands the real implementation)

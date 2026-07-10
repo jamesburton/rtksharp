@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Linq;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 using RtkSharp.Tests.Hooks;
 using Xunit;
 

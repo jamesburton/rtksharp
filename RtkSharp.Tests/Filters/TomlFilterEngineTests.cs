@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 using Xunit;
 
 namespace RtkSharp.Tests.Filters;

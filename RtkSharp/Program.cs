@@ -3,7 +3,7 @@ using System.Text;
 using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Execution;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 using RtkSharp.Hooks;
 
 return await RtkProgram.RunAsync(args);

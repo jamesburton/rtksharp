@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using RtkSharp.Core;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 using RtkSharp.Hooks;
 using Xunit;
 

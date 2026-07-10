@@ -1,6 +1,6 @@
 using System;
 using System.IO;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 using RtkSharp.Hooks;
 using Xunit;
 

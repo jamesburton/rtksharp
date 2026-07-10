@@ -11,7 +11,7 @@ using Tomlyn;
 using Tomlyn.Model;
 using Tomlyn.Serialization;
 
-namespace RtkSharp.Filters;
+namespace RtkSharp.Filters.Toml;
 
 // ---------------------------------------------------------------------------
 // Deserialization types (TOML schema) — faithful port of the structs in

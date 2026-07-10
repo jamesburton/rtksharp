@@ -3,7 +3,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using RtkSharp.Core;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 
 namespace RtkSharp.Hooks;
 

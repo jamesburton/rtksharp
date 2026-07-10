@@ -5,7 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using RtkSharp.Cli;
 using RtkSharp.Execution;
-using RtkSharp.Filters;
+using RtkSharp.Filters.Toml;
 using RtkSharp.Tests.Hooks;
 using Xunit;
 
