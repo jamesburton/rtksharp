@@ -1,8 +1,57 @@
 # RtkSharp.Filters: in-process filter library for CodeSharp
 
 **Date:** 2026-07-10
-**Status:** Approved design, pending implementation plan
+**Status:** Approved design, revised same day after inventory research surfaced
+three contradictions with the codebase as it actually exists (see "Revision
+2026-07-10" below); pending implementation plan.
 **Backlog source:** `docs/PLANS.md` §11a — "Expose RTK as a library for direct usage within a coding agent"
+
+## Revision 2026-07-10 (before implementation plan written)
+
+A pre-plan inventory pass found the original non-goals below don't match the
+current codebase. Corrections, with rationale:
+
+1. **Tracking is NOT isolated from filter handlers.** 31 of the ~70 filter
+   modules moving into the library call `TimedExecution.Start()` directly
+   (e.g. `TestCommand.cs:99`), which constructs a `Tracker` and writes to the
+   SQLite tracking DB with no intervening abstraction — not routed through
+   `CommandRunner`/`ITokenTracker` as originally assumed. **Decision:**
+   rather than refactor 31 call sites before the split, `RtkSharp.Core.Tracking/**`
+   moves into `RtkSharp.Filters` too. `RtkSharp.Filters` now depends on
+   `Microsoft.Data.Sqlite`/`SQLitePCLRaw`, and `RtkFilters.Run()` writes a
+   tracking row on the consumer's machine by default. The "Analytics/tracking
+   side effects" non-goal below is **retracted**.
+2. **AST/Parser dependencies are already load-bearing in core filters**, not
+   a separable future extension. `ReadCommand.cs` (`rtk read`) uses
+   `RtkSharp.Ast` directly; `PipeCommand.cs`, `PnpmCommand.cs`,
+   `PlaywrightCommand.cs`, `VitestCommand.cs` use `RtkSharp.Parser`.
+   **Decision:** `RtkSharp/Ast/**` and `RtkSharp/Parser/**` move into
+   `RtkSharp.Filters` wholesale, rather than splitting the ast branch out of
+   5 files into an injected strategy. `RtkSharp.Filters` now also depends on
+   `Microsoft.CodeAnalysis.CSharp`, `RtkSharp.TreeSitter.Trimmed`, and
+   `Acornima`. The "AST-level semantic filtering... deferred" non-goal below
+   is **retracted**; `--level ast` ships as part of the library from day one.
+3. **Namespace collision.** `RtkSharp/Filters/TomlFilterEngine.cs` and
+   `TomlFilterRegistry.cs` already use `namespace RtkSharp.Filters;` today
+   (the existing TOML-filter-DSL engine), which collides with the new
+   library's chosen project name and the `RtkFilters` API's namespace.
+   **Decision:** rename the existing TOML engine's namespace to
+   `RtkSharp.Filters.Toml`. `RtkFilters` keeps the top-level
+   `RtkSharp.Filters` namespace, since that's the identity that matters to
+   external consumers like CodeSharp.
+4. **`Commands/**` is not a clean "filter module" boundary.**
+   `Commands/Analytics/**` (`GainCommand.cs`, `SessionCommand.cs`,
+   `CcEconomicsCommand.cs`) and `Commands/System/ConfigCommand.cs` /
+   `SmartCommand.cs` share the same folder tree and `RtkSharp.Commands.*`
+   namespace convention as true ecosystem filters, but are CLI-only meta
+   commands per this design's own intent. **Decision:** the implementation
+   plan uses an explicit per-file allowlist (given in the plan itself),
+   not a blanket "move everything under `Commands/**`".
+
+These corrections widen the library's dependency footprint (SQLite, Roslyn,
+TreeSitter, Acornima all become transitive `RtkSharp.Filters` package
+references) but keep the move mechanical — no filter module's internal logic
+changes, only which project it compiles into and two namespace renames.
 
 ## Problem
 
@@ -37,16 +86,6 @@ round-trip, no separate `rtk` install.
   `ShellTool` execution model (Docker sandbox, timeout, process-tree kill).
   The library never spawns a process itself except through a caller-supplied
   `IProcessExecutor`.
-- **AST-level (`--level ast`) semantic filtering.** Real feature, but a
-  separate, larger surface (Roslyn + 9 TreeSitter grammars); not needed to
-  solve the ShellTool-output problem and deferred to a future extension of
-  this same library if wanted.
-- **Analytics/tracking side effects.** `Tracker`/token-savings recording
-  lives in `RtkSharp/Execution/CommandRunner.cs`, one layer above
-  `CommandRegistry` dispatch — not inside the filter handlers themselves.
-  The library exposes the handlers directly, so calling it never writes to
-  the SQLite tracking DB. (CodeSharp can add its own metrics later if it
-  wants; not this design's concern.)
 - **Actually wiring `RtkSharp.Filters` into CodeSharp's `ShellTool`.** That's
   a CodeSharp-repo change (implementing `IProcessExecutor`, calling
   `TryParseSingleCommand` + `Run`) and gets its own design/plan over there.
@@ -69,13 +108,18 @@ philosophy rather than conflicting with it.
 ### New project: `RtkSharp.Filters`
 
 A new class library (`net10.0`, `PackAsTool` absent) that most of the
-existing `RtkSharp/Commands/**`, `RtkSharp/Execution/**` (`IProcessExecutor`,
+existing `RtkSharp/Commands/**` (per the Task 3 allowlist — everything
+except `Commands/Analytics/**` and `Commands/System/ConfigCommand.cs`/
+`SmartCommand.cs`), `RtkSharp/Execution/**` (`IProcessExecutor`,
 `ExecutionRequest`/`ExecutionResult`, `ProcessExecutor`),
-`RtkSharp/Rewrite/ShellLexer.cs`, and the parts of `RtkSharp/Core/**` those
-depend on (config/filter-loading, **not** `Tracking/**`) move into.
+`RtkSharp/Rewrite/ShellLexer.cs`, `RtkSharp/Ast/**`, `RtkSharp/Parser/**`,
+`RtkSharp/Core/Tracking/**`, and the parts of `RtkSharp/Core/**` those
+depend on move into (see the Revision section above for why `Ast/`,
+`Parser/`, and `Tracking/` are included, contrary to the original plan).
 `RtkSharp/RtkSharp.csproj` (the CLI tool) becomes a thin `Program.cs` +
-`Cli/CommandRegistry.cs` + `Execution/CommandRunner.cs` (tracking wrapper)
-+ `Hooks/**` + `Analytics/**` shell that references `RtkSharp.Filters` as a
+`Cli/CommandRegistry.cs` + `Execution/CommandRunner.cs` + `Hooks/**` +
+`Commands/Analytics/**` + `Commands/System/ConfigCommand.cs`/
+`SmartCommand.cs` shell that references `RtkSharp.Filters` as a
 `ProjectReference`.
 
 This is a **move + re-reference** operation, not a rewrite: the ~30 command
