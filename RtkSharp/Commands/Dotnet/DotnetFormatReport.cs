@@ -1,55 +1,22 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RtkSharp.Filters.Commands.Dotnet;
 
 namespace RtkSharp.Commands.Dotnet;
 
-/// <summary>A single formatting change within a file, as reported by <c>dotnet format --report</c>.</summary>
-internal sealed class ChangeDetail
-{
-    /// <summary>Gets the 1-based line number of the change.</summary>
-    public required uint LineNumber { get; init; }
-
-    /// <summary>Gets the 1-based character (column) number of the change.</summary>
-    public required uint CharNumber { get; init; }
-
-    /// <summary>Gets the formatter diagnostic id (e.g. <c>IDE0055</c>), or empty if not reported.</summary>
-    public required string DiagnosticId { get; init; }
-
-    /// <summary>Gets the human-readable description of the formatting fix applied.</summary>
-    public required string FormatDescription { get; init; }
-}
-
-/// <summary>A source file that needed formatting, with its individual changes.</summary>
-internal sealed class FileWithChanges
-{
-    /// <summary>Gets the file path as reported in the format report (relative or absolute).</summary>
-    public required string Path { get; init; }
-
-    /// <summary>Gets the changes recorded for this file.</summary>
-    public required IReadOnlyList<ChangeDetail> Changes { get; init; }
-}
-
-/// <summary>Aggregated summary of a <c>dotnet format --report</c> JSON report.</summary>
-internal sealed class FormatSummary
-{
-    /// <summary>Gets the files that needed formatting, each with its change detail.</summary>
-    public required IReadOnlyList<FileWithChanges> FilesWithChanges { get; init; }
-
-    /// <summary>Gets the number of files scanned that already matched the formatting rules.</summary>
-    public required int FilesUnchanged { get; init; }
-
-    /// <summary>Gets the total number of files the report covers.</summary>
-    public required int TotalFiles { get; init; }
-}
-
 /// <summary>
-/// Parses <c>dotnet format --report</c> JSON reports into compact <see cref="FormatSummary"/> objects.
-/// Ported from Rust <c>src/cmds/dotnet/dotnet_format_report.rs</c>.
+/// Reads and deserializes <c>dotnet format --report</c> JSON reports from disk, then delegates
+/// summarization to <see cref="DotnetFilters.Summarize"/>. Ported from Rust
+/// <c>src/cmds/dotnet/dotnet_format_report.rs</c>. The summarization logic itself moved to
+/// <see cref="DotnetFilters.Summarize"/> as part of the filters-library extraction (Task 6); this
+/// class retains only the file-I/O and JSON-deserialization half of the original fused
+/// <c>ParseFormatReport</c>.
 /// </summary>
 internal static partial class DotnetFormatReport
 {
     /// <summary>
-    /// Parses the format report at <paramref name="path"/>. Ports Rust's <c>parse_format_report</c>.
+    /// Reads and parses the format report at <paramref name="path"/>, then summarizes it via
+    /// <see cref="DotnetFilters.Summarize"/>. Ports Rust's <c>parse_format_report</c>.
     /// </summary>
     /// <param name="path">The path to the <c>--report</c> JSON file.</param>
     /// <returns>The parsed summary.</returns>
@@ -74,61 +41,7 @@ internal static partial class DotnetFormatReport
             throw new InvalidOperationException($"Failed to parse dotnet format report JSON at {path}", ex);
         }
 
-        entries ??= new List<FormatReportEntryDto>();
-        var totalFiles = entries.Count;
-
-        var filesWithChanges = entries
-            .Where(entry => entry.FileChanges.Count > 0)
-            .Select(entry => new FileWithChanges
-            {
-                Path = entry.FilePath,
-                Changes = entry.FileChanges.Select(change => new ChangeDetail
-                {
-                    LineNumber = change.LineNumber,
-                    CharNumber = change.CharNumber,
-                    DiagnosticId = change.DiagnosticId,
-                    FormatDescription = change.FormatDescription,
-                }).ToList(),
-            })
-            .ToList();
-
-        var filesUnchanged = Math.Max(0, totalFiles - filesWithChanges.Count);
-
-        return new FormatSummary
-        {
-            FilesWithChanges = filesWithChanges,
-            FilesUnchanged = filesUnchanged,
-            TotalFiles = totalFiles,
-        };
-    }
-
-    /// <summary>
-    /// JSON shape of a single entry in a <c>dotnet format --report</c> array. The report also carries
-    /// a <c>FileName</c> field, which is intentionally unmapped here (unused by the summary, and
-    /// <see cref="JsonSerializer"/> ignores unmapped properties by default, matching serde's behavior).
-    /// </summary>
-    private sealed class FormatReportEntryDto
-    {
-        [JsonPropertyName("FilePath")]
-        public string FilePath { get; init; } = string.Empty;
-
-        [JsonPropertyName("FileChanges")]
-        public List<FileChangeDto> FileChanges { get; init; } = new();
-    }
-
-    private sealed class FileChangeDto
-    {
-        [JsonPropertyName("LineNumber")]
-        public uint LineNumber { get; init; }
-
-        [JsonPropertyName("CharNumber")]
-        public uint CharNumber { get; init; }
-
-        [JsonPropertyName("DiagnosticId")]
-        public string DiagnosticId { get; init; } = string.Empty;
-
-        [JsonPropertyName("FormatDescription")]
-        public string FormatDescription { get; init; } = string.Empty;
+        return DotnetFilters.Summarize(entries ?? new List<FormatReportEntryDto>());
     }
 
     /// <summary>

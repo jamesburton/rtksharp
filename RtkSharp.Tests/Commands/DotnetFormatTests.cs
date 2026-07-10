@@ -157,65 +157,6 @@ public sealed class DotnetFormatTests : IDisposable
         }
     }
 
-    // ---- DotnetCommand.FormatDotnetFormatOutput ----
-
-    [Fact]
-    public void FormatDotnetFormatOutput_NoChanges_ReportsFormattedCorrectly()
-    {
-        var summary = DotnetFormatReport.ParseFormatReport(WriteAndTrack(AllFormattedJson));
-
-        var output = DotnetCommand.FormatDotnetFormatOutput(summary, checkMode: true);
-
-        Assert.Equal("ok dotnet format: 2 files formatted correctly", output);
-    }
-
-    [Fact]
-    public void FormatDotnetFormatOutput_CheckModeWithChanges_ListsFilesAndRecoveryHint()
-    {
-        var summary = DotnetFormatReport.ParseFormatReport(WriteAndTrack(WithChangesJson));
-
-        var output = DotnetCommand.FormatDotnetFormatOutput(summary, checkMode: true);
-
-        Assert.Equal(
-            "Format: 2 files need formatting\n" +
-            "1. src/Program.cs (line 42, col 17, WHITESPACE)\n" +
-            "2. src/Utils.cs (line 15, col 8, IDE0055)\n" +
-            "\n" +
-            "ok 1 files already formatted\n" +
-            "Run `dotnet format` to apply fixes",
-            output);
-    }
-
-    [Fact]
-    public void FormatDotnetFormatOutput_WriteModeWithChanges_ReportsFormattedCount()
-    {
-        var summary = DotnetFormatReport.ParseFormatReport(WriteAndTrack(WithChangesJson));
-
-        var output = DotnetCommand.FormatDotnetFormatOutput(summary, checkMode: false);
-
-        Assert.Equal("ok dotnet format: formatted 2 files (1 already formatted)", output);
-    }
-
-    [Fact]
-    public void FormatDotnetFormatOutput_ExceedsCap_AddsOverflowLineAndHint()
-    {
-        var entries = string.Join(
-            ",\n",
-            Enumerable.Range(1, 25).Select(i =>
-                $"{{ \"FileName\": \"F{i}.cs\", \"FilePath\": \"src/F{i}.cs\", " +
-                $"\"FileChanges\": [{{ \"LineNumber\": {i}, \"CharNumber\": 1, " +
-                "\"DiagnosticId\": \"IDE0055\", \"FormatDescription\": \"Fix\" }] }"));
-        var json = $"[\n{entries}\n]\n";
-        var summary = DotnetFormatReport.ParseFormatReport(WriteAndTrack(json));
-
-        var output = DotnetCommand.FormatDotnetFormatOutput(summary, checkMode: true);
-
-        Assert.Contains("Format: 25 files need formatting", output);
-        Assert.Contains("… +5 more files", output);
-        Assert.Contains("20. src/F20.cs", output);
-        Assert.DoesNotContain("21. src/F21.cs", output);
-    }
-
     private string WriteAndTrack(string content)
     {
         var path = WriteFixture(content);
