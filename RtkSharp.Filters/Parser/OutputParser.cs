@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using RtkSharp.Core;
 
 namespace RtkSharp.Parser;
 
@@ -199,17 +198,31 @@ public static class OutputParserSupport
     public const string DegradedMarker = "[RTK:DEGRADED]";
 
     /// <summary>
-    /// Truncates <paramref name="output"/> using the configured passthrough character limit
-    /// (<see cref="LimitsConfig.PassthroughMaxChars"/>, default 2000). Faithful port of Rust
+    /// The default passthrough character limit, matching <c>Config</c>'s
+    /// <c>Limits.PassthroughMaxChars</c> default. <see cref="RtkSharp.Filters"/> is a pure library
+    /// with no knowledge of — and no dependency on — a caller's <c>~/.config/rtk/config.toml</c>
+    /// (a library consumer such as CodeSharp has no such file at all, and it would be wrong for
+    /// this library to silently read the local machine's <c>rtk</c> CLI config), so
+    /// <see cref="TruncatePassthrough"/> always uses this hardcoded default rather than loading
+    /// <c>Config</c>.
+    /// </summary>
+    private const int DefaultPassthroughMaxChars = 2000;
+
+    /// <summary>
+    /// Truncates <paramref name="output"/> using the default passthrough character limit
+    /// (<see cref="DefaultPassthroughMaxChars"/>, matching <c>Config</c>'s
+    /// <c>Limits.PassthroughMaxChars</c> default of 2000). Faithful port of Rust
     /// <c>truncate_passthrough</c> (<c>src/parser/mod.rs:104-107</c>), which reads
-    /// <c>config::limits().passthrough_max_chars</c>.
+    /// <c>config::limits().passthrough_max_chars</c> — <b>except</b> that this library
+    /// deliberately does not read a user's <c>config.toml</c> at all (see
+    /// <see cref="DefaultPassthroughMaxChars"/>'s remarks), so a customized
+    /// <c>PassthroughMaxChars</c> in the CLI's local config is not honored here.
     /// </summary>
     /// <param name="output">The raw output to truncate.</param>
     /// <returns>The (possibly) truncated output.</returns>
     public static string TruncatePassthrough(string output)
     {
-        var maxChars = Config.LoadOrDefault().Limits.PassthroughMaxChars;
-        return TruncateOutput(output, maxChars);
+        return TruncateOutput(output, DefaultPassthroughMaxChars);
     }
 
     /// <summary>
