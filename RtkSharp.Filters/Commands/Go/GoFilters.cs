@@ -2,10 +2,9 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Go;
+namespace RtkSharp.Filters.Commands.Go;
 
 /// <summary>
 /// A single <c>go test -json</c> NDJSON event. Faithful port of Rust's <c>GoTestEvent</c>
@@ -68,14 +67,73 @@ internal sealed class GoPackageResult
 }
 
 /// <summary>
-/// Pure filter functions for <c>go test</c>/<c>go build</c>/<c>go vet</c> output. Faithful ports of
-/// Rust's <c>filter_go_test_json</c>, <c>filter_go_build</c>/<c>filter_go_build_with_exit</c>, and
-/// <c>filter_go_vet</c> (<c>src/cmds/go/go_cmd.rs</c>).
+/// golangci-lint's <c>run --out-format=json</c>/<c>--output.json.path stdout</c> issue position shape.
+/// Faithful port of Rust's <c>Position</c> (<c>src/cmds/go/golangci_cmd.rs</c>:48-61).
 /// </summary>
-internal static class GoFilters
+internal sealed class GolangciPosition
+{
+    [JsonPropertyName("Filename")]
+    public string Filename { get; set; } = "";
+
+    [JsonPropertyName("Line")]
+    public int Line { get; set; }
+
+    [JsonPropertyName("Column")]
+    public int Column { get; set; }
+
+    [JsonPropertyName("Offset")]
+    public int Offset { get; set; }
+}
+
+/// <summary>golangci-lint's per-issue shape. Faithful port of Rust's <c>Issue</c> (<c>golangci_cmd.rs</c>:63-77).</summary>
+internal sealed class GolangciIssue
+{
+    [JsonPropertyName("FromLinter")]
+    public string FromLinter { get; set; } = "";
+
+    [JsonPropertyName("Text")]
+    public string Text { get; set; } = "";
+
+    [JsonPropertyName("Pos")]
+    public GolangciPosition Pos { get; set; } = new();
+
+    [JsonPropertyName("SourceLines")]
+    public List<string> SourceLines { get; set; } = [];
+
+    [JsonPropertyName("Severity")]
+    public string Severity { get; set; } = "";
+}
+
+/// <summary>golangci-lint's top-level JSON output shape. Faithful port of Rust's <c>GolangciOutput</c> (<c>golangci_cmd.rs</c>:79-83).</summary>
+internal sealed class GolangciOutput
+{
+    [JsonPropertyName("Issues")]
+    public List<GolangciIssue> Issues { get; set; } = [];
+}
+
+/// <summary>Source-generated JSON context for <see cref="GolangciOutput"/>, avoiding reflection-based (de)serialization under <c>PublishAot</c>.</summary>
+[JsonSerializable(typeof(GolangciOutput))]
+internal sealed partial class GolangciJsonContext : JsonSerializerContext;
+
+/// <summary>
+/// Pure filter functions for <c>go test</c>/<c>go build</c>/<c>go vet</c>/<c>golangci-lint</c> output.
+/// Faithful ports of Rust's <c>filter_go_test_json</c>, <c>filter_go_build</c>/
+/// <c>filter_go_build_with_exit</c>, <c>filter_go_vet</c> (<c>src/cmds/go/go_cmd.rs</c>), and
+/// <c>filter_golangci_json</c> (<c>src/cmds/go/golangci_cmd.rs</c>).
+/// </summary>
+public static class GoFilters
 {
     // Rust CAP_ERRORS from src/core/truncate.rs, reused for build errors and vet issues alike.
     private const int CapErrors = 20;
+
+    /// <summary>
+    /// The default passthrough character limit, matching <c>Config</c>'s <c>Limits.PassthroughMaxChars</c>
+    /// default of 2000. <see cref="RtkSharp.Filters"/> is a pure library with no dependency on
+    /// <c>RtkSharp.Core.Config</c> (which lives in the CLI project), so a customized
+    /// <c>PassthroughMaxChars</c> in the CLI's local config is not honored here — matching the
+    /// established pattern in <c>LintFilters</c>/<c>VitestFilters</c>/<c>OutputParser</c>.
+    /// </summary>
+    private const int DefaultPassthroughMaxChars = 2000;
 
     /// <summary>
     /// Parses <c>go test -json</c> NDJSON output into a compact pass/fail summary. Faithful port of
@@ -424,7 +482,7 @@ internal static class GoFilters
     {
         var errors = new List<string>();
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
             if (IsGoBuildErrorLine(trimmed))
@@ -463,7 +521,7 @@ internal static class GoFilters
 
     private static string FormatGoBuildFailure(string output, int exitCode)
     {
-        var lines = ReadCommand.SplitLines(output)
+        var lines = SourceFilterLineSplitter.SplitLines(output)
             .Select(l => l.Trim())
             .Where(l => l.Length != 0)
             .ToList();
@@ -562,7 +620,7 @@ internal static class GoFilters
     {
         var issues = new List<string>();
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
 
@@ -611,5 +669,172 @@ internal static class GoFilters
     {
         var pos = package.LastIndexOf('/');
         return pos >= 0 ? package[(pos + 1)..] : package;
+    }
+
+    /// <summary>
+    /// Groups golangci-lint JSON output by linter and file. Faithful port of Rust's
+    /// <c>filter_golangci_json</c> (<c>golangci_cmd.rs</c>:264-372).
+    /// </summary>
+    /// <param name="output">The raw golangci-lint JSON stdout (or its first line, for v2).</param>
+    /// <param name="version">The detected golangci-lint major version — controls whether source-line previews are shown.</param>
+    /// <returns>The filtered summary.</returns>
+    public static string FilterGolangciJson(string output, uint version)
+    {
+        GolangciOutput? parsed;
+        try
+        {
+            parsed = JsonSerializer.Deserialize(output, GolangciJsonContext.Default.GolangciOutput);
+        }
+        catch (JsonException e)
+        {
+            return $"golangci-lint (JSON parse failed: {e.Message})\n{Utils.Truncate(output, DefaultPassthroughMaxChars)}";
+        }
+
+        var issues = parsed?.Issues ?? [];
+
+        if (issues.Count == 0)
+        {
+            return "golangci-lint: No issues found";
+        }
+
+        var totalIssues = issues.Count;
+        var uniqueFiles = new HashSet<string>(issues.Select(i => i.Pos.Filename), StringComparer.Ordinal);
+        var totalFiles = uniqueFiles.Count;
+
+        var byLinter = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var issue in issues)
+        {
+            byLinter[issue.FromLinter] = byLinter.GetValueOrDefault(issue.FromLinter) + 1;
+        }
+
+        var byFile = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var issue in issues)
+        {
+            byFile[issue.Pos.Filename] = byFile.GetValueOrDefault(issue.Pos.Filename) + 1;
+        }
+
+        var fileCounts = byFile.ToList();
+        fileCounts.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+        var golangciResult = new StringBuilder();
+        golangciResult.Append($"golangci-lint: {totalIssues} issues in {totalFiles} files\n");
+
+        var linterCounts = byLinter.ToList();
+        linterCounts.Sort((a, b) => b.Value.CompareTo(a.Value));
+
+        if (linterCounts.Count > 0)
+        {
+            golangciResult.Append("Top linters:\n");
+            foreach (var (linter, count) in linterCounts.Take(10))
+            {
+                golangciResult.Append($"  {linter} ({count}x)\n");
+            }
+
+            golangciResult.Append('\n');
+        }
+
+        const int maxGolangciFiles = 10; // Rust CAP_WARNINGS from src/core/truncate.rs.
+        golangciResult.Append("Top files:\n");
+        foreach (var (file, count) in fileCounts.Take(maxGolangciFiles))
+        {
+            var shortPath = CompactPath(file);
+            golangciResult.Append($"  {shortPath} ({count} issues)\n");
+
+            var fileLinters = new Dictionary<string, List<GolangciIssue>>(StringComparer.Ordinal);
+            foreach (var issue in issues.Where(i => i.Pos.Filename == file))
+            {
+                if (!fileLinters.TryGetValue(issue.FromLinter, out var list))
+                {
+                    list = [];
+                    fileLinters[issue.FromLinter] = list;
+                }
+
+                list.Add(issue);
+            }
+
+            var fileLinterCounts = fileLinters.ToList();
+            fileLinterCounts.Sort((a, b) => b.Value.Count.CompareTo(a.Value.Count));
+
+            foreach (var (linter, linterIssues) in fileLinterCounts.Take(3))
+            {
+                golangciResult.Append($"    {linter} ({linterIssues.Count})\n");
+
+                // v2 only: show first source line for this linter-file group.
+                if (version >= 2 && linterIssues.Count > 0)
+                {
+                    var firstIssue = linterIssues[0];
+                    if (firstIssue.SourceLines.Count > 0)
+                    {
+                        var trimmed = firstIssue.SourceLines[0].Trim();
+                        var display = TakeChars(trimmed, 80);
+                        golangciResult.Append($"      → {display}\n");
+                    }
+                }
+            }
+        }
+
+        if (fileCounts.Count > maxGolangciFiles)
+        {
+            golangciResult.Append($"\n... +{fileCounts.Count - maxGolangciFiles} more files\n");
+        }
+
+        return golangciResult.ToString().Trim();
+    }
+
+    /// <summary>
+    /// Takes at most <paramref name="maxChars"/> Unicode scalar values from <paramref name="s"/>,
+    /// without appending an ellipsis (unlike <see cref="Utils.Truncate"/>). Faithful port of the
+    /// <c>char_indices().nth(80)</c> slicing in Rust's <c>filter_golangci_json</c>
+    /// (<c>golangci_cmd.rs</c>:353-356), which is scalar-value-safe (never splits a surrogate pair).
+    /// </summary>
+    private static string TakeChars(string s, int maxChars)
+    {
+        var sb = new StringBuilder();
+        var taken = 0;
+        foreach (var rune in s.EnumerateRunes())
+        {
+            if (taken >= maxChars)
+            {
+                break;
+            }
+
+            sb.Append(rune.ToString());
+            taken++;
+        }
+
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Compacts a file path down to a short, package-relative display form (<c>pkg/</c>, <c>cmd/</c>,
+    /// <c>internal/</c> prefixes preferred; otherwise just the file name). Faithful port of Rust's
+    /// <c>compact_path</c> (<c>golangci_cmd.rs</c>:375-389).
+    /// </summary>
+    /// <param name="path">The raw file path from a golangci-lint issue.</param>
+    /// <returns>The compacted path.</returns>
+    public static string CompactPath(string path)
+    {
+        var normalized = path.Replace('\\', '/');
+
+        var pkgPos = normalized.LastIndexOf("/pkg/", StringComparison.Ordinal);
+        if (pkgPos >= 0)
+        {
+            return "pkg/" + normalized[(pkgPos + 5)..];
+        }
+
+        var cmdPos = normalized.LastIndexOf("/cmd/", StringComparison.Ordinal);
+        if (cmdPos >= 0)
+        {
+            return "cmd/" + normalized[(cmdPos + 5)..];
+        }
+
+        var internalPos = normalized.LastIndexOf("/internal/", StringComparison.Ordinal);
+        if (internalPos >= 0)
+        {
+            return "internal/" + normalized[(internalPos + 10)..];
+        }
+
+        var slashPos = normalized.LastIndexOf('/');
+        return slashPos >= 0 ? normalized[(slashPos + 1)..] : normalized;
     }
 }

@@ -2,6 +2,7 @@ using System.Linq;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Go;
 
 namespace RtkSharp.Commands.Go;
 
@@ -311,7 +312,7 @@ public static class GoCommand
         // v2 outputs JSON on first line + trailing text; v1 outputs just JSON.
         var jsonOutput = version >= 2 ? FirstLine(result.Stdout) : result.Stdout;
 
-        var filtered = GolangciLintCommand.FilterGolangciJson(jsonOutput, version);
+        var filtered = GoFilters.FilterGolangciJson(jsonOutput, version);
         Console.Out.Write(filtered + "\n");
 
         if (!string.IsNullOrWhiteSpace(result.Stderr) && (RuntimeOptions.Verbosity > 0 || verbose > 0))
