@@ -3,6 +3,7 @@ using RtkSharp.Commands.Git;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Rust;
 
 namespace RtkSharp.Commands.Rust;
 
@@ -81,9 +82,9 @@ public static class CargoCommand
             "build" => await RunStreamedAsync("build", rest, lineFilteringExecutor, new BlockStreamFilter<CargoBuildHandler>(new CargoBuildHandler())).ConfigureAwait(false),
             "check" => await RunStreamedAsync("check", rest, lineFilteringExecutor, new BlockStreamFilter<CargoBuildHandler>(new CargoBuildHandler())).ConfigureAwait(false),
             "test" => await RunStreamedAsync("test", rest, lineFilteringExecutor, new BlockStreamFilter<CargoTestHandler>(new CargoTestHandler())).ConfigureAwait(false),
-            "clippy" => await RunBufferedAsync("clippy", rest, CargoNonStreamingFilters.FilterCargoClippy).ConfigureAwait(false),
-            "install" => await RunBufferedAsync("install", rest, CargoNonStreamingFilters.FilterCargoInstall).ConfigureAwait(false),
-            "nextest" => await RunBufferedAsync("nextest", rest, CargoNonStreamingFilters.FilterCargoNextest).ConfigureAwait(false),
+            "clippy" => await RunBufferedAsync("clippy", rest, CargoFilters.FilterCargoClippy).ConfigureAwait(false),
+            "install" => await RunBufferedAsync("install", rest, CargoFilters.FilterCargoInstall).ConfigureAwait(false),
+            "nextest" => await RunBufferedAsync("nextest", rest, CargoFilters.FilterCargoNextest).ConfigureAwait(false),
             _ => await RunPassthroughAsync(args, processExecutor).ConfigureAwait(false),
         };
     }

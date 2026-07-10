@@ -139,7 +139,7 @@ public sealed class PipeCommandTests
     // -----------------------------------------------------------------------
 
     [Fact]
-    public void ResolveFilter_CargoTest_DelegatesToCargoBuildTestFilters()
+    public void ResolveFilter_CargoTest_DelegatesToCargoFilters()
     {
         var f = PipeCommand.ResolveFilter("cargo-test")!;
         const string input = "running 15 tests\ntest result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n";

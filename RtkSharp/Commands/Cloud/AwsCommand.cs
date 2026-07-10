@@ -16,7 +16,7 @@ namespace RtkSharp.Commands.Cloud;
 /// generic values-preserving JSON-compaction fallback for any other subcommand. Faithful port of
 /// <c>src/cmds/cloud/aws_cmd.rs</c>'s dispatch/execution skeleton (its ~20 pure filter functions live
 /// in <see cref="AwsFilters"/> instead, mirroring the <c>CargoCommand</c>/
-/// <c>CargoNonStreamingFilters</c> split).
+/// <c>RtkSharp.Filters.Commands.Rust.CargoFilters</c> split).
 /// </summary>
 /// <remarks>
 /// <para>

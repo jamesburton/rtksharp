@@ -13,7 +13,7 @@ internal static class PipFilters
 {
     // Rust CAP_INVENTORY / CAP_LIST from src/core/truncate.rs (duplicated here per this codebase's
     // established convention of a private-per-file constant mirroring the Rust constant, rather than
-    // a shared caps class — see CargoNonStreamingFilters for the precedent).
+    // a shared caps class — see RtkSharp.Filters.Commands.Rust.CargoFilters for the precedent).
     private const int CapInventory = 50;
     private const int CapList = 20;
 

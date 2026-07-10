@@ -83,7 +83,7 @@ namespace RtkSharp.ParityTests;
 /// codebase — and the named-filter-alias entries include both a genuinely-delegating alias
 /// (<c>git-log</c>, which drives <see cref="RtkSharp.Commands.Git.GitCommand"/>'s already-ported
 /// filter logic) and the formerly-disclosed-gap alias (<c>cargo-test</c>, now also genuinely
-/// delegating to <c>CargoBuildTestFilters.FilterCargoTest</c>) so this battery exercises the
+/// delegating to <c>RtkSharp.Filters.Commands.Rust.CargoFilters.FilterCargoTest</c>) so this battery exercises the
 /// named-filter-alias path with two real delegating examples, not an identity-passthrough stand-in.
 /// </para>
 /// </remarks>

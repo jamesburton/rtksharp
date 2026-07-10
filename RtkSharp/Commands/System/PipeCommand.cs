@@ -6,6 +6,7 @@ using RtkSharp.Commands.Python;
 using RtkSharp.Commands.Rust;
 using RtkSharp.Filters.Commands.Git;
 using RtkSharp.Filters.Commands.Js;
+using RtkSharp.Filters.Commands.Rust;
 using RtkSharp.Parser;
 
 namespace RtkSharp.Commands.System;
@@ -20,7 +21,7 @@ namespace RtkSharp.Commands.System;
 /// <para>
 /// <b>Ecosystem-filter delegation — now fully wired (was disclosed-gap, resolved).</b> Every
 /// alias delegates to its real ported ecosystem filter: <c>cargo-test</c>/<c>cargo</c> →
-/// <see cref="CargoBuildTestFilters.FilterCargoTest"/>, <c>pytest</c> →
+/// <see cref="CargoFilters.FilterCargoTest"/>, <c>pytest</c> →
 /// <see cref="PytestFilters.FilterPytestOutput"/>, <c>mypy</c> →
 /// <see cref="MypyFilters.FilterMypyOutput"/>, <c>ruff-check</c>/<c>ruff-format</c> →
 /// <see cref="RuffFilters.FilterRuffCheckJson"/>/<see cref="RuffFilters.FilterRuffFormat"/>,
@@ -265,7 +266,7 @@ public static class PipeCommand
     /// <returns>The resolved filter function, or null if <paramref name="name"/> is not a known alias.</returns>
     internal static Func<string, string>? ResolveFilter(string name) => name switch
     {
-        "cargo-test" or "cargo" => CargoBuildTestFilters.FilterCargoTest,
+        "cargo-test" or "cargo" => CargoFilters.FilterCargoTest,
 
         "pytest" => PytestFilters.FilterPytestOutput,
         "mypy" => MypyFilters.FilterMypyOutput,
@@ -480,7 +481,7 @@ public static class PipeCommand
         if (first1K.Contains("test result:", StringComparison.Ordinal) &&
             first1K.Contains("passed;", StringComparison.Ordinal))
         {
-            return CargoBuildTestFilters.FilterCargoTest;
+            return CargoFilters.FilterCargoTest;
         }
 
         if (first1K.Contains("=== test session starts", StringComparison.Ordinal))
