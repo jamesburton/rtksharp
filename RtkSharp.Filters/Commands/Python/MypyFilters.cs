@@ -1,16 +1,15 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Python;
+namespace RtkSharp.Filters.Commands.Python;
 
 /// <summary>
 /// Buffered filter for mypy output: groups diagnostics by file (with attached "note:" continuation
 /// lines), plus a top-error-codes summary when 2+ distinct codes are present. Faithful port of
 /// <c>filter_mypy_output</c> (<c>src/cmds/python/mypy_cmd.rs</c>).
 /// </summary>
-internal static class MypyFilters
+public static class MypyFilters
 {
     // file.py:12: error: Message [error-code]
     // file.py:12:5: error: Message [error-code]
@@ -36,7 +35,7 @@ internal static class MypyFilters
     /// <returns>The filtered summary.</returns>
     public static string FilterMypyOutput(string output)
     {
-        var lines = ReadCommand.SplitLines(output).ToList();
+        var lines = SourceFilterLineSplitter.SplitLines(output);
         var errors = new List<MypyError>();
         var filelessLines = new List<string>();
         var i = 0;

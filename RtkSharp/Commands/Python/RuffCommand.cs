@@ -1,5 +1,6 @@
 using RtkSharp.Core;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Python;
 
 namespace RtkSharp.Commands.Python;
 
@@ -103,20 +104,7 @@ public static class RuffCommand
             invocation,
             "ruff",
             argsDisplay,
-            stdout =>
-            {
-                if (isCheck && !string.IsNullOrWhiteSpace(stdout))
-                {
-                    return RuffFilters.FilterRuffCheckJson(stdout);
-                }
-
-                if (isFormat)
-                {
-                    return RuffFilters.FilterRuffFormat(stdout);
-                }
-
-                return stdout.Trim();
-            },
+            stdout => RuffFilters.FilterRuffOutput(stdout, isCheck, isFormat),
             new RunOptions(FilterStdoutOnly: true)
         );
     }

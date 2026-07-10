@@ -1,17 +1,19 @@
 using System;
-using RtkSharp.Commands.Python;
+using RtkSharp.Filters.Commands.Python;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Python;
+namespace RtkSharp.Filters.Tests.Commands.Python;
 
 /// <summary>
 /// Test-for-test port of Rust <c>src/cmds/python/mypy_cmd.rs</c>'s <c>#[cfg(test)] mod tests</c>
 /// (<c>filter_mypy_output</c>). Rust's own oracle never unit-tests <c>mypy_cmd::run</c> itself (it
 /// spawns a real subprocess), so no dispatch-level test is added here either — only the pure filter
 /// function is covered, mirroring <c>CargoCommandTests</c>'s precedent for cargo's non-injectable
-/// buffered subcommands.
+/// buffered subcommands. Moved from <c>RtkSharp.Tests.Commands.Python.MypyCommandTests</c> when the
+/// underlying pure method moved from <c>RtkSharp.Commands.Python.MypyFilters</c> to
+/// <see cref="MypyFilters"/> (Task 10 of the filters-library extraction).
 /// </summary>
-public sealed class MypyCommandTests
+public sealed class MypyFiltersTests
 {
     [Fact]
     public void FilterMypyOutput_ErrorsGroupedByFile_MostErrorsFirst()

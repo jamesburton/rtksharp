@@ -1,8 +1,7 @@
 using System.Text;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Python;
+namespace RtkSharp.Filters.Commands.Python;
 
 /// <summary>
 /// Buffered filter for pytest output: state-machine parser that extracts the summary line,
@@ -10,7 +9,7 @@ namespace RtkSharp.Commands.Python;
 /// Faithful port of <c>filter_pytest_output</c>/<c>build_pytest_summary</c>/<c>parse_summary_line</c>
 /// (<c>src/cmds/python/pytest_cmd.rs</c>).
 /// </summary>
-internal static class PytestFilters
+public static class PytestFilters
 {
     // Rust CAP_WARNINGS from src/core/truncate.rs, reused for both MAX_XFAIL and MAX_PYTEST_FAILURES.
     private const int MaxXfail = 10;
@@ -39,7 +38,7 @@ internal static class PytestFilters
         var xfailLines = new List<string>();
         var summaryLine = "";
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
 
@@ -220,7 +219,7 @@ internal static class PytestFilters
         for (var i = 0; i < takeCount; i++)
         {
             var failure = failures[i];
-            var lines = ReadCommand.SplitLines(failure).ToList();
+            var lines = SourceFilterLineSplitter.SplitLines(failure);
             var handledAsFailedSummary = false;
 
             if (lines.Count > 0)

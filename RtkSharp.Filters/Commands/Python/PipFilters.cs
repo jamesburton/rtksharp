@@ -2,14 +2,14 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace RtkSharp.Commands.Python;
+namespace RtkSharp.Filters.Commands.Python;
 
 /// <summary>
 /// Buffered filters for <c>pip</c>/<c>uv pip</c> <c>list --format=json</c> and
 /// <c>list --outdated --format=json</c> output. Faithful port of <c>filter_pip_list</c>/
 /// <c>filter_pip_outdated</c> (<c>src/cmds/python/pip_cmd.rs</c>).
 /// </summary>
-internal static class PipFilters
+public static class PipFilters
 {
     // Rust CAP_INVENTORY / CAP_LIST from src/core/truncate.rs (duplicated here per this codebase's
     // established convention of a private-per-file constant mirroring the Rust constant, rather than
@@ -144,6 +144,6 @@ internal sealed class PipPackage
     public string? LatestVersion { get; set; }
 }
 
-/// <summary>Source-generated JSON context for <see cref="PipCommand"/>'s DTOs, avoiding reflection-based (de)serialization under <c>PublishAot</c>.</summary>
+/// <summary>Source-generated JSON context for <see cref="PipFilters"/>'s DTOs, avoiding reflection-based (de)serialization under <c>PublishAot</c>.</summary>
 [JsonSerializable(typeof(List<PipPackage>))]
 internal sealed partial class PipJsonContext : JsonSerializerContext;

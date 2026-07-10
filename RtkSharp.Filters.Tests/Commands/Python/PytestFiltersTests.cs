@@ -1,17 +1,20 @@
 using System;
-using RtkSharp.Commands.Python;
+using RtkSharp.Filters.Commands.Python;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Python;
+namespace RtkSharp.Filters.Tests.Commands.Python;
 
 /// <summary>
 /// Test-for-test port of Rust <c>src/cmds/python/pytest_cmd.rs</c>'s <c>#[cfg(test)] mod tests</c>
 /// (<c>filter_pytest_output</c>/<c>parse_summary_line</c>). Rust's own oracle never unit-tests
 /// <c>pytest_cmd::run</c> itself (it spawns a real subprocess), so no dispatch-level test is added
 /// here either — only the pure filter functions are covered, mirroring <c>CargoCommandTests</c>'s
-/// precedent for cargo's non-injectable buffered subcommands.
+/// precedent for cargo's non-injectable buffered subcommands. Moved from
+/// <c>RtkSharp.Tests.Commands.Python.PytestCommandTests</c> when the underlying pure methods moved
+/// from <c>RtkSharp.Commands.Python.PytestFilters</c> to <see cref="PytestFilters"/> (Task 10 of the
+/// filters-library extraction).
 /// </summary>
-public sealed class PytestCommandTests
+public sealed class PytestFiltersTests
 {
     [Fact]
     public void FilterPytestOutput_AllPass_ShowsPassedCount()

@@ -1,17 +1,16 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Python;
+namespace RtkSharp.Filters.Commands.Python;
 
 /// <summary>
 /// Buffered filters for <c>ruff check --output-format=json</c> and <c>ruff format</c> output.
 /// Faithful port of <c>filter_ruff_check_json</c>/<c>filter_ruff_format</c>/<c>compact_path</c>
 /// (<c>src/cmds/python/ruff_cmd.rs</c>).
 /// </summary>
-internal static class RuffFilters
+public static class RuffFilters
 {
     // Rust CAP_WARNINGS from src/core/truncate.rs — used here for both the "top rules" and
     // "top files" listings (MAX_RUFF_RULES/MAX_RUFF_FILES) and the format-mode file listing
@@ -19,6 +18,18 @@ internal static class RuffFilters
     private const int CapWarnings = 10;
 
     private const int MaxViolations = 50;
+
+    /// <summary>
+    /// The default passthrough character limit, matching <c>Config</c>'s
+    /// <c>Limits.PassthroughMaxChars</c> default. <see cref="RtkSharp.Filters"/> is a pure library
+    /// with no knowledge of — and no dependency on — a caller's <c>~/.config/rtk/config.toml</c>
+    /// (a library consumer such as CodeSharp has no such file at all, and it would be wrong for
+    /// this library to silently read the local machine's <c>rtk</c> CLI config), so
+    /// <see cref="FilterRuffCheckJson"/> always uses this hardcoded default rather than loading
+    /// <c>Config</c>. See <c>RtkSharp.Filters.Parser.OutputParserSupport.DefaultPassthroughMaxChars</c>
+    /// for the same precedent.
+    /// </summary>
+    private const int DefaultPassthroughMaxChars = 2000;
 
     /// <summary>
     /// Filters <c>ruff check --output-format=json</c> output: groups violations by rule code and by
@@ -36,7 +47,7 @@ internal static class RuffFilters
         }
         catch (JsonException e)
         {
-            return $"Ruff check (JSON parse failed: {e.Message})\n{Utils.Truncate(output, Config.LoadOrDefault().Limits.PassthroughMaxChars)}";
+            return $"Ruff check (JSON parse failed: {e.Message})\n{Utils.Truncate(output, DefaultPassthroughMaxChars)}";
         }
 
         diagnostics ??= [];
@@ -158,7 +169,7 @@ internal static class RuffFilters
         var filesToFormat = new List<string>();
         var filesChecked = 0;
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
             var lower = trimmed.ToLowerInvariant();
@@ -245,6 +256,31 @@ internal static class RuffFilters
     }
 
     /// <summary>
+    /// Dispatches to <see cref="FilterRuffCheckJson"/> or <see cref="FilterRuffFormat"/> based on
+    /// which mode <c>RuffCommand</c> detected, or passes the stdout through verbatim (trimmed) when
+    /// neither applies. Extracted from <c>RuffCommand.RunAsync</c>'s inline dispatch closure (Task 10
+    /// of the filters-library extraction) so the mode-selection logic itself is directly testable.
+    /// </summary>
+    /// <param name="stdout">The raw stdout captured from the <c>ruff</c> invocation.</param>
+    /// <param name="isCheck">Whether the invocation was detected as check mode.</param>
+    /// <param name="isFormat">Whether the invocation was detected as format mode.</param>
+    /// <returns>The filtered (or passed-through) output.</returns>
+    public static string FilterRuffOutput(string stdout, bool isCheck, bool isFormat)
+    {
+        if (isCheck && !string.IsNullOrWhiteSpace(stdout))
+        {
+            return FilterRuffCheckJson(stdout);
+        }
+
+        if (isFormat)
+        {
+            return FilterRuffFormat(stdout);
+        }
+
+        return stdout.Trim();
+    }
+
+    /// <summary>
     /// Compacts a file path by keeping only the portion from the last <c>src/</c>, <c>lib/</c>, or
     /// <c>tests/</c> segment onward, or just the file name if none of those are present. Faithful port
     /// of Rust <c>compact_path</c> (<c>ruff_cmd.rs</c>:322-336).
@@ -317,6 +353,6 @@ internal sealed class RuffDiagnostic
     public RuffFix? Fix { get; set; }
 }
 
-/// <summary>Source-generated JSON context for <see cref="RuffCommand"/>'s DTOs, avoiding reflection-based (de)serialization under <c>PublishAot</c>.</summary>
+/// <summary>Source-generated JSON context for <see cref="RuffFilters"/>'s DTOs, avoiding reflection-based (de)serialization under <c>PublishAot</c>.</summary>
 [JsonSerializable(typeof(List<RuffDiagnostic>))]
 internal sealed partial class RuffJsonContext : JsonSerializerContext;

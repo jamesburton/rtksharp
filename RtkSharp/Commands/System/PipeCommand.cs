@@ -7,6 +7,7 @@ using RtkSharp.Commands.Rust;
 using RtkSharp.Filters.Commands.Git;
 using RtkSharp.Filters.Commands.Go;
 using RtkSharp.Filters.Commands.Js;
+using RtkSharp.Filters.Commands.Python;
 using RtkSharp.Filters.Commands.Rust;
 using RtkSharp.Parser;
 

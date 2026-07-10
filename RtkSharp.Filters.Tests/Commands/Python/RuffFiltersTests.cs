@@ -1,8 +1,9 @@
 using System;
-using RtkSharp.Commands.Python;
+using System.Linq;
+using RtkSharp.Filters.Commands.Python;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Python;
+namespace RtkSharp.Filters.Tests.Commands.Python;
 
 /// <summary>
 /// Test-for-test port of Rust <c>src/cmds/python/ruff_cmd.rs</c>'s <c>#[cfg(test)] mod tests</c>
@@ -10,9 +11,11 @@ namespace RtkSharp.Tests.Commands.Python;
 /// never unit-tests <c>ruff_cmd::run</c> itself (it spawns a real subprocess), so — mirroring
 /// <c>CargoCommandTests</c>'s precedent for cargo's non-injectable buffered subcommands
 /// (clippy/install/nextest) — no dispatch-level test is added here either; only the pure filter
-/// functions are covered.
+/// functions are covered. Moved from <c>RtkSharp.Tests.Commands.Python.RuffCommandTests</c> when the
+/// underlying pure methods moved from <c>RtkSharp.Commands.Python.RuffFilters</c> to
+/// <see cref="RuffFilters"/> (Task 10 of the filters-library extraction).
 /// </summary>
-public sealed class RuffCommandTests
+public sealed class RuffFiltersTests
 {
     // ===================== filter_ruff_check_json =====================
 
@@ -157,5 +160,30 @@ public sealed class RuffCommandTests
     public void CompactPath_RelativePath_ReturnsFileName()
     {
         Assert.Equal("file.py", RuffFilters.CompactPath("relative/file.py"));
+    }
+
+    // ===================== FilterRuffOutput (dispatch, added in Task 10) =====================
+
+    /// <summary>
+    /// <see cref="RuffFilters.FilterRuffOutput"/> is a newly-named extraction of
+    /// <c>RuffCommand.RunAsync</c>'s previously-anonymous inline dispatch lambda — before this task
+    /// it was only reachable indirectly through <c>RunAsync</c>. These two tests give the
+    /// mode-selection logic itself direct coverage, per the extraction-test-migration policy's
+    /// allowance for genuine new split-boundary coverage (mirroring Task 6/7's precedent).
+    /// </summary>
+    [Fact]
+    public void FilterRuffOutput_CheckMode_DelegatesToFilterRuffCheckJson()
+    {
+        const string output = "[]";
+        var result = RuffFilters.FilterRuffOutput(output, isCheck: true, isFormat: false);
+        Assert.Equal(RuffFilters.FilterRuffCheckJson(output), result);
+    }
+
+    [Fact]
+    public void FilterRuffOutput_NeitherCheckNorFormat_ReturnsTrimmedStdout()
+    {
+        const string output = "  ruff 0.5.0  \n";
+        var result = RuffFilters.FilterRuffOutput(output, isCheck: false, isFormat: false);
+        Assert.Equal("ruff 0.5.0", result);
     }
 }
