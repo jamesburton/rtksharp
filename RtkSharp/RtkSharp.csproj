@@ -43,48 +43,6 @@
       for the verified oracle comparison.
     -->
     <PackageReference Include="Tomlyn" Version="2.10.1" />
-    <!--
-      Roslyn's C# syntax-tree API, powering RtkSharp/Ast/CSharpAstAnalyzer.cs — the reference
-      implementation of the new, RtkSharp-only "rtk read, level=ast" tier (no Rust counterpart;
-      this is a deliberate extension beyond the ported spec, disclosed in
-      docs/parity/compatibility-ledger.md). Only the syntax layer (CSharpSyntaxTree.ParseText) is
-      used, not a full Compilation/semantic model — no project references or metadata are needed,
-      keeping this to a pure text-in/text-out transform. CONFIRMED compatible with this project's
-      PublishAot=true via a real `dotnet publish -c Release -r win-x64 -p:PublishAot=true` smoke
-      test whose published executable was actually run end-to-end (not just a successful build);
-      see CSharpAstAnalyzer.cs's class remarks for the measured size/startup cost.
-    -->
-    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.14.0" />
-    <!--
-      .NET bindings for the native tree-sitter parsing library (mariusgreuel/tree-sitter-dotnet-bindings),
-      the AST analyzer backend for every "rtk read, level=ast" language other than C#
-      (Rust/Python/TypeScript/Go/C/Cpp/Java/Ruby/Shell; JavaScript uses Acornima instead — see its
-      own package comment). A thin P/Invoke layer over the native tree-sitter core plus one native
-      grammar DLL per language (copied next to the published executable via the package's build
-      targets). CONFIRMED compatible with this project's PublishAot=true via a real
-      `dotnet publish -c Release -r win-x64 -p:PublishAot=true` smoke test: the published
-      executable actually parsed real Rust source and produced a correct syntax tree — the package
-      author does not document AOT testing, so this was verified directly rather than assumed from
-      a successful build.
-
-      Uses RtkSharp.TreeSitter.Trimmed instead of the upstream TreeSitter.DotNet package: upstream
-      bundles 28+ native grammars per RID (~68MB for win-x64 alone) but RtkSharp's
-      AstAnalyzerRegistry only ever loads 9 of them, so a size-trimmed redistribution (MIT,
-      repackaged from the same upstream binaries — see third-party/treesitter-dotnet-trimmed/)
-      keeps only those 9 grammars, cutting the native payload by ~90%. Same managed assembly/API,
-      just fewer bundled .dll/.so/.dylib files.
-    -->
-    <PackageReference Include="RtkSharp.TreeSitter.Trimmed" Version="1.3.0-rtksharp.1" />
-    <!--
-      Pure-managed JavaScript parser (adams85/acornima, a maintained fork of Esprima.NET/acornjs,
-      also used internally by Jint) producing a real ESTree AST — the AST analyzer backend for
-      JavaScript specifically, preferred over TreeSitter.DotNet's tree-sitter-javascript grammar
-      for this one language because it ships no native assets at all (pure C#, no P/Invoke),
-      which is a strictly better Native-AOT story than a native binding. Does NOT parse
-      TypeScript's type syntax — TypeScript still uses TreeSitter.DotNet's tree-sitter-typescript
-      grammar (see that package's comment above).
-    -->
-    <PackageReference Include="Acornima" Version="1.6.2" />
     <InternalsVisibleTo Include="RtkSharp.Tests" />
   </ItemGroup>
 
