@@ -1,15 +1,18 @@
-using RtkSharp.Commands.Jvm;
+using RtkSharp.Filters.Commands.Jvm;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Jvm;
+namespace RtkSharp.Filters.Tests.Commands.Jvm;
 
 /// <summary>
 /// Test-for-test port of Rust <c>src/cmds/jvm/mvn_cmd.rs</c>'s <c>filter_surefire</c> /
-/// <c>filter_package</c> <c>#[cfg(test)]</c> tests: the <see cref="SurefireBlock"/> state machine
-/// (single/multi-failure classes, trail re-arm, CRLF handling, the failing-class and failures-summary
-/// caps), the reactor-summary toggle, and the two full-fixture savings gates.
+/// <c>filter_package</c> / <c>filter_compile</c> / <c>filter_quiet</c> <c>#[cfg(test)]</c> tests: the
+/// <see cref="SurefireBlock"/> state machine (single/multi-failure classes, trail re-arm, CRLF
+/// handling, the failing-class and failures-summary caps), the reactor-summary toggle, the compile
+/// filter's warning dedupe and error continuation, the quiet-mode filter's framework/boilerplate
+/// stripping, and the full-fixture savings gates. Merged from the former
+/// <c>MvnSurefireFilterTests</c> and <c>MvnCompileQuietFilterTests</c>.
 /// </summary>
-public sealed class MvnSurefireFilterTests
+public sealed class MvnFiltersTests
 {
     private static int CountTokens(string text) => text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
 
@@ -19,7 +22,7 @@ public sealed class MvnSurefireFilterTests
     public void FilterSurefire_PassOutput_Compact()
     {
         var i = JvmFixtures.LoadText("mvn_test_pass_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.DoesNotContain("Running org.apache.commons.cli.help.UtilTest", o, StringComparison.Ordinal);
         Assert.DoesNotContain("Time elapsed: 1.023 s -- in", o, StringComparison.Ordinal);
         var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
@@ -30,7 +33,7 @@ public sealed class MvnSurefireFilterTests
     public void FilterSurefire_Fail_KeepsSignal()
     {
         var i = JvmFixtures.LoadText("mvn_test_fail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("BUILD FAILURE", o, StringComparison.Ordinal);
         Assert.Contains("Failures: 1", o, StringComparison.Ordinal);
     }
@@ -39,7 +42,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_DropsPassingBlock()
     {
         var i = JvmFixtures.LoadText("mvn_test_pass_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.DoesNotContain("at org.junit.", o, StringComparison.Ordinal);
         Assert.DoesNotContain("Running org.apache.commons.cli.ConverterTests", o, StringComparison.Ordinal);
         Assert.Contains("BUILD SUCCESS", o, StringComparison.Ordinal);
@@ -50,7 +53,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_PreservesFailingSignal()
     {
         var i = JvmFixtures.LoadText("mvn_test_fail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("Failures: 1", o, StringComparison.Ordinal);
         Assert.Contains("AssertionFailedError", o, StringComparison.Ordinal);
         Assert.Contains("at org.apache.commons.cli.RtkInducedFailTest.rtkInducedFailure", o, StringComparison.Ordinal);
@@ -63,7 +66,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_MatchesLegacy2xCloseLine()
     {
         const string i = "[INFO] -----< x >-----\n[INFO] Running x.Foo\n[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.123 s - in x.Foo\n[INFO] BUILD SUCCESS\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.DoesNotContain("Running x.Foo", o, StringComparison.Ordinal);
         Assert.Contains("BUILD SUCCESS", o, StringComparison.Ordinal);
     }
@@ -74,7 +77,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_MatchesWarningSkippedCloseLine()
     {
         const string i = "[INFO] -----< x >-----\n[INFO] Running x.Skip\n[WARNING] Tests run: 5, Failures: 0, Errors: 0, Skipped: 5, Time elapsed: 0.010 s -- in x.Skip\n[INFO] BUILD SUCCESS\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.DoesNotContain("Running x.Skip", o, StringComparison.Ordinal);
     }
 
@@ -92,7 +95,7 @@ public sealed class MvnSurefireFilterTests
             "\tat org.junit.jupiter.api.Assertions.assertEquals(Assertions.java:1)\n" +
             "\n" +
             "[INFO] BUILD FAILURE\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("AssertionFailedError", o, StringComparison.Ordinal);
         Assert.Contains("at x.Foo.bar", o, StringComparison.Ordinal);
         Assert.DoesNotContain("at org.junit.", o, StringComparison.Ordinal);
@@ -104,7 +107,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_KeepsAllFailuresInMultiFailureClass()
     {
         var i = JvmFixtures.LoadText("mvn_test_multifail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("AssertionFailedError: failOne: addition should equal five", o, StringComparison.Ordinal);
         Assert.Contains("IllegalStateException: failTwo: induced error", o, StringComparison.Ordinal);
         Assert.Contains("at com.example.rtk.CalcTest.failOne(CalcTest.java:12)", o, StringComparison.Ordinal);
@@ -118,7 +121,7 @@ public sealed class MvnSurefireFilterTests
     public void Package_KeepsAllFailuresInMultiFailureClass()
     {
         var i = JvmFixtures.LoadText("mvn_test_multifail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         Assert.Contains("AssertionFailedError: failOne: addition should equal five", o, StringComparison.Ordinal);
         Assert.Contains("IllegalStateException: failTwo: induced error", o, StringComparison.Ordinal);
         Assert.DoesNotContain("at org.junit.", o, StringComparison.Ordinal);
@@ -149,7 +152,7 @@ public sealed class MvnSurefireFilterTests
             "\tat x.MultiFail.second(MultiFail.java:30)\n" +
             "\n" +
             "[INFO] BUILD FAILURE\n";
-        var o = MvnSurefireFilter.FilterSurefireWithCap(i, 1);
+        var o = MvnFilters.FilterSurefireWithCap(i, 1);
 
         Assert.Contains("boomA", o, StringComparison.Ordinal);
         Assert.False(o.Contains("Running x.MultiFail", StringComparison.Ordinal) || o.Contains("boomFirst", StringComparison.Ordinal));
@@ -174,7 +177,7 @@ public sealed class MvnSurefireFilterTests
             "[INFO] Results:\n" +
             "[ERROR] Tests run: 2, Failures: 2, Errors: 0, Skipped: 0\n" +
             "[INFO] BUILD FAILURE\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("boomSecond", o, StringComparison.Ordinal);
         Assert.Contains("[INFO] Results:", o, StringComparison.Ordinal);
         Assert.Contains("[ERROR] Tests run: 2, Failures: 2", o, StringComparison.Ordinal);
@@ -196,7 +199,7 @@ public sealed class MvnSurefireFilterTests
             "org.opentest4j.AssertionFailedError: boomSecond\n" +
             "\n" +
             "[INFO] BUILD FAILURE\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("boomFirst", o, StringComparison.Ordinal);
         Assert.Contains("boomSecond", o, StringComparison.Ordinal);
         Assert.DoesNotContain("\n\n\n", o, StringComparison.Ordinal);
@@ -208,7 +211,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_SingleFailureOutputUnchanged()
     {
         var i = JvmFixtures.LoadText("mvn_test_fail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         const string expected = "[INFO] Scanning for projects...\n" +
             "[INFO] ----------------------< commons-cli:commons-cli >-----------------------\n" +
             "[INFO] Building Apache Commons CLI 1.11.1-SNAPSHOT\n" +
@@ -235,7 +238,7 @@ public sealed class MvnSurefireFilterTests
     public void Savings_MvnTestMultifailSlice()
     {
         var i = JvmFixtures.LoadText("mvn_test_multifail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
         Assert.True(savings >= 30.0, $"multifail slice >=30% savings, got {savings:F1}%");
     }
@@ -246,7 +249,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_DropsHelpBoilerplateInNonquietMode()
     {
         var i = JvmFixtures.LoadText("mvn_test_multifail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("[ERROR] Failed to execute goal", o, StringComparison.Ordinal);
         Assert.DoesNotContain("[Help 1]", o, StringComparison.Ordinal);
         Assert.DoesNotContain("Re-run Maven", o, StringComparison.Ordinal);
@@ -271,7 +274,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_KeepsCompileContinuationOnTestPhase()
     {
         var i = JvmFixtures.LoadText("mvn_test_compile_fail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("cannot find symbol", o, StringComparison.Ordinal);
         Assert.Contains("symbol:   variable bar", o, StringComparison.Ordinal);
         Assert.Contains("location: class org.apache.commons.cli.CompileBreaker", o, StringComparison.Ordinal);
@@ -284,7 +287,7 @@ public sealed class MvnSurefireFilterTests
     public void Package_StillKeepsCompileErrorContinuationAfterRefactor()
     {
         var i = JvmFixtures.LoadText("mvn_compile_error_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         Assert.Contains("cannot find symbol", o, StringComparison.Ordinal);
         Assert.Contains("symbol:   variable bar", o, StringComparison.Ordinal);
         Assert.Contains("location: class org.apache.commons.cli.CompileBreaker", o, StringComparison.Ordinal);
@@ -294,7 +297,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_KeepsModuleBanner()
     {
         const string i = "[INFO] Scanning for projects...\n[INFO] -----< com.example:myapp >-----\n[INFO] BUILD SUCCESS\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("-----< com.example:myapp >-----", o, StringComparison.Ordinal);
     }
 
@@ -304,7 +307,7 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_PreservesRealDurations()
     {
         const string i = "[INFO] -----< x >-----\n[INFO] Running x.Foo\n[ERROR] Tests run: 1, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 2.341 s <<< FAILURE! - in x.Foo\n[INFO] BUILD FAILURE\n[INFO] Total time:  4.567 s\n";
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("2.341 s", o, StringComparison.Ordinal);
         Assert.Contains("Total time:  4.567 s", o, StringComparison.Ordinal);
         Assert.DoesNotContain("Time elapsed: T s", o, StringComparison.Ordinal);
@@ -314,7 +317,7 @@ public sealed class MvnSurefireFilterTests
     public void FooterGuard_FrenchPassthrough()
     {
         var i = JvmFixtures.LoadText("mvn_locale_fr_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("BUILD ÉCHEC", o, StringComparison.Ordinal);
         Assert.Equal(i.Split('\n').Length, o.Split('\n').Length);
     }
@@ -323,7 +326,7 @@ public sealed class MvnSurefireFilterTests
     public void FooterGuard_NoPomPassthrough()
     {
         var i = JvmFixtures.LoadText("mvn_no_pom_raw.txt");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         Assert.Contains("there is no POM", o, StringComparison.Ordinal);
     }
 
@@ -333,9 +336,9 @@ public sealed class MvnSurefireFilterTests
     public void Surefire_HandlesCrlfLineEndings()
     {
         var iLf = JvmFixtures.LoadText("mvn_test_pass_slice_raw.txt").Replace("\r\n", "\n");
-        var oLf = MvnSurefireFilter.FilterSurefire(iLf);
+        var oLf = MvnFilters.FilterSurefire(iLf);
         var iCrlf = iLf.Replace("\n", "\r\n");
-        var oCrlf = MvnSurefireFilter.FilterSurefire(iCrlf);
+        var oCrlf = MvnFilters.FilterSurefire(iCrlf);
         Assert.Equal(oLf, oCrlf.Replace("\r\n", "\n"));
     }
 
@@ -343,9 +346,9 @@ public sealed class MvnSurefireFilterTests
     public void Package_HandlesCrlfLineEndings()
     {
         var iLf = JvmFixtures.LoadText("mvn_install_slice_raw.txt").Replace("\r\n", "\n");
-        var oLf = MvnSurefireFilter.FilterPackage(iLf);
+        var oLf = MvnFilters.FilterPackage(iLf);
         var iCrlf = iLf.Replace("\n", "\r\n");
-        var oCrlf = MvnSurefireFilter.FilterPackage(iCrlf);
+        var oCrlf = MvnFilters.FilterPackage(iCrlf);
         Assert.Equal(oLf, oCrlf.Replace("\r\n", "\n"));
     }
 
@@ -366,7 +369,7 @@ public sealed class MvnSurefireFilterTests
 
         i += "[INFO] BUILD FAILURE\n";
 
-        var o = MvnSurefireFilter.FilterSurefireWithCap(i, 3);
+        var o = MvnFilters.FilterSurefireWithCap(i, 3);
 
         for (var n = 1; n <= 3; n++)
         {
@@ -396,7 +399,7 @@ public sealed class MvnSurefireFilterTests
         }
 
         i += "[INFO] BUILD FAILURE\n";
-        var o = MvnSurefireFilter.FilterSurefireWithCap(i, 0);
+        var o = MvnFilters.FilterSurefireWithCap(i, 0);
         for (var n = 1; n <= 5; n++)
         {
             Assert.DoesNotContain($"Running x.Fail{n}", o, StringComparison.Ordinal);
@@ -417,7 +420,7 @@ public sealed class MvnSurefireFilterTests
         }
 
         i += "[INFO]\n[ERROR] Tests run: 100, Failures: 5, Errors: 0, Skipped: 0\n[INFO] BUILD FAILURE\n";
-        var o = MvnSurefireFilter.FilterSurefireWithCap(i, 3);
+        var o = MvnFilters.FilterSurefireWithCap(i, 3);
 
         for (var n = 1; n <= 3; n++)
         {
@@ -440,7 +443,7 @@ public sealed class MvnSurefireFilterTests
     public void ReactorSummary_KeptOnMultiModulePass()
     {
         var i = JvmFixtures.LoadText("mvn_reactor_pass_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         Assert.Contains("Reactor Summary for multi-module-skeleton", o, StringComparison.Ordinal);
         Assert.Contains("[INFO] child-a ............................................ SUCCESS", o, StringComparison.Ordinal);
         Assert.Contains("[INFO] child-b ............................................ SUCCESS", o, StringComparison.Ordinal);
@@ -451,7 +454,7 @@ public sealed class MvnSurefireFilterTests
     public void ReactorSummary_KeptOnMultiModuleFail()
     {
         var i = JvmFixtures.LoadText("mvn_reactor_fail_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         Assert.Contains("Reactor Summary for multi-module-skeleton", o, StringComparison.Ordinal);
         Assert.Contains("child-a ............................................ SUCCESS", o, StringComparison.Ordinal);
         Assert.Contains("child-b ............................................ FAILURE", o, StringComparison.Ordinal);
@@ -470,7 +473,7 @@ public sealed class MvnSurefireFilterTests
     public void FilterPackage_InstallCompact()
     {
         var i = JvmFixtures.LoadText("mvn_install_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
         Assert.True(savings >= 50.0, $"install-slice savings >=50%, got {savings:F1}%");
     }
@@ -479,7 +482,7 @@ public sealed class MvnSurefireFilterTests
     public void Package_KeepsInstallLines()
     {
         var i = JvmFixtures.LoadText("mvn_install_slice_raw.txt");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         Assert.Contains("Installing", o, StringComparison.Ordinal);
         Assert.Contains("Building jar:", o, StringComparison.Ordinal);
         Assert.DoesNotContain("at org.junit.", o, StringComparison.Ordinal);
@@ -491,7 +494,7 @@ public sealed class MvnSurefireFilterTests
     public void Savings_MvnTestPassFull()
     {
         var i = JvmFixtures.LoadGzText("mvn_test_pass_full_raw.txt.gz");
-        var o = MvnSurefireFilter.FilterSurefire(i);
+        var o = MvnFilters.FilterSurefire(i);
         var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
         Assert.True(savings >= 90.0, $"mvn test >=90% savings on full fixture, got {savings:F1}%");
     }
@@ -500,8 +503,92 @@ public sealed class MvnSurefireFilterTests
     public void Savings_MvnInstallFull()
     {
         var i = JvmFixtures.LoadGzText("mvn_install_full_raw.txt.gz");
-        var o = MvnSurefireFilter.FilterPackage(i);
+        var o = MvnFilters.FilterPackage(i);
         var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
         Assert.True(savings >= 85.0, $"mvn install >=85% savings on full fixture, got {savings:F1}%");
+    }
+
+    // ── Compile filter ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void FilterCompile_ErrorCompact()
+    {
+        var i = JvmFixtures.LoadText("mvn_compile_error_slice_raw.txt");
+        var o = MvnFilters.FilterCompile(i);
+        var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
+        Assert.True(savings >= 30.0, $"compile-error fixture is small; >=30% savings, got {savings:F1}%");
+    }
+
+    [Fact]
+    public void Compile_PreservesErrorContinuation()
+    {
+        var i = JvmFixtures.LoadText("mvn_compile_error_slice_raw.txt");
+        var o = MvnFilters.FilterCompile(i);
+        Assert.Contains("cannot find symbol", o, StringComparison.Ordinal);
+        Assert.Contains("symbol:   variable bar", o, StringComparison.Ordinal);
+        Assert.Contains("BUILD FAILURE", o, StringComparison.Ordinal);
+        Assert.DoesNotContain("[Help 1]", o, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Compile_DedupesWarnings()
+    {
+        const string i = "[INFO] -----< x >-----\n" +
+            "[WARNING] /a.java:[1,2] uses deprecated API\n" +
+            "[WARNING] /b.java:[3,4] uses deprecated API\n" +
+            "[WARNING] /a.java:[5,6] unchecked cast\n" +
+            "[INFO] BUILD SUCCESS\n";
+        var o = MvnFilters.FilterCompile(i);
+        var warns = o.Split("[WARNING]").Length - 1;
+        Assert.Equal(2, warns);
+    }
+
+    // ── Quiet mode (mvn -q) ───────────────────────────────────────────────────
+
+    [Fact]
+    public void QuietGreenRun_IsEmpty()
+    {
+        Assert.Equal(string.Empty, MvnFilters.FilterQuiet(string.Empty));
+        Assert.Equal(string.Empty, MvnFilters.FilterQuiet("   \n\n  \n"));
+    }
+
+    [Fact]
+    public void QuietFail_StripsFrameworkAndBoilerplate()
+    {
+        var i = JvmFixtures.LoadText("mvn_quiet_fail_raw.txt");
+        var o = MvnFilters.FilterQuiet(i);
+
+        Assert.Contains("Tests run: 1, Failures: 1, Errors: 0, Skipped: 0", o, StringComparison.Ordinal);
+        Assert.Contains("AssertionFailedError", o, StringComparison.Ordinal);
+        Assert.Contains("at x.FailTest.this_will_fail", o, StringComparison.Ordinal);
+        Assert.Contains("[ERROR] Failures:", o, StringComparison.Ordinal);
+        Assert.Contains("[ERROR] Tests run: 6, Failures: 1, Errors: 0, Skipped: 0", o, StringComparison.Ordinal);
+        Assert.Contains("[ERROR] Failed to execute goal", o, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("at org.junit.", o, StringComparison.Ordinal);
+        Assert.DoesNotContain("at java.base/", o, StringComparison.Ordinal);
+
+        Assert.DoesNotContain("To see the full stack trace", o, StringComparison.Ordinal);
+        Assert.DoesNotContain("[Help 1] http", o, StringComparison.Ordinal);
+        Assert.False(o.Contains("See /tmp/", StringComparison.Ordinal) || o.Contains("See dump files", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Savings_MvnQuietFail()
+    {
+        var i = JvmFixtures.LoadText("mvn_quiet_fail_raw.txt");
+        var o = MvnFilters.FilterQuiet(i);
+        var savings = 100.0 - (CountTokens(o) / (double)CountTokens(i) * 100.0);
+        Assert.True(savings >= 50.0, $"mvn -q fail >=50% savings, got {savings:F1}%");
+    }
+
+    /// <summary>Safety net: if the [ERROR] line isn't on the known keep/drop lists, the filter must
+    /// NOT silently drop it. Better to leak a line than to hide signal.</summary>
+    [Fact]
+    public void QuietUnknownErrorLine_KeptAsSafetyNet()
+    {
+        const string i = "[ERROR] Some unexpected error output we don't classify\n";
+        var o = MvnFilters.FilterQuiet(i);
+        Assert.Contains("Some unexpected error output", o, StringComparison.Ordinal);
     }
 }

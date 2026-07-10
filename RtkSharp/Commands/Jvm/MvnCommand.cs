@@ -1,6 +1,7 @@
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Jvm;
 
 namespace RtkSharp.Commands.Jvm;
 
@@ -81,14 +82,14 @@ public static class MvnCommand
                 return await RunPassthroughAsync(args, processExecutor).ConfigureAwait(false);
             }
 
-            return await RunBufferedAsync(tool, args, argsDisplay, MvnCompileQuietFilters.FilterQuiet, "mvn_quiet").ConfigureAwait(false);
+            return await RunBufferedAsync(tool, args, argsDisplay, MvnFilters.FilterQuiet, "mvn_quiet").ConfigureAwait(false);
         }
 
         return DetectPhase(args) switch
         {
-            MvnPhase.Test => await RunBufferedAsync(tool, args, argsDisplay, MvnSurefireFilter.FilterSurefire, "mvn_test").ConfigureAwait(false),
-            MvnPhase.Compile => await RunBufferedAsync(tool, args, argsDisplay, MvnCompileQuietFilters.FilterCompile, "mvn_compile").ConfigureAwait(false),
-            MvnPhase.Package => await RunBufferedAsync(tool, args, argsDisplay, MvnSurefireFilter.FilterPackage, "mvn_package").ConfigureAwait(false),
+            MvnPhase.Test => await RunBufferedAsync(tool, args, argsDisplay, MvnFilters.FilterSurefire, "mvn_test").ConfigureAwait(false),
+            MvnPhase.Compile => await RunBufferedAsync(tool, args, argsDisplay, MvnFilters.FilterCompile, "mvn_compile").ConfigureAwait(false),
+            MvnPhase.Package => await RunBufferedAsync(tool, args, argsDisplay, MvnFilters.FilterPackage, "mvn_package").ConfigureAwait(false),
             _ => await RunPassthroughAsync(args, processExecutor).ConfigureAwait(false),
         };
     }

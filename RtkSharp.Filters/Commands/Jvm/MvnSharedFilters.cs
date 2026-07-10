@@ -1,14 +1,13 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using RtkSharp.Commands.System;
+using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Jvm;
+namespace RtkSharp.Filters.Commands.Jvm;
 
 /// <summary>
 /// Shared regex patterns, stack-frame/boilerplate deny-lists, and the <see cref="SurefireBlock"/> /
-/// <see cref="FailuresSummaryCap"/> state machines used by <see cref="MvnSurefireFilter"/> and
-/// <see cref="MvnCompileQuietFilters"/>. Faithful port of the module-level items in
-/// <c>src/cmds/jvm/mvn_cmd.rs</c> (lines 1-521).
+/// <see cref="FailuresSummaryCap"/> state machines used by <see cref="MvnFilters"/>. Faithful port of
+/// the module-level items in <c>src/cmds/jvm/mvn_cmd.rs</c> (lines 1-521).
 /// </summary>
 internal static partial class MvnSharedFilters
 {
@@ -103,7 +102,7 @@ internal static partial class MvnSharedFilters
 
     /// <summary>
     /// Post-failure help boilerplate, plus the bare <c>[ERROR]</c> divider lines Maven emits between
-    /// boilerplate blocks (same drop rules as <see cref="MvnCompileQuietFilters.FilterQuiet"/>).
+    /// boilerplate blocks (same drop rules as <see cref="MvnFilters.FilterQuiet"/>).
     /// Faithful port of Rust's <c>is_boilerplate</c> (<c>mvn_cmd.rs</c>:145-147).
     /// </summary>
     /// <param name="line">The raw output line.</param>
@@ -129,7 +128,7 @@ internal static partial class MvnSharedFilters
     /// <param name="stripped">The ANSI-stripped raw output.</param>
     /// <returns>True if an English <c>BUILD SUCCESS</c>/<c>BUILD FAILURE</c> footer line is present.</returns>
     public static bool HasEnglishFooter(string stripped) =>
-        ReadCommand.SplitLines(stripped).Any(l =>
+        SourceFilterLineSplitter.SplitLines(stripped).Any(l =>
         {
             var t = l.Trim();
             return t.EndsWith(" BUILD SUCCESS", StringComparison.Ordinal) || t.EndsWith(" BUILD FAILURE", StringComparison.Ordinal);
@@ -242,7 +241,7 @@ internal readonly struct SurefireStepResult
 
 /// <summary>
 /// Shared state machine driving the inner Surefire block + failure-trail behaviour for
-/// <see cref="MvnSurefireFilter.FilterSurefire"/> and <see cref="MvnSurefireFilter.FilterPackage"/>.
+/// <see cref="MvnFilters.FilterSurefire"/> and <see cref="MvnFilters.FilterPackage"/>.
 /// Faithful port of Rust's <c>SurefireBlock</c> (<c>mvn_cmd.rs</c>:243-435).
 /// </summary>
 /// <remarks>

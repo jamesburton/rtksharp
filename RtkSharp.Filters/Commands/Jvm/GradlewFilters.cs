@@ -1,15 +1,14 @@
 using System.Text;
 using System.Text.RegularExpressions;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Jvm;
+namespace RtkSharp.Filters.Commands.Jvm;
 
 /// <summary>
 /// Buffered and per-line filters for <c>rtk gradlew</c>'s build/test/connected-test/lint/dependencies
 /// task families. Faithful port of the filter functions in <c>src/cmds/jvm/gradlew_cmd.rs</c>.
 /// </summary>
-internal static partial class GradlewFilters
+public static partial class GradlewFilters
 {
     // Rust CAP_LIST from src/core/truncate.rs (core::truncate::CAP_LIST).
     private const int CapList = 20;
@@ -154,7 +153,7 @@ internal static partial class GradlewFilters
         var resultLines = new List<string>();
         var inFailureBlock = false;
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             // Skip always-noise lines.
             if (TaskLineRegex().IsMatch(line) || TrySectionRegex().IsMatch(line))
@@ -249,7 +248,7 @@ internal static partial class GradlewFilters
 
         var resultLines = new List<string>();
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             if (InstrumentationStatusRegex().IsMatch(line)
                 || InstrumentationResultRegex().IsMatch(line)
@@ -302,7 +301,7 @@ internal static partial class GradlewFilters
         var resultLines = new List<string>();
         var contextRemaining = 0;
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             if (TaskLineRegex().IsMatch(line) || TrySectionRegex().IsMatch(line) || ReportLineRegex().IsMatch(line))
             {
@@ -378,7 +377,7 @@ internal static partial class GradlewFilters
         var currentDeps = new List<string>();
         var totalDeps = 0;
 
-        foreach (var line in ReadCommand.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
 

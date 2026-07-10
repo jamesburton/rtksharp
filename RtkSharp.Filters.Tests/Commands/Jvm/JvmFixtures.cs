@@ -1,6 +1,6 @@
 using System.IO.Compression;
 
-namespace RtkSharp.Tests.Commands.Jvm;
+namespace RtkSharp.Filters.Tests.Commands.Jvm;
 
 /// <summary>
 /// Loads the real-command fixture files under the repo's <c>tests/fixtures/</c> directory (the same

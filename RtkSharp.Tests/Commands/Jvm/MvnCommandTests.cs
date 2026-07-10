@@ -94,7 +94,7 @@ public sealed class MvnCommandTests
     // (used by the Test/Compile/Package buffered paths) constructs its own ProcessExecutor internally
     // with no injection point — matching CargoCommand's identical buffered-path design (see
     // CargoCommand's own remarks on RunBufferedAsync). Those paths' filter logic is exercised directly
-    // via MvnSurefireFilterTests / MvnCompileQuietFilterTests instead, mirroring how Rust's own
+    // via RtkSharp.Filters.Tests.Commands.Jvm.MvnFiltersTests instead, mirroring how Rust's own
     // #[cfg(test)] suite never drives filter_surefire/filter_compile/filter_package through a live
     // process either.
 
