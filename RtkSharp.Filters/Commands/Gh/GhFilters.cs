@@ -587,23 +587,7 @@ public static partial class GhFilters
     /// <param name="s">The string to truncate.</param>
     /// <param name="maxLen">The maximum width in Unicode scalar values.</param>
     /// <returns>The (possibly truncated) string.</returns>
-    internal static string Truncate(string s, int maxLen)
-    {
-        ArgumentNullException.ThrowIfNull(s);
-
-        var runes = s.EnumerateRunes().ToList();
-        if (runes.Count <= maxLen)
-        {
-            return s;
-        }
-
-        if (maxLen < 3)
-        {
-            return "...";
-        }
-
-        return string.Concat(runes.Take(maxLen - 3).Select(r => r.ToString())) + "...";
-    }
+    internal static string Truncate(string s, int maxLen) => Utils.Truncate(s, maxLen);
 
     // ===================== JSON accessors =====================
 
