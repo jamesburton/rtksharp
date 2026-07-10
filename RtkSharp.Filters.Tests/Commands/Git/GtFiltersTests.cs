@@ -1,47 +1,40 @@
 using System.Reflection;
 using System.Text;
-using Xunit;
+using RtkSharp.Filters.Commands.Git;
 
-namespace RtkSharp.Tests.Commands.Git;
+namespace RtkSharp.Filters.Tests.Commands.Git;
 
 /// <summary>
 /// Test-for-test port of Rust <c>src/cmds/git/gt_cmd.rs</c>'s <c>#[cfg(test)] mod tests</c>:
 /// <c>filter_gt_log_entries</c>, <c>filter_gt_submit</c>, <c>filter_gt_sync</c>,
 /// <c>filter_gt_restack</c>, <c>filter_gt_create</c>, <c>is_graph_node</c>, and
-/// <c>extract_branch_name</c>, including the token-savings assertions.
+/// <c>extract_branch_name</c>, including the token-savings assertions. Moved from
+/// <c>RtkSharp.Tests.Commands.Git.GtCommandTests</c> when the underlying methods moved from
+/// <c>RtkSharp.Commands.Git.GtCommand</c> to <see cref="GtFilters"/> (Task 4 of the filters-library
+/// extraction). <c>GtCommandTests.cs</c> contained no other tests (no dispatch/<c>RunAsync</c>
+/// coverage exists for <c>gt</c> yet), so it was deleted rather than left as an empty class.
 /// </summary>
 /// <remarks>
-/// Rust's <c>filter_gt_*</c> functions are private (<c>fn</c>, not <c>pub fn</c>) and exercised only
-/// from within <c>gt_cmd.rs</c>'s own <c>#[cfg(test)] mod tests</c>. This port mirrors that visibility
-/// with <c>internal</c> methods on <see cref="RtkSharp.Commands.Git.GtCommand"/> and reaches them via
-/// reflection, matching the same-assembly/same-module test access the Rust oracle has — rather than
-/// widening the production API's visibility just to satisfy the test project.
+/// <c>FilterGtLogEntries</c>/<c>FilterGtSubmit</c>/<c>FilterGtSync</c>/<c>FilterGtRestack</c>/
+/// <c>FilterGtCreate</c> are <c>public</c> on <see cref="GtFilters"/> (this extraction's public
+/// interface), so they're called directly. <c>IsGraphNode</c> and <c>ExtractBranchName</c> stayed
+/// <c>private</c> on <see cref="GtFilters"/> — mirroring Rust's private <c>fn</c>s and the pre-move
+/// <c>GtCommand</c> visibility — so they're still reached via reflection, matching the original
+/// test's documented rationale ("rather than widening the production API's visibility just to satisfy
+/// the test project"), just re-targeted at <c>RtkSharp.Filters.Commands.Git.GtFilters, RtkSharp.Filters</c>.
 /// </remarks>
-public sealed class GtCommandTests
+public sealed class GtFiltersTests
 {
-    private static readonly Type GtCommandType =
-        Type.GetType("RtkSharp.Commands.Git.GtCommand, RtkSharp")
-        ?? throw new InvalidOperationException("RtkSharp.Commands.Git.GtCommand type not found.");
-
-    private static string Invoke(string methodName, string input) =>
-        (string)InvokeMember(methodName, input)!;
+    private static readonly Type GtFiltersType =
+        Type.GetType("RtkSharp.Filters.Commands.Git.GtFilters, RtkSharp.Filters")
+        ?? throw new InvalidOperationException("RtkSharp.Filters.Commands.Git.GtFilters type not found.");
 
     private static object? InvokeMember(string methodName, params object[] args)
     {
-        var method = GtCommandType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException($"GtCommand.{methodName} not found.");
+        var method = GtFiltersType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
+            ?? throw new MissingMethodException($"GtFilters.{methodName} not found.");
         return method.Invoke(null, args);
     }
-
-    private static string FilterGtLogEntries(string input) => Invoke("FilterGtLogEntries", input);
-
-    private static string FilterGtSubmit(string input) => Invoke("FilterGtSubmit", input);
-
-    private static string FilterGtSync(string input) => Invoke("FilterGtSync", input);
-
-    private static string FilterGtRestack(string input) => Invoke("FilterGtRestack", input);
-
-    private static string FilterGtCreate(string input) => Invoke("FilterGtCreate", input);
 
     private static bool IsGraphNode(string line) => (bool)InvokeMember("IsGraphNode", line)!;
 
@@ -65,7 +58,7 @@ public sealed class GtCommandTests
             "│  chore: update dependencies\n" +
             "~\n";
 
-        var output = FilterGtLogEntries(input);
+        var output = GtFilters.FilterGtLogEntries(input);
 
         const string expected = "◉  abc1234 feat/add-auth 2d ago\n" +
             "│  feat(auth): add login endpoint\n" +
@@ -91,15 +84,15 @@ public sealed class GtCommandTests
 
         input.Append("~\n");
 
-        var output = FilterGtLogEntries(input.ToString());
+        var output = GtFilters.FilterGtLogEntries(input.ToString());
         Assert.Contains("... +", output, StringComparison.Ordinal);
     }
 
     [Fact]
     public void FilterGtLogEntries_Empty()
     {
-        Assert.Equal(string.Empty, FilterGtLogEntries(""));
-        Assert.Equal(string.Empty, FilterGtLogEntries("  "));
+        Assert.Equal(string.Empty, GtFilters.FilterGtLogEntries(""));
+        Assert.Equal(string.Empty, GtFilters.FilterGtLogEntries("  "));
     }
 
     [Fact]
@@ -115,7 +108,7 @@ public sealed class GtCommandTests
 
         input.Append("~\n");
 
-        var output = FilterGtLogEntries(input.ToString());
+        var output = GtFilters.FilterGtLogEntries(input.ToString());
         var inputTokens = CountTokens(input.ToString());
         var outputTokens = CountTokens(output);
         var savings = 100.0 - (outputTokens / (double)inputTokens * 100.0);
@@ -140,7 +133,7 @@ public sealed class GtCommandTests
             "│  feat(db): add migration system\n" +
             "~\n";
 
-        var output = FilterGtLogEntries(input);
+        var output = GtFilters.FilterGtLogEntries(input);
 
         Assert.Contains("abc1234", output, StringComparison.Ordinal);
         Assert.DoesNotContain("dev@example.com", output, StringComparison.Ordinal);
@@ -151,7 +144,7 @@ public sealed class GtCommandTests
     public void FilterGtLogEntries_PreStrippedInput()
     {
         const string input = "◉  abc1234 feat/x 1d ago user@test.com\n│  message\n~\n";
-        var output = FilterGtLogEntries(input);
+        var output = GtFilters.FilterGtLogEntries(input);
 
         Assert.Contains("abc1234", output, StringComparison.Ordinal);
         Assert.DoesNotContain("user@test.com", output, StringComparison.Ordinal);
@@ -167,7 +160,7 @@ public sealed class GtCommandTests
             "Pushed branch feat/add-db\n" +
             "Updated pull request #40 for feat/add-db\n";
 
-        var output = FilterGtSubmit(input);
+        var output = GtFilters.FilterGtSubmit(input);
 
         const string expected = "pushed feat/add-auth, feat/add-db\n" +
             "created PR #42 feat/add-auth\n" +
@@ -179,14 +172,14 @@ public sealed class GtCommandTests
     [Fact]
     public void FilterGtSubmit_Empty()
     {
-        Assert.Equal(string.Empty, FilterGtSubmit(""));
+        Assert.Equal(string.Empty, GtFilters.FilterGtSubmit(""));
     }
 
     [Fact]
     public void FilterGtSubmit_WithUrls()
     {
         const string input = "Created pull request #42 for feat/add-auth: https://github.com/org/repo/pull/42\n";
-        var output = FilterGtSubmit(input);
+        var output = GtFilters.FilterGtSubmit(input);
 
         Assert.Contains("PR #42", output, StringComparison.Ordinal);
         Assert.Contains("feat/add-auth", output, StringComparison.Ordinal);
@@ -227,7 +220,7 @@ public sealed class GtCommandTests
             "  Pushed branch fix/parsing to origin\n" +
             "  All branches submitted successfully!\n";
 
-        var output = FilterGtSubmit(input);
+        var output = GtFilters.FilterGtSubmit(input);
         var inputTokens = CountTokens(input);
         var outputTokens = CountTokens(output);
         var savings = 100.0 - (outputTokens / (double)inputTokens * 100.0);
@@ -244,7 +237,7 @@ public sealed class GtCommandTests
             "Deleted branch feat/merged-feature\n" +
             "Deleted branch fix/old-hotfix\n";
 
-        var output = FilterGtSync(input);
+        var output = GtFilters.FilterGtSync(input);
 
         Assert.Equal("ok sync: 1 synced, 2 deleted (feat/merged-feature, fix/old-hotfix)", output);
     }
@@ -256,7 +249,7 @@ public sealed class GtCommandTests
             "Deleted branch feat/merged-feature\n" +
             "Deleted branch fix/old-hotfix\n";
 
-        var output = FilterGtSync(input);
+        var output = GtFilters.FilterGtSync(input);
 
         Assert.Contains("ok sync", output, StringComparison.Ordinal);
         Assert.Contains("synced", output, StringComparison.Ordinal);
@@ -266,14 +259,14 @@ public sealed class GtCommandTests
     [Fact]
     public void FilterGtSync_Empty()
     {
-        Assert.Equal(string.Empty, FilterGtSync(""));
+        Assert.Equal(string.Empty, GtFilters.FilterGtSync(""));
     }
 
     [Fact]
     public void FilterGtSync_NoDeletes()
     {
         const string input = "Synced with remote\n";
-        var output = FilterGtSync(input);
+        var output = GtFilters.FilterGtSync(input);
 
         Assert.Contains("ok sync", output, StringComparison.Ordinal);
         Assert.Contains("synced", output, StringComparison.Ordinal);
@@ -295,7 +288,7 @@ public sealed class GtCommandTests
             "  Deleted branch fix/old-hotfix\n" +
             "  All branches synced!\n";
 
-        var output = FilterGtSync(input);
+        var output = GtFilters.FilterGtSync(input);
         var inputTokens = CountTokens(input);
         var outputTokens = CountTokens(output);
         var savings = 100.0 - (outputTokens / (double)inputTokens * 100.0);
@@ -312,7 +305,7 @@ public sealed class GtCommandTests
             "Restacked branch feat/add-db on feat/add-auth\n" +
             "Restacked branch fix/parsing on feat/add-db\n";
 
-        var output = FilterGtRestack(input);
+        var output = GtFilters.FilterGtRestack(input);
 
         Assert.Equal("ok restacked 3 branches", output);
     }
@@ -324,7 +317,7 @@ public sealed class GtCommandTests
             "Restacked branch feat/add-db on feat/add-auth\n" +
             "Restacked branch fix/parsing on feat/add-db\n";
 
-        var output = FilterGtRestack(input);
+        var output = GtFilters.FilterGtRestack(input);
 
         Assert.Contains("ok restacked", output, StringComparison.Ordinal);
         Assert.Contains("3 branches", output, StringComparison.Ordinal);
@@ -333,7 +326,7 @@ public sealed class GtCommandTests
     [Fact]
     public void FilterGtRestack_Empty()
     {
-        Assert.Equal(string.Empty, FilterGtRestack(""));
+        Assert.Equal(string.Empty, GtFilters.FilterGtRestack(""));
     }
 
     [Fact]
@@ -349,7 +342,7 @@ public sealed class GtCommandTests
             "  Successfully rebased fix/parsing (1 commit)\n" +
             "  All branches restacked!\n";
 
-        var output = FilterGtRestack(input);
+        var output = GtFilters.FilterGtRestack(input);
         var inputTokens = CountTokens(input);
         var outputTokens = CountTokens(output);
         var savings = 100.0 - (outputTokens / (double)inputTokens * 100.0);
@@ -363,7 +356,7 @@ public sealed class GtCommandTests
     public void FilterGtCreate_ExactFormat()
     {
         const string input = "Created branch feat/new-feature\n";
-        var output = FilterGtCreate(input);
+        var output = GtFilters.FilterGtCreate(input);
 
         Assert.Equal("ok created feat/new-feature", output);
     }
@@ -371,14 +364,14 @@ public sealed class GtCommandTests
     [Fact]
     public void FilterGtCreate_Empty()
     {
-        Assert.Equal(string.Empty, FilterGtCreate(""));
+        Assert.Equal(string.Empty, GtFilters.FilterGtCreate(""));
     }
 
     [Fact]
     public void FilterGtCreate_NoBranchName()
     {
         const string input = "Some unexpected output\n";
-        var output = FilterGtCreate(input);
+        var output = GtFilters.FilterGtCreate(input);
 
         Assert.StartsWith("ok created", output, StringComparison.Ordinal);
     }
@@ -393,7 +386,7 @@ public sealed class GtCommandTests
             "  Tracking branch set up to follow feat/add-auth\n" +
             "  Branch feat/new-feature is ready for development\n";
 
-        var output = FilterGtCreate(input);
+        var output = GtFilters.FilterGtCreate(input);
         var inputTokens = CountTokens(input);
         var outputTokens = CountTokens(output);
         var savings = 100.0 - (outputTokens / (double)inputTokens * 100.0);

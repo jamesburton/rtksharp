@@ -1,10 +1,10 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using RtkSharp.Commands.Git;
 using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Git;
 
 namespace RtkSharp.Commands.Gh;
 
@@ -513,7 +513,7 @@ public static partial class GhCommand
         // so the compacted diff is printed with a trailing newline (println!).
         return RunGhFilteredAsync(
             executor, stdout, stderr, cmdArgs,
-            raw => raw.Trim().Length == 0 ? "No diff" : GitCommand.CompactDiff(raw, 500),
+            raw => raw.Trim().Length == 0 ? "No diff" : GitFilters.CompactDiff(raw, 500),
             noTrailingNewline: false);
     }
 

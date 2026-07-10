@@ -1,10 +1,10 @@
 using System.Globalization;
 using System.Text;
-using RtkSharp.Commands.Git;
 using RtkSharp.Commands.Go;
 using RtkSharp.Commands.Js;
 using RtkSharp.Commands.Python;
 using RtkSharp.Commands.Rust;
+using RtkSharp.Filters.Commands.Git;
 using RtkSharp.Parser;
 
 namespace RtkSharp.Commands.System;
@@ -315,13 +315,13 @@ public static class PipeCommand
     }
 
     private static string GitLogWrapper(string input) =>
-        GitCommand.FilterLogOutput(input, limit: 50, userSetLimit: false, userFormat: false);
+        GitFilters.FilterLogOutput(input, limit: 50, userSetLimit: false, userFormat: false);
 
     private static string GitDiffWrapper(string input) =>
-        GitCommand.CompactDiff(input, maxLines: 200);
+        GitFilters.CompactDiff(input, maxLines: 200);
 
     private static string GitStatusWrapper(string input) =>
-        GitCommand.FormatStatusOutput(input);
+        GitFilters.FormatStatusOutput(input);
 
     /// <summary>
     /// Groups <c>file:line:content</c> lines by file, capping each file's shown matches at
