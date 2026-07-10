@@ -1,13 +1,10 @@
-using System.Globalization;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Text.RegularExpressions;
 using RtkSharp.Cli;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Js;
 using RtkSharp.Parser;
+using FormattedTestOutput = RtkSharp.Filters.Commands.Js.VitestFilters.FormattedTestOutput;
 
 namespace RtkSharp.Commands.Js;
 
@@ -64,7 +61,7 @@ public enum TestFramework
 /// exactly via a direct <see cref="TimedExecution"/> call in <see cref="RunTestAsync"/>.
 /// </para>
 /// <para>
-/// <b>Shared JSON schema.</b> <see cref="VitestParser"/>'s tier-1 JSON shape
+/// <b>Shared JSON schema.</b> <see cref="RtkSharp.Filters.Commands.Js.VitestFilters.VitestParser"/>'s tier-1 JSON shape
 /// (<c>numTotalTests</c>/<c>numPassedTests</c>/<c>numFailedTests</c>/<c>numPendingTests</c>/
 /// <c>testResults[].assertionResults[]</c>) is used identically by both vitest's <c>--reporter=json</c>
 /// output and jest's <c>--json</c> output — this is the structural fact that justifies one shared
@@ -72,7 +69,7 @@ public enum TestFramework
 /// (<c>vitest_cmd.rs</c>:17-30) which carries no framework-specific fields.
 /// </para>
 /// </remarks>
-public static partial class VitestCommand
+public static class VitestCommand
 {
     /// <summary>
     /// Documents (via its name, referenced from <see cref="VitestCommand"/>'s class remarks) the
@@ -289,39 +286,17 @@ public static partial class VitestCommand
     // -----------------------------------------------------------------------
 
     /// <summary>
-    /// The result of formatting a test run's output, tracking whether it was truncated (which
-    /// determines which tee-hint variant <see cref="RenderTestOutputWithHints"/> uses). Faithful port
-    /// of Rust's private <c>FormattedTestOutput</c> struct (<c>vitest_cmd.rs</c>:282-301).
-    /// </summary>
-    internal sealed class FormattedTestOutput
-    {
-        private FormattedTestOutput(string text, bool isTruncated)
-        {
-            Text = text;
-            IsTruncated = isTruncated;
-        }
-
-        /// <summary>The formatted (or raw passthrough) text.</summary>
-        public string Text { get; }
-
-        /// <summary>Whether the underlying raw output was truncated to build <see cref="Text"/>.</summary>
-        public bool IsTruncated { get; }
-
-        /// <summary>Constructs an untruncated result.</summary>
-        public static FormattedTestOutput New(string text) => new(text, isTruncated: false);
-
-        /// <summary>Constructs a truncated result.</summary>
-        public static FormattedTestOutput AsTruncated(string text) => new(text, isTruncated: true);
-    }
-
-    /// <summary>
     /// Formats a test run's raw output: the passthrough escape hatch (vitest only) bypasses the parser
-    /// entirely; otherwise runs the shared 3-tier <see cref="VitestParser"/> and renders via
-    /// <see cref="TestResult.Format(FormatMode)"/>. Faithful port of <c>format_test_output</c>
-    /// (<c>vitest_cmd.rs</c>:333-364).
+    /// entirely; otherwise runs the shared 3-tier <see cref="VitestFilters.VitestParser"/> and renders
+    /// via <see cref="TestResult.Format(FormatMode)"/>. Faithful port of <c>format_test_output</c>
+    /// (<c>vitest_cmd.rs</c>:333-364). <c>LogFullAndFormat</c>/<c>LogDegradedAndFormat</c> below keep
+    /// their verbosity-gated <c>Console.Error.Write</c>/<c>EmitDegradationWarning</c> diagnostic calls
+    /// and delegate the actual formatting to <see cref="VitestFilters.FormatVitestSummary"/> (moved to
+    /// <c>RtkSharp.Filters</c> in Task 7 of the filters-library extraction — pure text formatting, no
+    /// Console I/O).
     /// </summary>
     /// <param name="framework">The framework name (<c>"vitest"</c> or <c>"jest"</c>), used in diagnostics.</param>
-    /// <param name="stdout">The child process's captured stdout (parsed by <see cref="VitestParser"/>).</param>
+    /// <param name="stdout">The child process's captured stdout (parsed by <see cref="VitestFilters.VitestParser"/>).</param>
     /// <param name="combined">The combined stdout+stderr (used for passthrough rendering).</param>
     /// <param name="passthroughRequested">Whether the vitest-only reporter-passthrough escape hatch is active.</param>
     /// <param name="verbose">The verbosity level; a nonzero value logs tier diagnostics to stderr.</param>
@@ -338,7 +313,7 @@ public static partial class VitestCommand
             return FormatPassthroughOutput(combined);
         }
 
-        var parseResult = new VitestParser().Parse(stdout);
+        var parseResult = new VitestFilters.VitestParser().Parse(stdout);
         var mode = FormatModeExtensions.FromVerbosity((byte)Math.Clamp(verbose, 0, byte.MaxValue));
 
         return parseResult switch
@@ -357,7 +332,7 @@ public static partial class VitestCommand
             Console.Error.Write($"{framework} run (Tier 1: Full JSON parse)\n");
         }
 
-        return FormattedTestOutput.New(((ITokenFormatter)data).Format(mode));
+        return VitestFilters.FormatVitestSummary(data, mode);
     }
 
     private static FormattedTestOutput LogDegradedAndFormat(string framework, int verbose, TestResult data, IReadOnlyList<string> warnings, FormatMode mode)
@@ -367,7 +342,7 @@ public static partial class VitestCommand
             OutputParserSupport.EmitDegradationWarning(framework, string.Join(", ", warnings));
         }
 
-        return FormattedTestOutput.New(((ITokenFormatter)data).Format(mode));
+        return VitestFilters.FormatVitestSummary(data, mode);
     }
 
     private static FormattedTestOutput PassthroughFallback(string framework, string stdout)
@@ -378,33 +353,24 @@ public static partial class VitestCommand
 
     /// <summary>
     /// Truncates raw output for passthrough rendering using the configured passthrough character
-    /// limit. Faithful port of <c>format_passthrough_output</c> (<c>vitest_cmd.rs</c>:366-369).
+    /// limit. Delegates to <see cref="VitestFilters.FormatPassthroughOutput"/> (moved to
+    /// <c>RtkSharp.Filters</c> in Task 7 of the filters-library extraction, which uses a hardcoded
+    /// default rather than reading <c>Config</c> — see that method's remarks).
     /// </summary>
     /// <param name="raw">The raw output to (possibly) truncate.</param>
     /// <returns>The formatted result.</returns>
-    internal static FormattedTestOutput FormatPassthroughOutput(string raw)
-    {
-        var maxChars = Config.LoadOrDefault().Limits.PassthroughMaxChars;
-        return FormatPassthroughOutputWithLimit(raw, maxChars);
-    }
+    internal static FormattedTestOutput FormatPassthroughOutput(string raw) => VitestFilters.FormatPassthroughOutput(raw);
 
     /// <summary>
     /// Truncates <paramref name="raw"/> to at most <paramref name="maxChars"/> Unicode scalar values,
-    /// marking the result truncated if it exceeded the limit. Faithful port of
-    /// <c>format_passthrough_output_with_limit</c> (<c>vitest_cmd.rs</c>:371-379).
+    /// marking the result truncated if it exceeded the limit. Delegates to
+    /// <see cref="VitestFilters.FormatPassthroughOutputWithLimit"/>.
     /// </summary>
     /// <param name="raw">The raw output to (possibly) truncate.</param>
     /// <param name="maxChars">The maximum number of Unicode scalar values to keep.</param>
     /// <returns>The formatted result.</returns>
-    internal static FormattedTestOutput FormatPassthroughOutputWithLimit(string raw, int maxChars)
-    {
-        ArgumentNullException.ThrowIfNull(raw);
-
-        var text = OutputParserSupport.TruncateOutput(raw, maxChars);
-        var rawCharCount = raw.EnumerateRunes().Count();
-
-        return rawCharCount > maxChars ? FormattedTestOutput.AsTruncated(text) : FormattedTestOutput.New(text);
-    }
+    internal static FormattedTestOutput FormatPassthroughOutputWithLimit(string raw, int maxChars) =>
+        VitestFilters.FormatPassthroughOutputWithLimit(raw, maxChars);
 
     // -----------------------------------------------------------------------
     // render_test_output(_with_hints) (vitest_cmd.rs:381-419)
@@ -414,7 +380,7 @@ public static partial class VitestCommand
     /// Renders the final printed output: appends a tee recovery hint when applicable. Faithful port of
     /// <c>render_test_output</c> (<c>vitest_cmd.rs</c>:381-395), wiring the real
     /// <see cref="Tee.ForceTeeHint(string, string, TeeConfig?)"/>/<see cref="Tee.TeeAndHint(string, string, int, TeeConfig?)"/>
-    /// helpers into <see cref="RenderTestOutputWithHints"/>.
+    /// helpers into <see cref="VitestFilters.RenderTestOutputWithHints"/>.
     /// </summary>
     /// <param name="filtered">The formatted (or passthrough) output.</param>
     /// <param name="raw">The raw combined output, used for teeing.</param>
@@ -422,7 +388,7 @@ public static partial class VitestCommand
     /// <param name="exitCode">The child process's exit code.</param>
     /// <returns>The final text to print.</returns>
     internal static string RenderTestOutput(FormattedTestOutput filtered, string raw, string teeLabel, int exitCode) =>
-        RenderTestOutputWithHints(
+        VitestFilters.RenderTestOutputWithHints(
             filtered,
             raw,
             teeLabel,
@@ -430,293 +396,4 @@ public static partial class VitestCommand
             static (r, label) => Tee.ForceTeeHint(r, label),
             static (r, label, code) => Tee.TeeAndHint(r, label, code));
 
-    /// <summary>
-    /// Testable core of <see cref="RenderTestOutput"/>: the two tee-hint strategies are injected so
-    /// truncated-vs-non-truncated hint selection can be verified deterministically without touching
-    /// disk. Faithful port of <c>render_test_output_with_hints</c> (<c>vitest_cmd.rs</c>:397-419).
-    /// </summary>
-    /// <param name="filtered">The formatted (or passthrough) output.</param>
-    /// <param name="raw">The raw combined output, used for teeing.</param>
-    /// <param name="teeLabel">The tee file slug.</param>
-    /// <param name="exitCode">The child process's exit code.</param>
-    /// <param name="forceHint">Hint strategy used when <see cref="FormattedTestOutput.IsTruncated"/> is true.</param>
-    /// <param name="teeHint">Hint strategy used when <see cref="FormattedTestOutput.IsTruncated"/> is false.</param>
-    /// <returns>The final text to print.</returns>
-    internal static string RenderTestOutputWithHints(
-        FormattedTestOutput filtered,
-        string raw,
-        string teeLabel,
-        int exitCode,
-        Func<string, string, string?> forceHint,
-        Func<string, string, int, string?> teeHint)
-    {
-        ArgumentNullException.ThrowIfNull(filtered);
-
-        var hint = filtered.IsTruncated ? forceHint(raw, teeLabel) : teeHint(raw, teeLabel, exitCode);
-        return hint is not null ? $"{filtered.Text}\n{hint}" : filtered.Text;
-    }
-
-    // -----------------------------------------------------------------------
-    // VitestParser (vitest_cmd.rs:17-115) - the shared jest+vitest JSON schema
-    // -----------------------------------------------------------------------
-
-    /// <summary>
-    /// The jest-JSON-reporter-compatible schema shared by BOTH vitest's <c>--reporter=json</c> output
-    /// and jest's <c>--json</c> output. Faithful port of <c>VitestJsonOutput</c>
-    /// (<c>vitest_cmd.rs</c>:17-30) - no framework-specific fields, confirming the two tools'
-    /// structural compatibility.
-    /// </summary>
-    private sealed class VitestJsonOutput
-    {
-        [JsonPropertyName("testResults")]
-        public List<VitestTestFile> TestResults { get; set; } = [];
-
-        [JsonPropertyName("numTotalTests")]
-        public int NumTotalTests { get; set; }
-
-        [JsonPropertyName("numPassedTests")]
-        public int NumPassedTests { get; set; }
-
-        [JsonPropertyName("numFailedTests")]
-        public int NumFailedTests { get; set; }
-
-        [JsonPropertyName("numPendingTests")]
-        public int NumPendingTests { get; set; }
-    }
-
-    /// <summary>Faithful port of <c>VitestTestFile</c> (<c>vitest_cmd.rs</c>:32-37).</summary>
-    private sealed class VitestTestFile
-    {
-        [JsonPropertyName("name")]
-        public required string Name { get; set; }
-
-        [JsonPropertyName("assertionResults")]
-        public List<VitestTest> AssertionResults { get; set; } = [];
-    }
-
-    /// <summary>Faithful port of <c>VitestTest</c> (<c>vitest_cmd.rs</c>:39-46).</summary>
-    private sealed class VitestTest
-    {
-        [JsonPropertyName("fullName")]
-        public required string FullName { get; set; }
-
-        [JsonPropertyName("status")]
-        public required string Status { get; set; }
-
-        [JsonPropertyName("failureMessages")]
-        public List<string> FailureMessages { get; set; } = [];
-    }
-
-    /// <summary>
-    /// The shared 3-tier <see cref="OutputParser{T}"/> for BOTH <c>rtk vitest</c> and <c>rtk jest</c>.
-    /// Faithful port of <c>VitestParser</c>/<c>impl OutputParser for VitestParser</c>
-    /// (<c>vitest_cmd.rs</c>:48-94): tier 1 parses the shared JSON schema (falling back through
-    /// <see cref="JsonExtraction.ExtractJsonObject"/> to strip pnpm/dotenv banner prefixes); tier 2
-    /// regex-parses <c>Tests</c>/<c>Duration</c> summary lines plus <c>[x]</c>/<c>FAIL</c> failure
-    /// blocks; tier 3 falls back to truncated passthrough via the base class.
-    /// </summary>
-    internal sealed partial class VitestParser : OutputParser<TestResult>
-    {
-        /// <summary>
-        /// Matches the <c>Tests</c> summary line (e.g. <c>Tests  2 failed | 13 passed (15)</c>).
-        /// Faithful port of <c>TESTS_RE</c> (<c>vitest_cmd.rs</c>:123-125).
-        /// </summary>
-        [GeneratedRegex(@"Tests\s+(?:(\d+)\s+failed\s+\|\s+)?(\d+)\s+passed")]
-        private static partial Regex TestsRegex();
-
-        /// <summary>
-        /// Matches the <c>Duration</c> summary line (e.g. <c>Duration  450ms</c>). Faithful port of
-        /// <c>DURATION_RE</c> (<c>vitest_cmd.rs</c>:126-128).
-        /// </summary>
-        [GeneratedRegex(@"Duration\s+([\d.]+)(ms|s)")]
-        private static partial Regex DurationRegex();
-
-        // Note: Rust also defines a `TEST_FILES_RE` (`Test Files\s+...`, vitest_cmd.rs:120-122)
-        // alongside TESTS_RE/DURATION_RE, but never actually uses it anywhere in
-        // `extract_stats_regex` - it is dead code in the Rust source itself. Faithfully NOT ported
-        // here: an unused `[GeneratedRegex]` would trip analyzer warnings for behavior that has no
-        // observable effect in either implementation.
-
-        /// <inheritdoc/>
-        protected override TestResult? TryFull(string input)
-        {
-            var json = TryDeserialize(input);
-
-            if (json is null)
-            {
-                var extracted = JsonExtraction.ExtractJsonObject(input);
-                if (extracted is not null)
-                {
-                    json = TryDeserialize(extracted);
-                }
-            }
-
-            if (json is null)
-            {
-                return null;
-            }
-
-            return new TestResult
-            {
-                Total = json.NumTotalTests,
-                Passed = json.NumPassedTests,
-                Failed = json.NumFailedTests,
-                Skipped = json.NumPendingTests,
-                DurationMs = null,
-                Failures = ExtractFailuresFromJson(json),
-            };
-        }
-
-        /// <inheritdoc/>
-        protected override (TestResult Data, IReadOnlyList<string> Warnings)? TryDegraded(string input)
-        {
-            var result = ExtractStatsRegex(input);
-            return result is null ? null : (result, new[] { "JSON parse failed" });
-        }
-
-        private static VitestJsonOutput? TryDeserialize(string input)
-        {
-            try
-            {
-                return JsonSerializer.Deserialize(input, VitestJsonContext.Default.VitestJsonOutput);
-            }
-            catch (JsonException)
-            {
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Extracts failures from the parsed JSON structure. Faithful port of
-        /// <c>extract_failures_from_json</c> (<c>vitest_cmd.rs</c>:96-115).
-        /// </summary>
-        private static List<TestFailure> ExtractFailuresFromJson(VitestJsonOutput json)
-        {
-            var failures = new List<TestFailure>();
-
-            foreach (var file in json.TestResults)
-            {
-                foreach (var test in file.AssertionResults)
-                {
-                    if (test.Status == "failed")
-                    {
-                        failures.Add(new TestFailure
-                        {
-                            TestName = test.FullName,
-                            FilePath = file.Name,
-                            ErrorMessage = string.Join('\n', test.FailureMessages),
-                            StackTrace = null,
-                        });
-                    }
-                }
-            }
-
-            return failures;
-        }
-
-        /// <summary>
-        /// Tier 2: extracts test statistics using regex (degraded mode). Faithful port of
-        /// <c>extract_stats_regex</c> (<c>vitest_cmd.rs</c>:117-172).
-        /// </summary>
-        private static TestResult? ExtractStatsRegex(string output)
-        {
-            var cleanOutput = Utils.StripAnsi(output);
-
-            var passed = 0;
-            var failed = 0;
-
-            var testsMatch = TestsRegex().Match(cleanOutput);
-            if (testsMatch.Success)
-            {
-                if (testsMatch.Groups[1].Success)
-                {
-                    failed = int.TryParse(testsMatch.Groups[1].Value, out var f) ? f : 0;
-                }
-
-                if (testsMatch.Groups[2].Success)
-                {
-                    passed = int.TryParse(testsMatch.Groups[2].Value, out var p) ? p : 0;
-                }
-            }
-
-            var total = passed + failed;
-
-            long? durationMs = null;
-            var durationMatch = DurationRegex().Match(cleanOutput);
-            if (durationMatch.Success
-                && double.TryParse(durationMatch.Groups[1].Value, CultureInfo.InvariantCulture, out var value))
-            {
-                var unit = durationMatch.Groups[2].Value;
-                durationMs = unit == "ms" ? (long)value : (long)(value * 1000.0);
-            }
-
-            if (total <= 0)
-            {
-                return null;
-            }
-
-            return new TestResult
-            {
-                Total = total,
-                Passed = passed,
-                Failed = failed,
-                Skipped = 0,
-                DurationMs = durationMs,
-                Failures = ExtractFailuresRegex(cleanOutput),
-            };
-        }
-
-        /// <summary>
-        /// Extracts failures using regex: any line containing <c>[x]</c> or <c>FAIL</c>, plus its
-        /// subsequent 2-space-indented continuation lines. Faithful port of
-        /// <c>extract_failures_regex</c> (<c>vitest_cmd.rs</c>:174-206).
-        /// </summary>
-        private static List<TestFailure> ExtractFailuresRegex(string output)
-        {
-            var failures = new List<TestFailure>();
-            var lines = ReadCommand.SplitLines(output);
-            var i = 0;
-
-            while (i < lines.Count)
-            {
-                var line = lines[i];
-
-                if (line.Contains("[x]", StringComparison.Ordinal) || line.Contains("FAIL", StringComparison.Ordinal))
-                {
-                    var errorLines = new List<string> { line };
-                    i++;
-
-                    while (i < lines.Count && lines[i].StartsWith("  ", StringComparison.Ordinal))
-                    {
-                        errorLines.Add(lines[i].Trim());
-                        i++;
-                    }
-
-                    failures.Add(new TestFailure
-                    {
-                        TestName = errorLines[0],
-                        FilePath = string.Empty,
-                        ErrorMessage = string.Join('\n', errorLines.Skip(1)),
-                        StackTrace = null,
-                    });
-                }
-                else
-                {
-                    i++;
-                }
-            }
-
-            return failures;
-        }
-    }
-
-    /// <summary>
-    /// Source-generated JSON metadata for the shared vitest/jest JSON schema, required because
-    /// <c>RtkSharp.csproj</c> publishes with <c>PublishAot=true</c> - reflection-based
-    /// <see cref="JsonSerializer"/> overloads are unavailable/unsafe under trimming, matching the
-    /// convention <c>PnpmCommand.PnpmJsonContext</c> established.
-    /// </summary>
-    [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = false)]
-    [JsonSerializable(typeof(VitestJsonOutput))]
-    private sealed partial class VitestJsonContext : JsonSerializerContext;
 }

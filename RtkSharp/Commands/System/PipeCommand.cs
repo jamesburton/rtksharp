@@ -5,6 +5,7 @@ using RtkSharp.Commands.Js;
 using RtkSharp.Commands.Python;
 using RtkSharp.Commands.Rust;
 using RtkSharp.Filters.Commands.Git;
+using RtkSharp.Filters.Commands.Js;
 using RtkSharp.Parser;
 
 namespace RtkSharp.Commands.System;
@@ -26,7 +27,7 @@ namespace RtkSharp.Commands.System;
 /// <c>go-test</c>/<c>go-build</c> → <see cref="GoFilters.FilterGoTestJson"/>/
 /// <see cref="GoFilters.FilterGoBuild"/>, <c>tsc</c> → <see cref="TscCommand.FilterTscOutput"/>,
 /// <c>vitest</c> → <see cref="VitestWrapper"/> (mirrors Rust's own <c>vitest_wrapper</c>: parses
-/// via the shared <see cref="VitestCommand.VitestParser"/> then always formats
+/// via the shared <see cref="VitestFilters.VitestParser"/> then always formats
 /// <see cref="FormatMode.Compact"/>, regardless of the process's own verbosity — pipe has no
 /// verbosity concept of its own), <c>prettier</c> → <see cref="PrettierCommand.FilterPrettierOutput"/>,
 /// and <c>log</c> → <see cref="LogCommand.AnalyzeLogs"/> (Rust's <c>run_stdin_str</c> equivalent).
@@ -294,7 +295,7 @@ public static class PipeCommand
 
     /// <summary>
     /// Faithful port of <c>vitest_wrapper</c> (<c>pipe_cmd.rs</c>:48-56): parses via the shared
-    /// <see cref="VitestCommand.VitestParser"/> and always renders
+    /// <see cref="VitestFilters.VitestParser"/> and always renders
     /// <see cref="FormatMode.Compact"/>, regardless of any process-level verbosity (unlike
     /// <c>rtk vitest</c> itself, which scales its format mode with <c>--verbose</c>) — <c>rtk pipe</c>
     /// has no verbosity concept of its own, matching Rust's hardcoded <c>FormatMode::Compact</c> here.
@@ -303,7 +304,7 @@ public static class PipeCommand
     /// <returns>The compact-formatted test summary, or the raw input on a Passthrough-tier parse.</returns>
     private static string VitestWrapper(string input)
     {
-        var parser = new VitestCommand.VitestParser();
+        var parser = new VitestFilters.VitestParser();
         var result = parser.Parse(input);
         return result switch
         {

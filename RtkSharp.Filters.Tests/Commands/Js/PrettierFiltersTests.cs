@@ -1,21 +1,19 @@
 using System;
 using System.Text;
-using RtkSharp.Commands.Js;
+using RtkSharp.Filters.Commands.Js;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Js;
+namespace RtkSharp.Filters.Tests.Commands.Js;
 
 /// <summary>
-/// Tests for <see cref="PrettierCommand"/>, ported directly from Rust's own <c>#[cfg(test)]</c> module
-/// in <c>prettier_cmd.rs</c> (<c>test_filter_all_formatted</c>, <c>test_filter_files_need_formatting</c>,
+/// Tests for <see cref="PrettierFilters"/>, moved from
+/// <c>RtkSharp.Tests.Commands.Js.PrettierCommandTests</c> (Task 7 of the filters-library extraction) —
+/// ported directly from Rust's own <c>#[cfg(test)]</c> module in <c>prettier_cmd.rs</c>
+/// (<c>test_filter_all_formatted</c>, <c>test_filter_files_need_formatting</c>,
 /// <c>test_filter_many_files</c>, <c>test_filter_empty_output</c>,
-/// <c>test_filter_whitespace_only_output</c>). <c>ExecuteAsync</c>/<c>RunPrettierSafeAsync</c> are not
-/// exercised end-to-end: they construct their own process invocation via
-/// <see cref="RtkSharp.Execution.CommandRunner"/> with no injection seam, so invoking them would risk
-/// spawning a real Prettier process as a side effect of the test suite (same convention
-/// <c>TscCommandTests</c>/<c>NextCommandTests</c> follow for their own <c>CommandRunner</c>-based route).
+/// <c>test_filter_whitespace_only_output</c>).
 /// </summary>
-public sealed class PrettierCommandTests
+public sealed class PrettierFiltersTests
 {
     // -----------------------------------------------------------------------
     // FilterPrettierOutput - ports prettier_cmd.rs's test_filter_all_formatted
@@ -26,7 +24,7 @@ public sealed class PrettierCommandTests
     {
         var output = "\nChecking formatting...\nAll matched files use Prettier code style!\n        ";
 
-        var result = PrettierCommand.FilterPrettierOutput(output);
+        var result = PrettierFilters.FilterPrettierOutput(output);
 
         Assert.Contains("Prettier", result, StringComparison.Ordinal);
         Assert.Contains("All files formatted correctly", result, StringComparison.Ordinal);
@@ -46,7 +44,7 @@ public sealed class PrettierCommandTests
             "src/pages/dashboard.tsx\n" +
             "Code style issues found in the above file(s). Forgot to run Prettier?\n        ";
 
-        var result = PrettierCommand.FilterPrettierOutput(output);
+        var result = PrettierFilters.FilterPrettierOutput(output);
 
         Assert.Contains("3 files need formatting", result, StringComparison.Ordinal);
         Assert.Contains("button.tsx", result, StringComparison.Ordinal);
@@ -66,7 +64,7 @@ public sealed class PrettierCommandTests
             sb.Append($"src/file{i}.ts\n");
         }
 
-        var result = PrettierCommand.FilterPrettierOutput(sb.ToString());
+        var result = PrettierFilters.FilterPrettierOutput(sb.ToString());
 
         Assert.Contains("15 files need formatting", result, StringComparison.Ordinal);
         Assert.Contains("... +5 more files", result, StringComparison.Ordinal);
@@ -81,7 +79,7 @@ public sealed class PrettierCommandTests
     [Fact]
     public void FilterPrettierOutput_EmptyOutput_ReturnsErrorNotAllFormatted()
     {
-        var result = PrettierCommand.FilterPrettierOutput("");
+        var result = PrettierFilters.FilterPrettierOutput("");
 
         Assert.Contains("Error", result, StringComparison.Ordinal);
         Assert.DoesNotContain("All files formatted", result, StringComparison.Ordinal);
@@ -94,7 +92,7 @@ public sealed class PrettierCommandTests
     [Fact]
     public void FilterPrettierOutput_WhitespaceOnlyOutput_ReturnsErrorNotAllFormatted()
     {
-        var result = PrettierCommand.FilterPrettierOutput("   \n\n  ");
+        var result = PrettierFilters.FilterPrettierOutput("   \n\n  ");
 
         Assert.Contains("Error", result, StringComparison.Ordinal);
         Assert.DoesNotContain("All files formatted", result, StringComparison.Ordinal);

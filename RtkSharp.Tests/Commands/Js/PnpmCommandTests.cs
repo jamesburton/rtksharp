@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -7,7 +6,6 @@ using System.Threading.Tasks;
 using RtkSharp.Commands.Js;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
-using RtkSharp.Parser;
 using Xunit;
 
 namespace RtkSharp.Tests.Commands.Js;
@@ -23,151 +21,10 @@ namespace RtkSharp.Tests.Commands.Js;
 public sealed class PnpmCommandTests
 {
     // -----------------------------------------------------------------------
-    // PnpmListParser - ports pnpm_cmd.rs's test_pnpm_list_parser_json
+    // PnpmListParser/PnpmOutdatedParser/FormatDependencyListing now live in
+    // RtkSharp.Filters.Commands.Js.PnpmFilters (Task 7 of the filters-library extraction) - see
+    // PnpmFiltersTests in RtkSharp.Filters.Tests.
     // -----------------------------------------------------------------------
-
-    [Fact]
-    public void PnpmListParser_JsonTier1_ParsesDependencyTree()
-    {
-        const string json = /*lang=json,strict*/ """
-        [
-            {
-                "name": "my-project",
-                "version": "1.0.0",
-                "dependencies": {
-                    "express": { "version": "4.18.2" }
-                }
-            }
-        ]
-        """;
-
-        var result = new PnpmCommand.PnpmListParser().Parse(json);
-
-        Assert.Equal(1, result.Tier);
-        Assert.True(result.IsOk);
-        var data = result.Unwrap();
-        Assert.True(data.TotalPackages >= 2, "expected the workspace root plus its 'express' dependency");
-    }
-
-    [Fact]
-    public void PnpmListParser_MalformedJson_FallsBackToTextExtraction_TracksDevSection()
-    {
-        // Mirrors pnpm_cmd.rs's test_extract_list_text_tracks_dev_section, but exercised through the
-        // full tier system (Rust's own test calls extract_list_text directly).
-        const string input = "dependencies:\nreact@18.0.0\ndevDependencies:\neslint@8.0.0\n";
-
-        var result = new PnpmCommand.PnpmListParser().Parse("not valid json at all");
-        Assert.Equal(3, result.Tier); // "not valid json..." has no '@'-delimited tokens -> passthrough
-
-        var degraded = new PnpmCommand.PnpmListParser().Parse(input);
-        Assert.Equal(2, degraded.Tier);
-        var data = degraded.Unwrap();
-        var react = data.Dependencies.Single(d => d.Name == "react");
-        var eslint = data.Dependencies.Single(d => d.Name == "eslint");
-        Assert.False(react.DevDependency, "react should be prod");
-        Assert.True(eslint.DevDependency, "eslint should be dev");
-    }
-
-    // -----------------------------------------------------------------------
-    // PnpmOutdatedParser - ports pnpm_cmd.rs's test_pnpm_outdated_parser_json
-    // -----------------------------------------------------------------------
-
-    [Fact]
-    public void PnpmOutdatedParser_JsonTier1_ParsesOutdatedCount()
-    {
-        const string json = /*lang=json,strict*/ """
-        {
-            "express": {
-                "current": "4.18.2",
-                "latest": "4.19.0",
-                "wanted": "4.18.2"
-            }
-        }
-        """;
-
-        var result = new PnpmCommand.PnpmOutdatedParser().Parse(json);
-
-        Assert.Equal(1, result.Tier);
-        Assert.True(result.IsOk);
-        var data = result.Unwrap();
-        Assert.Equal(1, data.OutdatedCount);
-        Assert.Equal("express", data.Dependencies[0].Name);
-    }
-
-    [Fact]
-    public void PnpmOutdatedParser_TextTableFallback_ParsesColumns()
-    {
-        var input = "Package  Current  Wanted  Latest\nexpress  4.18.2   4.18.2  4.19.0\n";
-
-        var result = new PnpmCommand.PnpmOutdatedParser().Parse(input);
-
-        Assert.Equal(2, result.Tier);
-        var data = result.Unwrap();
-        var express = data.Dependencies.Single(d => d.Name == "express");
-        Assert.Equal("4.18.2", express.CurrentVersion);
-        Assert.Equal("4.19.0", express.LatestVersion);
-        Assert.Equal(1, data.OutdatedCount);
-    }
-
-    // -----------------------------------------------------------------------
-    // FormatDependencyListing - ports test_format_listing_* (pnpm_cmd.rs)
-    // -----------------------------------------------------------------------
-
-    private static DependencyState MakeState(IEnumerable<string> prod, IEnumerable<string> dev)
-    {
-        var deps = new List<Dependency>();
-        deps.AddRange(prod.Select(name => new Dependency { Name = name, CurrentVersion = "1.0.0", DevDependency = false }));
-        deps.AddRange(dev.Select(name => new Dependency { Name = name, CurrentVersion = "1.0.0", DevDependency = true }));
-        return new DependencyState { TotalPackages = deps.Count, OutdatedCount = 0, Dependencies = deps };
-    }
-
-    [Fact]
-    public void FormatDependencyListing_GroupsIntoProdAndDevSections()
-    {
-        var state = MakeState(["react", "typescript"], ["eslint", "vitest"]);
-        var output = PnpmCommand.FormatDependencyListing(state, cap: true);
-
-        Assert.Contains("[prod]", output, StringComparison.Ordinal);
-        Assert.Contains("[dev]", output, StringComparison.Ordinal);
-        Assert.Contains("react", output, StringComparison.Ordinal);
-        Assert.Contains("eslint", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("(dev)", output, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FormatDependencyListing_Capped_ShowsTruncationHintWithOffset()
-    {
-        var prod = Enumerable.Repeat("pkg", 60);
-        var state = MakeState(prod, ["eslint"]);
-
-        var output = PnpmCommand.FormatDependencyListing(state, cap: true);
-
-        Assert.Contains($"… +{60 - PnpmCommand.MaxListing} more", output, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FormatDependencyListing_Uncapped_ProdOnly_NeverTruncates()
-    {
-        var prod = Enumerable.Repeat("pkg", 60);
-        var state = MakeState(prod, []);
-
-        var output = PnpmCommand.FormatDependencyListing(state, cap: false);
-
-        Assert.DoesNotContain("… +", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("[dev]", output, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FormatDependencyListing_Uncapped_DevOnly_NeverTruncates()
-    {
-        var dev = Enumerable.Repeat("pkg", 60);
-        var state = MakeState([], dev);
-
-        var output = PnpmCommand.FormatDependencyListing(state, cap: false);
-
-        Assert.DoesNotContain("… +", output, StringComparison.Ordinal);
-        Assert.DoesNotContain("[prod]", output, StringComparison.Ordinal);
-    }
 
     // -----------------------------------------------------------------------
     // Cap-only-when-unfiltered: `pnpm list` (capped) vs `pnpm list --prod` (uncapped) end to end.
@@ -297,58 +154,9 @@ public sealed class PnpmCommandTests
     }
 
     // -----------------------------------------------------------------------
-    // FilterPnpmInstall - ports the line-classification behavior of filter_pnpm_install
+    // FilterPnpmInstall now lives in RtkSharp.Filters.Commands.Js.PnpmFilters (Task 7 of the
+    // filters-library extraction) - see PnpmFiltersTests in RtkSharp.Filters.Tests.
     // -----------------------------------------------------------------------
-
-    [Fact]
-    public void FilterPnpmInstall_StripsProgressBarsAndPostProgressBlankLines()
-    {
-        var output = "Progress: resolved 10, reused 5\n│ 50%\n\nSome dep line\ndependencies: +5\n";
-
-        var result = PnpmCommand.FilterPnpmInstall(output);
-
-        Assert.DoesNotContain("Progress", result, StringComparison.Ordinal);
-        Assert.DoesNotContain('│', result);
-    }
-
-    [Fact]
-    public void FilterPnpmInstall_KeepsErrorLines()
-    {
-        var output = "Progress: 10%\nERR_PNPM_FETCH_404 fetch failed\nsome other error occurred here\n";
-
-        var result = PnpmCommand.FilterPnpmInstall(output);
-
-        Assert.Contains("ERR_PNPM_FETCH_404", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FilterPnpmInstall_KeepsSummaryLines()
-    {
-        var output = "Progress: 100%\n+ 5 packages in 2.3s\n dependencies:\n";
-
-        var result = PnpmCommand.FilterPnpmInstall(output);
-
-        Assert.Contains("packages in", result, StringComparison.Ordinal);
-        Assert.Contains("dependencies:", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FilterPnpmInstall_PlusMinusPrefixedLines_Kept()
-    {
-        var output = "+ added-package 1.0.0\n- removed-package 2.0.0\nirrelevant noise line here\n";
-
-        var result = PnpmCommand.FilterPnpmInstall(output);
-
-        Assert.Contains("+ added-package 1.0.0", result, StringComparison.Ordinal);
-        Assert.Contains("- removed-package 2.0.0", result, StringComparison.Ordinal);
-        Assert.DoesNotContain("irrelevant noise line here", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FilterPnpmInstall_EverythingFiltered_ReturnsLiteralOk()
-    {
-        Assert.Equal("ok", PnpmCommand.FilterPnpmInstall("Progress: 10%\n│ spinner\n\n"));
-    }
 
     [Fact]
     public async Task RunInstallAsync_NonZeroExit_EchoesStderrAndReturnsExitCode_NoFiltering()
