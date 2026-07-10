@@ -89,6 +89,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\RtkSharp.Filters\RtkSharp.Filters.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
       Embeds the exact bytes of the Rust oracle's `include_str!("../../hooks/claude/rtk-awareness.md")`
       source file (src/hooks/init.rs RTK_SLIM constant). Loaded verbatim (no line-ending

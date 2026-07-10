@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="RtkSharp.Filters.Tests/RtkSharp.Filters.Tests.csproj" />
+  <Project Path="RtkSharp.Filters/RtkSharp.Filters.csproj" />
   <Project Path="RtkSharp.ParityTests/RtkSharp.ParityTests.csproj" />
   <Project Path="RtkSharp.Tests/RtkSharp.Tests.csproj" />
   <Project Path="RtkSharp/RtkSharp.csproj" />
