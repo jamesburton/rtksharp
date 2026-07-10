@@ -3,7 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Ruby;
+namespace RtkSharp.Filters.Commands.Ruby;
 
 /// <summary>
 /// Buffered filters for <c>rtk rubocop</c>: JSON parsing (the default, structured path) and a text
@@ -132,7 +132,7 @@ internal static partial class RubocopFilters
     /// <returns>The filtered summary.</returns>
     public static string FilterRubocopText(string output)
     {
-        foreach (var line in Core.SourceFilterLineSplitter.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var t = line.Trim();
             if (t.Contains("cannot load such file", StringComparison.Ordinal)
@@ -141,7 +141,7 @@ internal static partial class RubocopFilters
                 || t.StartsWith("rubocop: command not found", StringComparison.Ordinal)
                 || t.StartsWith("rubocop: No such file", StringComparison.Ordinal))
             {
-                var allLines = Core.SourceFilterLineSplitter.SplitLines(output.Trim());
+                var allLines = SourceFilterLineSplitter.SplitLines(output.Trim());
                 var errorLines = allLines.Take(20).ToList();
                 var truncated = string.Join('\n', errorLines);
                 var totalLines = allLines.Count;
@@ -154,7 +154,7 @@ internal static partial class RubocopFilters
             }
         }
 
-        var lines = Core.SourceFilterLineSplitter.SplitLines(output);
+        var lines = SourceFilterLineSplitter.SplitLines(output);
         for (var i = lines.Count - 1; i >= 0; i--)
         {
             var t = lines[i].Trim();
@@ -334,4 +334,33 @@ internal static partial class RubocopFilters
     [JsonSourceGenerationOptions(PropertyNameCaseInsensitive = false)]
     [JsonSerializable(typeof(RubocopOutput))]
     private sealed partial class RubocopJsonContext : JsonSerializerContext;
+}
+
+/// <summary>
+/// Shared helper for the Ruby-ecosystem output filters (<c>rubocop</c>, <c>rspec</c>). Split out of
+/// <c>RtkSharp.Commands.Ruby.RubySupport</c> (Task 11): that type's <c>RubyExec</c> member does
+/// filesystem I/O to locate the caller's <c>Gemfile</c> and stays in <c>RtkSharp</c> as CLI dispatch
+/// logic, but its <c>FallbackTail</c> member is pure text formatting consumed only by the filter
+/// layer, so it moves here as an internal sibling type (matching Task 8's
+/// <c>CargoBuildLineClassifier</c> precedent for shared logic split across the move boundary).
+/// </summary>
+internal static class RubySupport
+{
+    /// <summary>
+    /// Last-resort fallback: emits a diagnostic to stderr and returns the last <paramref name="n"/>
+    /// lines of <paramref name="output"/> unchanged. Faithful port of Rust <c>utils::fallback_tail</c>
+    /// (<c>src/core/utils.rs:233-241</c>).
+    /// </summary>
+    /// <param name="output">The raw output to tail.</param>
+    /// <param name="label">A short label identifying the command, used in the diagnostic message.</param>
+    /// <param name="n">The number of trailing lines to keep.</param>
+    /// <returns>The last <paramref name="n"/> lines of <paramref name="output"/>, joined with <c>\n</c>.</returns>
+    public static string FallbackTail(string output, string label, int n)
+    {
+        Console.Error.Write($"[rtk] {label}: output format not recognized, showing last {n} lines\n");
+
+        var lines = SourceFilterLineSplitter.SplitLines(output);
+        var start = Math.Max(0, lines.Count - n);
+        return string.Join('\n', lines.Skip(start));
+    }
 }

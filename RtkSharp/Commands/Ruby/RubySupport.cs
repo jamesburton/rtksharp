@@ -41,22 +41,4 @@ internal static class RubySupport
 
         return new RubyCommand(tool, []);
     }
-
-    /// <summary>
-    /// Last-resort fallback: emits a diagnostic to stderr and returns the last <paramref name="n"/>
-    /// lines of <paramref name="output"/> unchanged. Faithful port of Rust <c>utils::fallback_tail</c>
-    /// (<c>src/core/utils.rs:233-241</c>).
-    /// </summary>
-    /// <param name="output">The raw output to tail.</param>
-    /// <param name="label">A short label identifying the command, used in the diagnostic message.</param>
-    /// <param name="n">The number of trailing lines to keep.</param>
-    /// <returns>The last <paramref name="n"/> lines of <paramref name="output"/>, joined with <c>\n</c>.</returns>
-    public static string FallbackTail(string output, string label, int n)
-    {
-        Console.Error.Write($"[rtk] {label}: output format not recognized, showing last {n} lines\n");
-
-        var lines = Core.SourceFilterLineSplitter.SplitLines(output);
-        var start = Math.Max(0, lines.Count - n);
-        return string.Join('\n', lines.Skip(start));
-    }
 }

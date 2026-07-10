@@ -1,5 +1,6 @@
 using RtkSharp.Core;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Ruby;
 
 namespace RtkSharp.Commands.Ruby;
 

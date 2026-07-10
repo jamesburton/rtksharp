@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Ruby;
+namespace RtkSharp.Filters.Commands.Ruby;
 
 /// <summary>
 /// Buffered filters for <c>rtk rspec</c>: JSON parsing (the default, structured path) and a
@@ -51,7 +51,7 @@ internal static partial class RspecFilters
         var result = new List<string>();
         var inSimplecovBlock = false;
 
-        foreach (var line in Core.SourceFilterLineSplitter.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
 
@@ -257,7 +257,7 @@ internal static partial class RspecFilters
         var currentFailure = new StringBuilder();
         var summaryLine = string.Empty;
 
-        foreach (var line in Core.SourceFilterLineSplitter.SplitLines(output))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(output))
         {
             var trimmed = line.Trim();
 
@@ -377,7 +377,7 @@ internal static partial class RspecFilters
         }
 
         // Fallback: look for summary anywhere.
-        var allLines = Core.SourceFilterLineSplitter.SplitLines(output);
+        var allLines = SourceFilterLineSplitter.SplitLines(output);
         for (var i = allLines.Count - 1; i >= 0; i--)
         {
             var t = allLines[i].Trim();

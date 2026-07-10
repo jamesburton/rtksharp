@@ -1,14 +1,14 @@
-using RtkSharp.Commands.Ruby;
+using RtkSharp.Filters.Commands.Ruby;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Ruby;
+namespace RtkSharp.Filters.Tests.Commands.Ruby;
 
 /// <summary>
 /// Test-for-test port of Rust <c>src/cmds/ruby/rubocop_cmd.rs</c>'s <c>#[cfg(test)] mod tests</c>
 /// (18 tests covering <c>filter_rubocop_json</c>, <c>filter_rubocop_text</c>,
 /// <c>compact_ruby_path</c>, and <c>severity_rank</c>).
 /// </summary>
-public sealed class RubocopCommandTests
+public sealed class RubocopFiltersTests
 {
     private static string FilterRubocopJson(string output) => RubocopFilters.FilterRubocopJson(output);
 
