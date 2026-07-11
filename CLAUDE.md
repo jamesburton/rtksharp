@@ -2,6 +2,19 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **This repo now has two implementations.** The rest of this file describes the **original Rust
+> codebase**, which has moved to `rust-original/` and is kept only as (a) a build target for
+> `RtkSharp.ParityTests`'s oracle-parity comparisons, and (b) a reference snapshot for tracking
+> upstream changes worth porting (see `rust-original/README.md`, and the `upstream-main` branch,
+> which tracks `upstream/master` for diffing). **This fork does not release the Rust binary** —
+> that stays the upstream project's job ([rtk-ai/rtk](https://github.com/rtk-ai/rtk)).
+>
+> **Active development is the .NET port**: `RtkSharp`/`RtkSharp.Filters` (solution:
+> `RtkSharp.slnx`). If you're working on the port, this file's Rust-specific commands
+> (`cargo build`, `cargo clippy`, etc.) don't apply — see `.github/workflows/nuget-publish.yml`
+> for the CI/CD pipeline and `RtkSharp.Filters`'s own docs for the library API. Everything below
+> this banner still applies verbatim to anyone working inside `rust-original/`.
+
 ## Project Overview
 
 **rtk (Rust Token Killer)** is a high-performance CLI proxy that minimizes LLM token consumption by filtering and compressing command outputs. It achieves 60-90% token savings on common development operations through smart filtering, grouping, truncation, and deduplication.

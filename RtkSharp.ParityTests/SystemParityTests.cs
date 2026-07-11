@@ -48,21 +48,21 @@ public class SystemParityTests
     private static readonly (string Command, string[] Args, bool AllowUnorderedLines)[] Battery =
     [
         ("ls RtkSharp", ["ls", "RtkSharp"], false),
-        ("ls -la src/cmds/system", ["ls", "-la", "src/cmds/system"], false),
+        ("ls -la rust-original/src/cmds/system", ["ls", "-la", "rust-original/src/cmds/system"], false),
         ("ls .", ["ls", "."], false),
-        ("read Cargo.toml", ["read", "Cargo.toml"], false),
+        ("read .rtk/filters.toml", ["read", ".rtk/filters.toml"], false),
         ("read --max-lines 10 README.md", ["read", "--max-lines", "10", "README.md"], false),
         ("read -n RtkSharp.slnx", ["read", "-n", "RtkSharp.slnx"], false),
-        ("read --level minimal src/core/filter.rs",
-            ["read", "--level", "minimal", "src/core/filter.rs"], false),
-        ("read --level aggressive src/core/filter.rs",
-            ["read", "--level", "aggressive", "src/core/filter.rs"], false),
-        ("read --level minimal Cargo.toml", ["read", "--level", "minimal", "Cargo.toml"], false),
-        ("wc -l Cargo.toml", ["wc", "-l", "Cargo.toml"], false),
+        ("read --level minimal rust-original/src/core/filter.rs",
+            ["read", "--level", "minimal", "rust-original/src/core/filter.rs"], false),
+        ("read --level aggressive rust-original/src/core/filter.rs",
+            ["read", "--level", "aggressive", "rust-original/src/core/filter.rs"], false),
+        ("read --level minimal .rtk/filters.toml", ["read", "--level", "minimal", ".rtk/filters.toml"], false),
+        ("wc -l .rtk/filters.toml", ["wc", "-l", ".rtk/filters.toml"], false),
         ("wc README.md", ["wc", "README.md"], false),
-        ("find src/cmds/system -name \"*.rs\"", ["find", "src/cmds/system", "-name", "*.rs"], false),
+        ("find rust-original/src/cmds/system -name \"*.rs\"", ["find", "rust-original/src/cmds/system", "-name", "*.rs"], false),
         ("find RtkSharp -type d", ["find", "RtkSharp", "-type", "d"], false),
-        ("grep \"fn main\" src/main.rs", ["grep", "fn main", "src/main.rs"], false),
+        ("grep \"fn main\" rust-original/src/main.rs", ["grep", "fn main", "rust-original/src/main.rs"], false),
         ("grep -rln \"TokenKind\" RtkSharp/Rewrite", ["grep", "-rln", "TokenKind", "RtkSharp/Rewrite"], true),
         ("grep -C 2 \"PackAsTool\" RtkSharp/RtkSharp.csproj", ["grep", "-C", "2", "PackAsTool", "RtkSharp/RtkSharp.csproj"], false),
         ("tree", ["tree"], false),
@@ -77,7 +77,7 @@ public class SystemParityTests
         if (!File.Exists(oraclePath))
         {
             Assert.Fail(
-                $"Rust oracle not found at '{oraclePath}'. Build it with `cargo build --release` " +
+                $"Rust oracle not found at '{oraclePath}'. Build it with `cd rust-original && cargo build --release` " +
                 "(from PowerShell) before running the system-parity gate.");
             return;
         }
@@ -340,13 +340,13 @@ public class SystemParityTests
     private static string FindRepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);
-        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "Cargo.toml")))
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "RtkSharp.slnx")))
         {
             dir = dir.Parent;
         }
 
         return dir?.FullName
-            ?? throw new InvalidOperationException("Could not locate repo root (no Cargo.toml found in any parent directory).");
+            ?? throw new InvalidOperationException("Could not locate repo root (no RtkSharp.slnx found in any parent directory).");
     }
 
     /// <summary>
