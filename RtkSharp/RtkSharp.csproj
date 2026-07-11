@@ -10,9 +10,18 @@
     <PackageId>RtkSharp</PackageId>
     <AssemblyName>RtkSharp</AssemblyName>
     <PublishAot>true</PublishAot>
+    <!--
+      Version is computed by MinVer from the nearest `dotnet-v*` git tag (see
+      .github/workflows/nuget-publish.yml) — deliberately a different tag prefix from the
+      original Rust crate's `v*`/`dev-*-rc.*` tags (.github/workflows/cd.yml), which this
+      project's NuGet packaging must never read from or write to. Do not add a static
+      <Version> here; MinVer needs to be the sole source of truth.
+    -->
+    <MinVerTagPrefix>dotnet-v</MinVerTagPrefix>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.1.0" PrivateAssets="All" />
     <!--
       SQLite provider for the Phase 5 tracking database (RtkSharp/Core/Tracking/Tracker.cs), porting
       Rust's `rusqlite` (src/core/tracking.rs). Version 10.0.9 is the latest stable release as of this

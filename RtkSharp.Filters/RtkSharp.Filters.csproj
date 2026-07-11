@@ -6,11 +6,19 @@
     <Nullable>enable</Nullable>
     <PackageId>RtkSharp.Filters</PackageId>
     <AssemblyName>RtkSharp.Filters</AssemblyName>
-    <Version>1.0.0-preview.1</Version>
     <Description>In-process pure output filters extracted from the RtkSharp CLI (git, gh, dotnet, npm/pnpm, python, go, ruby, jvm, cloud, system, az, etc.), for consumers that already run commands themselves and just want to filter the captured output without a separate rtk install.</Description>
+    <!--
+      Version is computed by MinVer from the nearest `dotnet-v*` git tag (see
+      .github/workflows/nuget-publish.yml) — the same shared tag RtkSharp.csproj reads, so
+      both packages version together. Deliberately a different tag prefix from the original
+      Rust crate's `v*`/`dev-*-rc.*` tags (.github/workflows/cd.yml). Do not add a static
+      <Version> here; MinVer needs to be the sole source of truth.
+    -->
+    <MinVerTagPrefix>dotnet-v</MinVerTagPrefix>
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="MinVer" Version="6.1.0" PrivateAssets="All" />
     <!--
       Roslyn's C# syntax-tree API, powering RtkSharp.Filters/Ast/CSharpAstAnalyzer.cs — the reference
       implementation of the new, RtkSharp-only "rtk read, level=ast" tier (no Rust counterpart;

@@ -1,0 +1,201 @@
+name: NuGet Publish (.NET port)
+
+# Publishes RtkSharp / RtkSharp.Filters (and, when its own files change,
+# RtkSharp.TreeSitter.Trimmed) to nuget.org via Trusted Publishing (OIDC —
+# no stored API key).
+#
+# Tag namespace: `dotnet-v*`, deliberately disjoint from the original Rust
+# crate's `v*` / `dev-*-rc.*` tags used by .github/workflows/cd.yml (the
+# upstream release-please pipeline for the Rust `rtk` binary). The two
+# pipelines must never read or write each other's tags.
+#
+# Branch model (this fork only — origin has no `master`, and this port is
+# not merged back upstream):
+#   - `develop` pushes -> prerelease publish, tag suffixed `-dev.<run_number>`
+#     (e.g. dotnet-v1.1.0-dev.42). `dotnet add package` won't resolve these
+#     without --prerelease.
+#   - `main` pushes -> stable publish, clean tag (e.g. dotnet-v1.1.0).
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - "RtkSharp/**"
+      - "RtkSharp.Tests/**"
+      - "RtkSharp.Filters/**"
+      - "RtkSharp.Filters.Tests/**"
+      - "third-party/treesitter-dotnet-trimmed/**"
+      - ".github/workflows/nuget-publish.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: nuget-publish-${{ github.ref }}
+  cancel-in-progress: false # never cancel a publish mid-flight
+
+permissions:
+  contents: write # to create and push the dotnet-v* tag
+  id-token: write # for NuGet.org Trusted Publishing OIDC
+
+jobs:
+  # ─── Detect whether this push touched the TreeSitter.Trimmed sources ───
+  # A dedicated job (not an inline `if:` on head_commit.modified) because
+  # head_commit only reflects the single HEAD commit, missing files changed
+  # earlier in a multi-commit push; dorny/paths-filter diffs the full push
+  # range (github.event.before..github.sha) correctly.
+
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      treesitter: ${{ steps.filter.outputs.treesitter }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            treesitter:
+              - 'third-party/treesitter-dotnet-trimmed/**'
+
+  # ─── Compute the next dotnet-v* version from conventional commits ───
+  # Same bump logic as cd.yml's pre-release job (breaking->major, feat->minor,
+  # fix/other->patch), deliberately reimplemented rather than shared, since
+  # cd.yml computes off a completely different tag namespace (`v*`) for a
+  # different artifact (the Rust binary) and must stay untouched.
+
+  tag:
+    runs-on: ubuntu-latest
+    outputs:
+      new_tag: ${{ steps.compute.outputs.new_tag }}
+      prerelease: ${{ steps.compute.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Compute next dotnet-v* version
+        id: compute
+        run: |
+          set -euo pipefail
+
+          LATEST_TAG=$(git tag -l 'dotnet-v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | grep -vE '\-' | head -1 || true)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_VERSION="1.0.0"
+            RANGE="HEAD"
+            echo "No prior dotnet-v* stable tag found; seeding baseline at $LATEST_VERSION"
+          else
+            LATEST_VERSION="${LATEST_TAG#dotnet-v}"
+            RANGE="${LATEST_TAG}..HEAD"
+            echo "Latest stable dotnet-v* tag: $LATEST_TAG"
+          fi
+
+          COMMITS=$(git log "$RANGE" --format="%s" -- RtkSharp RtkSharp.Tests RtkSharp.Filters RtkSharp.Filters.Tests third-party/treesitter-dotnet-trimmed || true)
+          HAS_BREAKING=$(echo "$COMMITS" | grep -cE '^[a-z]+(\(.+\))?!:' || true)
+          HAS_FEAT=$(echo "$COMMITS"    | grep -cE '^feat(\(.+\))?:'     || true)
+          HAS_FIX=$(echo "$COMMITS"     | grep -cE '^fix(\(.+\))?:'      || true)
+          echo "Commits since baseline — breaking=$HAS_BREAKING feat=$HAS_FEAT fix=$HAS_FIX"
+
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$LATEST_VERSION"
+          if [ -z "$LATEST_TAG" ]; then
+            : # first-ever tag: publish exactly the seeded baseline, no bump
+          elif [ "$HAS_BREAKING" -gt 0 ]; then
+            MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0
+          elif [ "$HAS_FEAT" -gt 0 ]; then
+            MINOR=$((MINOR + 1)); PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            NEW_TAG="dotnet-v${VERSION}"
+            PRERELEASE="false"
+          else
+            NEW_TAG="dotnet-v${VERSION}-dev.${{ github.run_number }}"
+            PRERELEASE="true"
+          fi
+
+          echo "Next tag: $NEW_TAG (prerelease=$PRERELEASE)"
+
+          if git ls-remote --tags origin "refs/tags/${NEW_TAG}" | grep -q .; then
+            echo "::error::Tag ${NEW_TAG} already exists on origin"
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEW_TAG" -m "chore(release): ${NEW_TAG}"
+          git push origin "refs/tags/${NEW_TAG}"
+
+          echo "new_tag=$NEW_TAG" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  # ─── RtkSharp + RtkSharp.Filters (always run — same shared tag) ───
+
+  publish-core:
+    needs: tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # MinVer needs full history + the tag just pushed
+          ref: ${{ needs.tag.outputs.new_tag }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: dotnet pack (RtkSharp)
+        run: dotnet pack RtkSharp/RtkSharp.csproj -o .artifacts/packages -c Release
+
+      - name: dotnet pack (RtkSharp.Filters)
+        run: dotnet pack RtkSharp.Filters/RtkSharp.Filters.csproj -o .artifacts/packages -c Release
+
+      - name: NuGet login (OIDC -> temp API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: NuGet push
+        run: dotnet nuget push .artifacts/packages/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+
+  # ─── RtkSharp.TreeSitter.Trimmed (only when its own files changed) ───
+  # Not tag/MinVer-versioned: its version tracks the upstream TreeSitter.DotNet
+  # release plus a manually-bumped -rtksharp.N suffix baked into
+  # build-trimmed-package.ps1 by whoever edits it. --skip-duplicate makes a
+  # forgotten version bump a harmless no-op push rather than a failure.
+
+  publish-treesitter:
+    needs: tag
+    if: contains(github.event.head_commit.modified, 'third-party/treesitter-dotnet-trimmed') || contains(github.event.head_commit.added, 'third-party/treesitter-dotnet-trimmed') || github.event_name == 'workflow_dispatch'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - uses: NuGet/setup-nuget@v2
+
+      - name: Populate NuGet cache with upstream TreeSitter.DotNet package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path restore-shim -Force | Out-Null
+          Set-Content -Path restore-shim/shim.csproj -Value '<Project Sdk="Microsoft.NET.Sdk"><PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup><ItemGroup><PackageReference Include="TreeSitter.DotNet" Version="1.3.0" /></ItemGroup></Project>'
+          dotnet restore restore-shim/shim.csproj
+
+      - name: Build trimmed package
+        shell: pwsh
+        run: ./third-party/treesitter-dotnet-trimmed/build-trimmed-package.ps1
+
+      - name: NuGet login (OIDC -> temp API key)
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ secrets.NUGET_USER }}
+
+      - name: NuGet push
+        shell: pwsh
+        run: dotnet nuget push third-party/treesitter-dotnet-trimmed/local-feed/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
