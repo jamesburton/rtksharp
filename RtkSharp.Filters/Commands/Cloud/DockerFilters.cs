@@ -1,35 +1,30 @@
 using System.Globalization;
 using RtkSharp.Core;
+using RtkSharp.Filters.Commands.System;
 
 namespace RtkSharp.Filters.Commands.Cloud;
 
 /// <summary>
 /// Pure filtering/formatting logic for the <c>rtk docker</c> proxy: condenses <c>docker ps</c>/
-/// <c>images</c>/<c>compose ps</c>/<c>compose build</c> output. Extracted from
+/// <c>images</c>/<c>compose ps</c>/<c>compose build</c>/<c>compose logs</c> output. Extracted from
 /// <c>RtkSharp.Commands.Cloud.DockerCommand</c> — signatures and logic for
 /// <see cref="FormatContainerLine"/>/<see cref="FormatContainerLineFromParts"/>/
-/// <see cref="CompactPorts"/>/<see cref="FormatComposePs"/>/<see cref="FormatComposeBuild"/> are
-/// unchanged (moved as-is, only visibility promoted from <c>internal</c> to <c>public</c> and the
-/// containing type from <c>DockerCommand</c> to <c>DockerFilters</c>). <see cref="FormatPsSummary"/>/
-/// <see cref="FormatImagesSummary"/> are new pure methods carved out of <c>DockerCommand</c>'s
-/// previously-fused <c>DockerPsAsync</c>/<c>RunImagesAsync</c>: each of those methods mixed
-/// process-exec/Console-write with summary-building, so only the summary-building half (everything
-/// downstream of the already-captured <c>--format</c>-flagged stdout) moved here — named after what
-/// they actually build (the <c>[docker] N containers:</c>/<c>[docker] N images (...)</c> summary
-/// text), matching the brief's suggested names.
+/// <see cref="CompactPorts"/>/<see cref="FormatComposePs"/>/<see cref="FormatComposeBuild"/>/
+/// <see cref="FormatComposeLogs"/> are unchanged (moved as-is, only visibility promoted from
+/// <c>internal</c> to <c>public</c> and the containing type from <c>DockerCommand</c> to
+/// <c>DockerFilters</c>). <see cref="FormatPsSummary"/>/<see cref="FormatImagesSummary"/> are new
+/// pure methods carved out of <c>DockerCommand</c>'s previously-fused <c>DockerPsAsync</c>/
+/// <c>RunImagesAsync</c>: each of those methods mixed process-exec/Console-write with
+/// summary-building, so only the summary-building half (everything downstream of the
+/// already-captured <c>--format</c>-flagged stdout) moved here — named after what they actually
+/// build (the <c>[docker] N containers:</c>/<c>[docker] N images (...)</c> summary text), matching
+/// the brief's suggested names.
 /// </summary>
 /// <remarks>
-/// <b><c>FormatComposeLogs</c> deliberately did NOT move here</b>, despite the brief listing it
-/// alongside the other <c>container.rs</c>-ported formatters. Reading its body shows it is a one-line
-/// wrapper around <c>RtkSharp.Commands.System.LogCommand.AnalyzeLogs</c> — itself pure, but physically
-/// hosted in the <c>RtkSharp</c> assembly (a System-ecosystem module, not one of Task 13's 8 Cloud
-/// ecosystems), and <c>RtkSharp.Filters</c> cannot reference <c>RtkSharp</c> (that direction is
-/// already reversed — <c>RtkSharp</c> references <c>RtkSharp.Filters</c>). Relocating
-/// <c>AnalyzeLogs</c> itself (the <see cref="RtkSharp.Core.JsonCompaction"/> precedent for this exact
-/// situation) would ripple into <c>RtkSharp.Tests/Commands/System/LogCommandTests.cs</c> — a file
-/// well outside this task's authorized 8-ecosystem/test-file scope — so <c>FormatComposeLogs</c>
-/// stays as an <c>internal</c> method on <c>RtkSharp.Commands.Cloud.DockerCommand</c> instead,
-/// unchanged, calling <c>LogCommand.AnalyzeLogs</c> exactly as before.
+/// <b><c>FormatComposeLogs</c></b> was initially deferred because its body is a one-line wrapper
+/// around <c>RtkSharp.Commands.System.LogCommand.AnalyzeLogs</c>, which was hosted in the
+/// <c>RtkSharp</c> assembly (not yet reachable from <c>RtkSharp.Filters</c>). That dependency has
+/// since moved to <see cref="LogFilters.AnalyzeLogs"/>, unblocking this method's relocation here.
 /// </remarks>
 public static class DockerFilters
 {
@@ -304,6 +299,10 @@ public static class DockerFilters
 
         return result.TrimEnd();
     }
+
+    /// <summary>Faithful port of <c>format_compose_logs</c> (<c>container.rs</c>:564-574).</summary>
+    public static string FormatComposeLogs(string raw) =>
+        string.IsNullOrWhiteSpace(raw) ? "[compose] No logs" : $"[compose] Logs:\n{LogFilters.AnalyzeLogs(raw)}";
 
     /// <summary>Faithful port of <c>compact_ports</c> (<c>container.rs</c>:633-653).</summary>
     public static string CompactPorts(string ports)

@@ -9,6 +9,7 @@ using RtkSharp.Filters.Commands.Go;
 using RtkSharp.Filters.Commands.Js;
 using RtkSharp.Filters.Commands.Python;
 using RtkSharp.Filters.Commands.Rust;
+using RtkSharp.Filters.Commands.System;
 using RtkSharp.Parser;
 
 namespace RtkSharp.Commands.System;
@@ -33,7 +34,7 @@ namespace RtkSharp.Commands.System;
 /// via the shared <see cref="VitestFilters.VitestParser"/> then always formats
 /// <see cref="FormatMode.Compact"/>, regardless of the process's own verbosity — pipe has no
 /// verbosity concept of its own), <c>prettier</c> → <see cref="PrettierCommand.FilterPrettierOutput"/>,
-/// and <c>log</c> → <see cref="LogCommand.AnalyzeLogs"/> (Rust's <c>run_stdin_str</c> equivalent).
+/// and <c>log</c> → <see cref="LogFilters.AnalyzeLogs"/> (Rust's <c>run_stdin_str</c> equivalent).
 /// <c>git-log</c>/<c>git-diff</c>/<c>git-status</c> already delegated to <see cref="GitCommand"/>'s
 /// filters. The two pipe-specific mini filters (<see cref="GrepWrapper"/>/<see cref="FindWrapper"/>)
 /// have no ecosystem-module delegation target in Rust either — they're pipe-only helpers there
@@ -282,7 +283,7 @@ public static class PipeCommand
         "vitest" => VitestWrapper,
         "prettier" => PrettierCommand.FilterPrettierOutput,
 
-        "log" => LogCommand.AnalyzeLogs,
+        "log" => LogFilters.AnalyzeLogs,
 
         // Genuinely ported: fresh pipe-only mini filters (no Rust ecosystem delegation either).
         "grep" or "rg" => GrepWrapper,

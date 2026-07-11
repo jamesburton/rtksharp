@@ -11,34 +11,15 @@ using Xunit;
 namespace RtkSharp.Tests.Commands.Cloud;
 
 /// <summary>
-/// Covers <see cref="DockerCommand"/>, a faithful, test-for-test port of the docker-specific portions
-/// of Rust <c>src/cmds/cloud/container.rs</c>'s own <c>#[cfg(test)] mod tests</c> (compact_ports,
-/// format_compose_ps/logs/build), plus new dispatch/formatting coverage for <c>ps</c>/<c>ps -a</c>/
-/// <c>images</c>/<c>logs</c> — code paths the Rust oracle itself never exposed as pure, independently
-/// testable functions (they inline formatting directly inside the process-invoking function).
+/// Covers <see cref="DockerCommand"/>'s remaining impure dispatch surface: new coverage for
+/// <c>ps</c>/<c>ps -a</c>/<c>images</c>/<c>logs</c> — code paths the Rust oracle itself never exposed
+/// as pure, independently testable functions (they inline formatting directly inside the
+/// process-invoking function). Pure formatting logic (<c>compact_ports</c>,
+/// <c>format_compose_ps/logs/build</c>) moved to
+/// <c>RtkSharp.Filters.Tests.Commands.Cloud.DockerFiltersTests</c>.
 /// </summary>
 public sealed class DockerCommandTests
 {
-    // ===================== FormatComposeLogs (container.rs's own mod tests) =====================
-
-    [Fact]
-    public void FormatComposeLogs_Basic_HasHeader()
-    {
-        const string raw =
-            "web-1  | 192.168.1.1 - GET / 200\n" +
-            "web-1  | 192.168.1.1 - GET /favicon.ico 404\n" +
-            "api-1  | Server listening on port 3000\n" +
-            "api-1  | Connected to database";
-
-        Assert.Contains("Logs", DockerCommand.FormatComposeLogs(raw), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void FormatComposeLogs_Empty_IndicatesNoLogs()
-    {
-        Assert.Contains("No logs", DockerCommand.FormatComposeLogs(""), StringComparison.Ordinal);
-    }
-
     // ===================== RunCoreAsync: dispatch via a recording/responding fake executor =====================
 
     [Fact]

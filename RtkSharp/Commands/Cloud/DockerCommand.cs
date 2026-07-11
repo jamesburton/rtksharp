@@ -9,6 +9,7 @@ using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
 using RtkSharp.Filters.Commands.Cloud;
+using RtkSharp.Filters.Commands.System;
 
 namespace RtkSharp.Commands.Cloud;
 
@@ -291,7 +292,7 @@ public static class DockerCommand
             return result.ExitCode;
         }
 
-        var filtered = $"[docker] Logs for {container}:\n{LogCommand.AnalyzeLogs(raw)}";
+        var filtered = $"[docker] Logs for {container}:\n{LogFilters.AnalyzeLogs(raw)}";
         Console.Out.Write(filtered + "\n");
         timer.Track(cmdLabel, $"rtk {cmdLabel}", raw, filtered);
         return result.ExitCode;
@@ -417,15 +418,11 @@ public static class DockerCommand
             Console.Error.Write($"raw docker compose logs:\n{raw}\n");
         }
 
-        var filtered = FormatComposeLogs(raw);
+        var filtered = DockerFilters.FormatComposeLogs(raw);
         Console.Out.Write(filtered + "\n");
         timer.Track(cmdLabel, $"rtk {cmdLabel}", raw, filtered);
         return result.ExitCode;
     }
-
-    /// <summary>Faithful port of <c>format_compose_logs</c> (<c>container.rs</c>:564-574).</summary>
-    internal static string FormatComposeLogs(string raw) =>
-        string.IsNullOrWhiteSpace(raw) ? "[compose] No logs" : $"[compose] Logs:\n{LogCommand.AnalyzeLogs(raw)}";
 
     /// <summary>Faithful port of <c>run_compose_build</c> (<c>container.rs</c>:725-745).</summary>
     private static async Task<int> RunComposeBuildAsync(string[] composeRest, int verbose, IProcessExecutor executor)

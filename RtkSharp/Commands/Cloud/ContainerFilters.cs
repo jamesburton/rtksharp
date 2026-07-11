@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using RtkSharp.Commands.System;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.System;
 
 namespace RtkSharp.Commands.Cloud;
 
@@ -82,7 +82,7 @@ internal static class ContainerFilters
             return result.ExitCode;
         }
 
-        var filtered = $"Logs for {pod}:\n{LogCommand.AnalyzeLogs(result.Stdout)}";
+        var filtered = $"Logs for {pod}:\n{LogFilters.AnalyzeLogs(result.Stdout)}";
         Console.Out.Write(filtered + "\n");
         timer.Track(cmdLabel, $"rtk {cmdLabel}", result.Stdout, filtered);
         return result.ExitCode;

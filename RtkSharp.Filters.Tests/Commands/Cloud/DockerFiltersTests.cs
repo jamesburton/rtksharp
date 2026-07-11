@@ -6,16 +6,36 @@ namespace RtkSharp.Filters.Tests.Commands.Cloud;
 
 /// <summary>
 /// Covers <see cref="DockerFilters"/>'s already-pure surface (<c>CompactPorts</c>,
-/// <c>FormatComposePs</c>, <c>FormatComposeBuild</c>, <c>FormatContainerLineFromParts</c>), a
-/// faithful, test-for-test port of the docker-specific portions of Rust
-/// <c>src/cmds/cloud/container.rs</c>'s own <c>#[cfg(test)] mod tests</c>. <c>FormatComposeLogs</c>
-/// coverage stays in <c>RtkSharp.Tests.Commands.Cloud.DockerCommandTests</c> — that method did NOT
-/// move (see <c>DockerFilters</c>'s class remarks for why). <c>RunCoreAsync</c>-level dispatch
-/// coverage (including <c>FormatPsSummary</c>/<c>FormatImagesSummary</c>, exercised only
-/// end-to-end pre-extraction) also stays there.
+/// <c>FormatComposePs</c>, <c>FormatComposeBuild</c>, <c>FormatComposeLogs</c>,
+/// <c>FormatContainerLineFromParts</c>), a faithful, test-for-test port of the docker-specific
+/// portions of Rust <c>src/cmds/cloud/container.rs</c>'s own <c>#[cfg(test)] mod tests</c>.
+/// <c>FormatComposeLogs</c> coverage moved here from
+/// <c>RtkSharp.Tests.Commands.Cloud.DockerCommandTests</c> alongside that method's relocation.
+/// <c>RunCoreAsync</c>-level dispatch coverage (including <c>FormatPsSummary</c>/
+/// <c>FormatImagesSummary</c>, exercised only end-to-end pre-extraction) stays there.
 /// </summary>
 public sealed class DockerFiltersTests
 {
+    // ===================== FormatComposeLogs (container.rs's own mod tests) =====================
+
+    [Fact]
+    public void FormatComposeLogs_Basic_HasHeader()
+    {
+        const string raw =
+            "web-1  | 192.168.1.1 - GET / 200\n" +
+            "web-1  | 192.168.1.1 - GET /favicon.ico 404\n" +
+            "api-1  | Server listening on port 3000\n" +
+            "api-1  | Connected to database";
+
+        Assert.Contains("Logs", DockerFilters.FormatComposeLogs(raw), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FormatComposeLogs_Empty_IndicatesNoLogs()
+    {
+        Assert.Contains("No logs", DockerFilters.FormatComposeLogs(""), StringComparison.Ordinal);
+    }
+
     // ===================== CompactPorts (container.rs's own mod tests) =====================
 
     [Fact]
