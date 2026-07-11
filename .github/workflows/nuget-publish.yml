@@ -167,8 +167,8 @@ jobs:
   # forgotten version bump a harmless no-op push rather than a failure.
 
   publish-treesitter:
-    needs: tag
-    if: contains(github.event.head_commit.modified, 'third-party/treesitter-dotnet-trimmed') || contains(github.event.head_commit.added, 'third-party/treesitter-dotnet-trimmed') || github.event_name == 'workflow_dispatch'
+    needs: [tag, changes]
+    if: needs.changes.outputs.treesitter == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
