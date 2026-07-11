@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Text;
 using RtkSharp.Filters.Commands.Git;
 
@@ -17,28 +16,16 @@ namespace RtkSharp.Filters.Tests.Commands.Git;
 /// <remarks>
 /// <c>FilterGtLogEntries</c>/<c>FilterGtSubmit</c>/<c>FilterGtSync</c>/<c>FilterGtRestack</c>/
 /// <c>FilterGtCreate</c> are <c>public</c> on <see cref="GtFilters"/> (this extraction's public
-/// interface), so they're called directly. <c>IsGraphNode</c> and <c>ExtractBranchName</c> stayed
-/// <c>private</c> on <see cref="GtFilters"/> — mirroring Rust's private <c>fn</c>s and the pre-move
-/// <c>GtCommand</c> visibility — so they're still reached via reflection, matching the original
-/// test's documented rationale ("rather than widening the production API's visibility just to satisfy
-/// the test project"), just re-targeted at <c>RtkSharp.Filters.Commands.Git.GtFilters, RtkSharp.Filters</c>.
+/// interface), so they're called directly. <c>IsGraphNode</c> and <c>ExtractBranchName</c> are
+/// <c>internal</c> on <see cref="GtFilters"/> — mirroring Rust's private <c>fn</c>s — but are reached
+/// directly (not via reflection) because <c>RtkSharp.Filters</c> grants this test project access via
+/// <c>InternalsVisibleTo</c>.
 /// </remarks>
 public sealed class GtFiltersTests
 {
-    private static readonly Type GtFiltersType =
-        Type.GetType("RtkSharp.Filters.Commands.Git.GtFilters, RtkSharp.Filters")
-        ?? throw new InvalidOperationException("RtkSharp.Filters.Commands.Git.GtFilters type not found.");
+    private static bool IsGraphNode(string line) => GtFilters.IsGraphNode(line);
 
-    private static object? InvokeMember(string methodName, params object[] args)
-    {
-        var method = GtFiltersType.GetMethod(methodName, BindingFlags.NonPublic | BindingFlags.Static)
-            ?? throw new MissingMethodException($"GtFilters.{methodName} not found.");
-        return method.Invoke(null, args);
-    }
-
-    private static bool IsGraphNode(string line) => (bool)InvokeMember("IsGraphNode", line)!;
-
-    private static string ExtractBranchName(string line) => (string)InvokeMember("ExtractBranchName", line)!;
+    private static string ExtractBranchName(string line) => GtFilters.ExtractBranchName(line);
 
     private static int CountTokens(string text) =>
         text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;

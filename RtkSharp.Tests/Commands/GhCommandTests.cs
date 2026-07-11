@@ -5,14 +5,15 @@ using RtkSharp.Execution;
 namespace RtkSharp.Tests.Commands;
 
 /// <summary>
-/// Tests for <see cref="GhCommand"/>. The argument-parsing, JSON-formatting, and markdown-filtering
-/// helpers are pure functions ported from <c>src/cmds/git/gh_cmd.rs</c>, so most of this suite
-/// exercises them directly with the same inline JSON shapes the Rust module's own tests use. A set of
-/// dispatch tests use a recording <see cref="IProcessExecutor"/> to assert the child <c>gh</c> argv
-/// and the structured-output guard (<c>--json</c>/<c>--jq</c>/<c>--template</c>/<c>--web</c> → raw
-/// passthrough). The format expectations are oracle-derived: <c>gh pr view</c>/<c>pr list</c>/
-/// <c>issue list</c> were confirmed byte-identical against the reference <c>rtk.exe</c> for the
-/// equivalent live invocations against this repository's GitHub remote.
+/// Tests for <see cref="GhCommand"/>'s argument-parsing and dispatch surface: the identifier/flag
+/// extraction helpers (<c>has_json_flag</c>, <c>extract_identifier_and_extra_args</c>,
+/// <c>parse_optional_identifier</c>, the <c>should_passthrough_*</c> guards, and
+/// <c>has_non_diff_format_flag</c>), ported as pure functions from <c>src/cmds/git/gh_cmd.rs</c>, plus
+/// a set of dispatch tests that use a recording <see cref="IProcessExecutor"/> to assert the child
+/// <c>gh</c> argv and the structured-output guard (<c>--json</c>/<c>--jq</c>/<c>--template</c>/
+/// <c>--web</c> → raw passthrough). The JSON-formatting and markdown-filtering tests moved to
+/// <c>RtkSharp.Filters.Tests.Commands.Gh.GhFiltersTests</c> alongside the underlying <c>GhFilters</c>
+/// extraction.
 /// </summary>
 public sealed class GhCommandTests
 {

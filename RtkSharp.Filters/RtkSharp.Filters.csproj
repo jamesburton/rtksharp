@@ -6,7 +6,7 @@
     <Nullable>enable</Nullable>
     <PackageId>RtkSharp.Filters</PackageId>
     <AssemblyName>RtkSharp.Filters</AssemblyName>
-    <Version>1.0.0</Version>
+    <Version>1.0.0-preview.1</Version>
     <Description>In-process pure output filters extracted from the RtkSharp CLI (git, gh, dotnet, npm/pnpm, python, go, ruby, jvm, cloud, system, az, etc.), for consumers that already run commands themselves and just want to filter the captured output without a separate rtk install.</Description>
   </PropertyGroup>
 

@@ -166,6 +166,7 @@ public class RtkFiltersTryParseSingleCommandTests
     [InlineData("git status; echo done")]
     [InlineData("git log | head -5")]
     [InlineData("git log > out.txt")]
+    [InlineData("ls *.txt")] // TokenKind.Shellism (glob) — also non-single-command
     public void TryParseSingleCommand_ReturnsFalse_ForCompoundCommands(string commandLine)
     {
         var result = RtkFilters.TryParseSingleCommand(commandLine, out _, out _);

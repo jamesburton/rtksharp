@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using RtkSharp.Filters.Commands.Js;
 using RtkSharp.Parser;
 using Xunit;
@@ -169,6 +170,16 @@ public sealed class PnpmFiltersTests
     // remain in RtkSharp.Tests (which exercise the Console-diagnostic half + full dispatch).
     // -----------------------------------------------------------------------
 
+    // Both FormatPnpmList and FormatDependencyListing tee their capped-off entries to disk and embed a
+    // freshly generated (epoch-timestamped) filename in the returned "tail -n +N <path>" hint. Two
+    // independent calls therefore legitimately produce different filenames whenever they straddle a
+    // one-second boundary, so the hint's variable portion is masked before comparing the two outputs
+    // for equality (the point of this test — that FormatPnpmList delegates to FormatDependencyListing
+    // with cap:true — doesn't depend on the tee filename matching byte-for-byte).
+    private static readonly Regex TeeHintPathRegex = new(@"tail -n \+\d+ \S+", RegexOptions.Compiled);
+
+    private static string MaskTeeHint(string output) => TeeHintPathRegex.Replace(output, "tail -n +<offset> <tee-file>");
+
     [Fact]
     public void FormatPnpmList_IsFilteredFalse_DelegatesToFormatDependencyListingWithCapTrue()
     {
@@ -177,8 +188,10 @@ public sealed class PnpmFiltersTests
         var viaFormatPnpmList = PnpmFilters.FormatPnpmList(state, isFiltered: false);
         var viaDirectCall = PnpmFilters.FormatDependencyListing(state, cap: true);
 
-        Assert.Equal(viaDirectCall, viaFormatPnpmList);
+        Assert.Equal(MaskTeeHint(viaDirectCall), MaskTeeHint(viaFormatPnpmList));
         Assert.Contains("… +", viaFormatPnpmList, StringComparison.Ordinal);
+        Assert.Contains("tail -n +", viaDirectCall, StringComparison.Ordinal);
+        Assert.Contains("tail -n +", viaFormatPnpmList, StringComparison.Ordinal);
     }
 
     [Fact]

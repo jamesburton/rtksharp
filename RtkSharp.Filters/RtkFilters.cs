@@ -11,10 +11,11 @@ namespace RtkSharp.Filters;
 /// </summary>
 /// <remarks>
 /// While no filter here executes a process, <c>Filter("curl", ...)</c> is a disclosed exception to
-/// "no side effects": for large, non-JSON, TTY-bound responses it unconditionally writes a copy of
-/// the output to disk via <see cref="RtkSharp.Core.Tee.ForceTeeHint"/>, inherited as-is from
-/// curl's original filter behavior. Callers relying on this facade being purely in-memory should be
-/// aware of that one exception before invoking <c>Filter("curl", ...)</c>.
+/// "no side effects": for large, non-JSON, TTY-bound responses it will write a copy of the output to
+/// disk via <see cref="RtkSharp.Core.Tee.ForceTeeHint"/>, unless tee is disabled via configuration
+/// (e.g. <c>RTK_TEE=0</c>), inherited as-is from curl's original filter behavior. Callers relying on
+/// this facade being purely in-memory should be aware of that one exception before invoking
+/// <c>Filter("curl", ...)</c>.
 /// </remarks>
 public static class RtkFilters
 {
