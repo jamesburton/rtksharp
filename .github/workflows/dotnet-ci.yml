@@ -1,0 +1,109 @@
+name: RtkSharp CI
+
+on:
+  pull_request:
+    branches: [develop, master]
+    paths:
+      - "RtkSharp/**"
+      - "RtkSharp.Tests/**"
+      - "RtkSharp.Filters/**"
+      - "RtkSharp.Filters.Tests/**"
+      - ".github/workflows/dotnet-ci.yml"
+  workflow_dispatch:
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+  DOTNET_VERSION: "10.0.x"
+
+jobs:
+  # ─── Build + unit tests (fast gate) ───
+
+  build-and-test:
+    name: build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: dotnet build
+        run: dotnet build RtkSharp/RtkSharp.csproj -c Release
+
+      - name: dotnet test
+        run: dotnet test RtkSharp.Tests/RtkSharp.Tests.csproj -c Release
+
+      - name: dotnet test (RtkSharp.Filters.Tests)
+        run: dotnet test RtkSharp.Filters.Tests/RtkSharp.Filters.Tests.csproj -c Release
+
+  # ─── Package smoke test: dotnet pack + dnx from a local feed ───
+  # Proves the zero-install `dnx -y RtkSharp -- <command>` thesis (docs/PLANS.md §10)
+  # on all three shipping platforms, not just the dev machine.
+
+  package-smoke-test:
+    name: package smoke test (${{ matrix.os }})
+    needs: build-and-test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: dotnet pack
+        run: dotnet pack RtkSharp/RtkSharp.csproj -o .artifacts/packages -c Release
+
+      - name: dotnet pack (RtkSharp.Filters)
+        run: dotnet pack RtkSharp.Filters/RtkSharp.Filters.csproj -o .artifacts/packages -c Release
+
+      # `dnx` ships as `dnx.cmd` on Windows, which the default `bash` shell (Git Bash)
+      # on windows-latest runners does not resolve — verified locally that `dnx` is
+      # invisible to Git Bash but resolves fine via pwsh/cmd. Use pwsh there, bash
+      # elsewhere.
+
+      - name: dnx --version smoke test (bash)
+        if: runner.os != 'Windows'
+        working-directory: .artifacts/packages
+        shell: bash
+        run: |
+          OUTPUT=$(dnx RtkSharp --add-source . -- --version)
+          echo "$OUTPUT"
+          echo "$OUTPUT" | grep -q "RtkSharp 1.0.0" || {
+            echo "::error::Unexpected dnx --version output: $OUTPUT"
+            exit 1
+          }
+
+      - name: dnx --version smoke test (pwsh)
+        if: runner.os == 'Windows'
+        working-directory: .artifacts/packages
+        shell: pwsh
+        run: |
+          $output = dnx RtkSharp --add-source . -- --version
+          Write-Output $output
+          if ($output -notmatch "RtkSharp 1\.0\.0") {
+            Write-Output "::error::Unexpected dnx --version output: $output"
+            exit 1
+          }
+
+      - name: dnx passthrough smoke test (bash)
+        if: runner.os != 'Windows'
+        working-directory: .artifacts/packages
+        shell: bash
+        run: dnx RtkSharp --add-source . -- git status
+
+      - name: dnx passthrough smoke test (pwsh)
+        if: runner.os == 'Windows'
+        working-directory: .artifacts/packages
+        shell: pwsh
+        run: dnx RtkSharp --add-source . -- git status
