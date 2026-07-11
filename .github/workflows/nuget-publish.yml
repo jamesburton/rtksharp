@@ -198,4 +198,6 @@ jobs:
 
       - name: NuGet push
         shell: pwsh
-        run: dotnet nuget push third-party/treesitter-dotnet-trimmed/local-feed/*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
+        run: |
+          $pkg = Get-ChildItem third-party/treesitter-dotnet-trimmed/local-feed/*.nupkg | Select-Object -First 1
+          dotnet nuget push $pkg.FullName --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
