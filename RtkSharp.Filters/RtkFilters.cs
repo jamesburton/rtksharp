@@ -6,6 +6,13 @@ namespace RtkSharp.Filters;
 /// <c>docs/superpowers/specs/2026-07-10-rtksharp-filters-library-design.md</c> (Revision 2) for the
 /// design this implements.
 /// </summary>
+/// <remarks>
+/// While no filter here executes a process, <c>Filter("curl", ...)</c> is a disclosed exception to
+/// "no side effects": for large, non-JSON, TTY-bound responses it unconditionally writes a copy of
+/// the output to disk via <see cref="RtkSharp.Core.Tee.ForceTeeHint"/>, inherited as-is from
+/// curl's original filter behavior. Callers relying on this facade being purely in-memory should be
+/// aware of that one exception before invoking <c>Filter("curl", ...)</c>.
+/// </remarks>
 public static class RtkFilters
 {
     /// <summary>True if a filter is registered for <paramref name="command"/>.</summary>

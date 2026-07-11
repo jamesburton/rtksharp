@@ -160,12 +160,12 @@ internal static class FilterRegistry
 
         // ----- JavaScript/TypeScript -----
         ["npm"] = (args, stdout, stderr, exitCode) => NpmFilters.FilterNpmOutput(stdout + stderr),
-        ["pnpm"] = (args, stdout, stderr, exitCode) => PnpmFilters.FilterPnpmInstall(stdout + stderr),
+        ["pnpm"] = (args, stdout, stderr, exitCode) => DispatchPnpm(args, stdout, stderr),
         ["tsc"] = (args, stdout, stderr, exitCode) => TscFilters.FilterTscOutput(stdout + stderr),
         ["vitest"] = (args, stdout, stderr, exitCode) => DispatchVitestOrJest(stdout, stderr, exitCode, "vitest"),
         ["jest"] = (args, stdout, stderr, exitCode) => DispatchVitestOrJest(stdout, stderr, exitCode, "jest"),
         ["playwright"] = (args, stdout, stderr, exitCode) => DispatchPlaywright(stdout, stderr, exitCode),
-        ["prisma"] = (args, stdout, stderr, exitCode) => PrismaFilters.FilterPrismaGenerate(stdout + stderr),
+        ["prisma"] = (args, stdout, stderr, exitCode) => DispatchPrisma(args, stdout, stderr),
 
         // ----- Rust -----
         ["cargo"] = (args, stdout, stderr, exitCode) => CargoFilters.FilterCargoBuild(stdout + stderr),
@@ -195,8 +195,10 @@ internal static class FilterRegistry
         ["docker"] = (args, stdout, stderr, exitCode) => DockerFilters.FormatPsSummary(stdout),
         ["kubectl"] = (args, stdout, stderr, exitCode) => ContainerFilters.FormatKubectlPods(JsonDocument.Parse(stdout).RootElement),
         ["oc"] = (args, stdout, stderr, exitCode) => ContainerFilters.FormatKubectlPods(JsonDocument.Parse(stdout).RootElement),
+        // NOTE: unlike every other entry in this table, curl's filter has a disclosed disk-write
+        // side effect — see RtkFilters' class remarks and Tee.ForceTeeHint.
         ["curl"] = (args, stdout, stderr, exitCode) => DispatchCurl(stdout),
-        ["wget"] = (args, stdout, stderr, exitCode) => DispatchWget(args, stdout),
+        ["wget"] = (args, stdout, stderr, exitCode) => DispatchWget(args, stdout, stderr, exitCode),
         ["psql"] = (args, stdout, stderr, exitCode) => PsqlFilters.FilterPsqlOutput(stdout),
 
         // ----- System -----
@@ -280,6 +282,74 @@ internal static class FilterRegistry
         return RuffFilters.FilterRuffOutput(stdout, isCheck, isFormat);
     }
 
+    /// <summary>
+    /// Branches on prisma's subcommand tokens (<c>generate</c>/<c>migrate dev|status|deploy</c>/
+    /// <c>db-push</c>), mirroring the real subcommand shape confirmed against
+    /// <c>RtkSharp.Commands.Js.PrismaCommand.DispatchAsync</c>/<c>DispatchMigrateAsync</c>
+    /// (<c>args[0] == "migrate"</c> then a nested <c>args[1] == "dev"|"status"|"deploy"</c>, and
+    /// <c>args[0] == "db-push"</c> as a single flat token, not <c>"db" "push"</c>). Falls back to
+    /// <see cref="PrismaFilters.FilterPrismaGenerate"/> for <c>generate</c>/unrecognized input,
+    /// matching the previous default.
+    /// </summary>
+    private static string DispatchPrisma(string[] args, string stdout, string stderr)
+    {
+        var raw = stdout + stderr;
+        if (args.Length == 0)
+        {
+            return PrismaFilters.FilterPrismaGenerate(raw);
+        }
+
+        switch (args[0])
+        {
+            case "db-push":
+                return PrismaFilters.FilterDbPush(raw);
+
+            case "migrate" when args.Length > 1:
+                return args[1] switch
+                {
+                    "dev" => PrismaFilters.FilterMigrateDev(raw),
+                    "status" => PrismaFilters.FilterMigrateStatus(raw),
+                    "deploy" => PrismaFilters.FilterMigrateDeploy(raw),
+                    _ => PrismaFilters.FilterPrismaGenerate(raw),
+                };
+
+            default:
+                return PrismaFilters.FilterPrismaGenerate(raw);
+        }
+    }
+
+    /// <summary>
+    /// Branches on pnpm's subcommand (<c>list</c>/<c>outdated</c>/else) using each subcommand's own
+    /// parse→format pipeline, mirroring <see cref="DispatchVitestOrJest"/>'s multi-step shape: a
+    /// dedicated <see cref="RtkSharp.Parser.OutputParser{T}"/> parses <paramref name="stdout"/> into a
+    /// <see cref="DependencyState"/>, which is then formatted via <see cref="PnpmFilters.FormatPnpmList"/>/
+    /// <see cref="PnpmFilters.FormatPnpmOutdated"/>. Falls back to <see cref="PnpmFilters.FilterPnpmInstall"/>
+    /// (the previous default) for <c>install</c>/unrecognized subcommands, or if parsing yields a
+    /// passthrough result.
+    /// </summary>
+    private static string DispatchPnpm(string[] args, string stdout, string stderr)
+    {
+        var sub = args.Length > 0 ? args[0] : string.Empty;
+
+        switch (sub)
+        {
+            case "list":
+                var listParsed = new PnpmFilters.PnpmListParser().Parse(stdout);
+                return listParsed is ParseResult<DependencyState>.Passthrough listPassthrough
+                    ? listPassthrough.Raw
+                    : PnpmFilters.FormatPnpmList(listParsed.Unwrap(), isFiltered: args.Contains("--prod") || args.Contains("-P") || args.Contains("--dev") || args.Contains("-D"));
+
+            case "outdated":
+                var outdatedParsed = new PnpmFilters.PnpmOutdatedParser().Parse(stdout);
+                return outdatedParsed is ParseResult<DependencyState>.Passthrough outdatedPassthrough
+                    ? outdatedPassthrough.Raw
+                    : PnpmFilters.FormatPnpmOutdated(outdatedParsed.Unwrap(), FormatMode.Compact);
+
+            default:
+                return PnpmFilters.FilterPnpmInstall(stdout + stderr);
+        }
+    }
+
     /// <summary>Branches between <c>pip list</c> and <c>pip list --outdated</c> filtering by the first arg.</summary>
     private static string DispatchPip(string[] args, string stdout)
     {
@@ -299,11 +369,17 @@ internal static class FilterRegistry
         return result.TeeHint is null ? result.Content : $"{result.Content}\n{result.TeeHint}";
     }
 
-    /// <summary>Renders a wget success message from the URL (first non-flag arg) and captured stdout.</summary>
-    private static string DispatchWget(string[] args, string stdout)
+    /// <summary>
+    /// Renders a wget result from the URL (first non-flag arg): the success message from captured
+    /// stdout when <paramref name="exitCode"/> is 0, otherwise the failure message built from
+    /// <see cref="WgetFilters.ParseError"/>'s parsed <paramref name="stderr"/>/<paramref name="stdout"/>.
+    /// </summary>
+    private static string DispatchWget(string[] args, string stdout, string stderr, int exitCode)
     {
         var url = args.FirstOrDefault(a => !a.StartsWith('-')) ?? string.Empty;
-        return WgetFilters.FormatWgetStdoutOutput(url, stdout);
+        return exitCode == 0
+            ? WgetFilters.FormatWgetStdoutOutput(url, stdout)
+            : WgetFilters.FormatWgetFailure(url, WgetFilters.ParseError(stderr, stdout));
     }
 
     /// <summary>
