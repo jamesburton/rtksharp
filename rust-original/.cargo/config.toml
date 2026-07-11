@@ -1,0 +1,6 @@
+# Keeps `cargo build`'s output at the true repo root (`<repo-root>/target/...`) even though
+# Cargo.toml now lives in this `rust-original/` subfolder — RtkSharp.ParityTests hardcodes
+# `<repo-root>/target/release/rtk.exe` as the oracle binary path and was not otherwise
+# updated when the Rust source moved here (see rust-original/README.md).
+[build]
+target-dir = "../target"
