@@ -137,3 +137,47 @@ public class RtkFiltersTests
         Assert.DoesNotContain("FAILED", filtered);
     }
 }
+
+public class RtkFiltersTryParseSingleCommandTests
+{
+    [Fact]
+    public void TryParseSingleCommand_SplitsSimpleCommand()
+    {
+        var result = RtkFilters.TryParseSingleCommand("git status", out var command, out var args);
+
+        Assert.True(result);
+        Assert.Equal("git", command);
+        Assert.Equal(["status"], args);
+    }
+
+    [Fact]
+    public void TryParseSingleCommand_HandlesQuotedArguments()
+    {
+        var result = RtkFilters.TryParseSingleCommand("git commit -m \"fix bug\"", out var command, out var args);
+
+        Assert.True(result);
+        Assert.Equal("git", command);
+        Assert.Equal(["commit", "-m", "fix bug"], args);
+    }
+
+    [Theory]
+    [InlineData("git status && echo done")]
+    [InlineData("git status || echo failed")]
+    [InlineData("git status; echo done")]
+    [InlineData("git log | head -5")]
+    [InlineData("git log > out.txt")]
+    public void TryParseSingleCommand_ReturnsFalse_ForCompoundCommands(string commandLine)
+    {
+        var result = RtkFilters.TryParseSingleCommand(commandLine, out _, out _);
+
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void TryParseSingleCommand_ReturnsFalse_ForEmptyInput()
+    {
+        var result = RtkFilters.TryParseSingleCommand("", out _, out _);
+
+        Assert.False(result);
+    }
+}

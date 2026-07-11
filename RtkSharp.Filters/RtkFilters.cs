@@ -1,3 +1,6 @@
+using System.Linq;
+using RtkSharp.Rewrite;
+
 namespace RtkSharp.Filters;
 
 /// <summary>
@@ -41,5 +44,42 @@ public static class RtkFilters
         }
 
         return handler(args, rawStdout, rawStderr, exitCode);
+    }
+
+    /// <summary>
+    /// Tokenizes <paramref name="commandLine"/> and splits it into a
+    /// command name and argv, but only if it's a single, non-compound
+    /// command — no pipes, <c>&amp;&amp;</c>/<c>||</c>/<c>;</c> operators,
+    /// or redirects.
+    /// </summary>
+    /// <param name="commandLine">The raw shell command line to parse.</param>
+    /// <param name="command">The parsed command name, or <c>""</c> if parsing failed.</param>
+    /// <param name="args">The parsed argument list, or an empty array if parsing failed.</param>
+    /// <returns>True if <paramref name="commandLine"/> is a single non-compound command.</returns>
+    public static bool TryParseSingleCommand(string commandLine, out string command, out string[] args)
+    {
+        command = "";
+        args = [];
+
+        var tokens = ShellLexer.Tokenize(commandLine);
+        if (tokens.Count == 0)
+        {
+            return false;
+        }
+
+        if (tokens.Any(t => t.Kind is TokenKind.Operator or TokenKind.Pipe or TokenKind.Redirect or TokenKind.Shellism))
+        {
+            return false;
+        }
+
+        var argTokens = tokens.Where(t => t.Kind == TokenKind.Arg).ToList();
+        if (argTokens.Count == 0)
+        {
+            return false;
+        }
+
+        command = ShellLexer.StripQuotes(argTokens[0].Value);
+        args = argTokens.Skip(1).Select(t => ShellLexer.StripQuotes(t.Value)).ToArray();
+        return true;
     }
 }
