@@ -5,9 +5,9 @@ using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using RtkSharp.Commands.System;
+using RtkSharp.Core;
 
-namespace RtkSharp.Commands.Cloud;
+namespace RtkSharp.Filters.Commands.Cloud;
 
 /// <summary>
 /// Pure filter functions for <c>rtk aws</c>: each parses a raw AWS CLI JSON (or, for
@@ -40,7 +40,7 @@ namespace RtkSharp.Commands.Cloud;
 /// further unwrapping and clones the value as-is.
 /// </para>
 /// </remarks>
-internal static class AwsFilters
+public static class AwsFilters
 {
     // Rust's MAX_ITEMS = CAP_LIST (core/truncate.rs).
     private const int MaxItems = 20;
@@ -55,7 +55,7 @@ internal static class AwsFilters
     /// Result of a filter function: filtered text + whether items were truncated. Faithful port of
     /// Rust's <c>FilterResult</c> struct (<c>aws_cmd.rs</c>:24-43).
     /// </summary>
-    internal sealed class FilterResult
+    public sealed class FilterResult
     {
         private FilterResult(string text, bool isTruncated)
         {
@@ -100,7 +100,7 @@ internal static class AwsFilters
     /// <summary>Faithful port of <c>filter_s3_ls</c> (<c>aws_cmd.rs</c>:490-505).</summary>
     public static FilterResult FilterS3Ls(string output)
     {
-        var lines = ReadCommand.SplitLines(output);
+        var lines = SourceFilterLineSplitter.SplitLines(output);
         var total = lines.Count;
         var limit = MaxItems + 10;
 
@@ -1455,7 +1455,7 @@ internal static class AwsFilters
     /// <summary>Faithful port of <c>filter_s3_transfer</c> (<c>aws_cmd.rs</c>:1444-1513).</summary>
     public static FilterResult FilterS3Transfer(string output)
     {
-        var lines = ReadCommand.SplitLines(output);
+        var lines = SourceFilterLineSplitter.SplitLines(output);
         var total = lines.Count;
 
         // Pass through short output unchanged.

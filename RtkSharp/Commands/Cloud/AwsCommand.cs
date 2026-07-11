@@ -6,6 +6,7 @@ using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Cloud;
 
 namespace RtkSharp.Commands.Cloud;
 

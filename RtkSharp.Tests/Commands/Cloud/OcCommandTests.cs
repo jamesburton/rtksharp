@@ -1,8 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Runtime.CompilerServices;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using RtkSharp.Cli;
@@ -13,35 +10,18 @@ using Xunit;
 namespace RtkSharp.Tests.Commands.Cloud;
 
 /// <summary>
-/// Covers <see cref="OcCommand"/>. Includes a faithful, test-for-test port of Rust
-/// <c>src/cmds/cloud/container.rs</c>'s "oc support" test section (<c>test_oc_pods_savings</c>), which
-/// verifies <c>format_kubectl_pods</c> achieves &gt;=60% token savings against a real OpenShift
-/// <c>oc get pods -o json</c> capture — proof that the shared kubectl/oc pod-formatting logic in
-/// <see cref="ContainerFilters"/> works correctly against an oc-flavored fixture, not just synthetic
-/// kubectl-shaped JSON. The fixture at <c>Fixtures/oc_pods.json</c> mirrors
-/// <c>tests/fixtures/oc_pods.json</c> byte-for-byte. Dispatch-level coverage below (mirroring
-/// <see cref="KubectlCommandTests"/>) confirms <see cref="OcCommand"/> reaches the same shared
-/// <see cref="ContainerFilters"/> logic with <c>tool = "oc"</c>.
+/// Covers <see cref="OcCommand"/>'s dispatch behavior (<c>get</c>/<c>pods</c>/<c>services</c>/
+/// <c>logs</c>/passthrough), mirroring <see cref="KubectlCommandTests"/>'s own dispatch coverage to
+/// confirm <see cref="OcCommand"/> reaches the same shared
+/// <c>RtkSharp.Commands.Cloud.ContainerFilters</c> execution logic with <c>tool = "oc"</c>. Rust's own
+/// "oc support" test section (<c>test_oc_pods_savings</c>, which verifies
+/// <c>RtkSharp.Filters.Commands.Cloud.ContainerFilters.FormatKubectlPods</c> achieves &gt;=60% token
+/// savings against a real OpenShift <c>oc get pods -o json</c> capture) moved to
+/// <c>RtkSharp.Filters.Tests.Commands.Cloud.ContainerFiltersTests</c> alongside its
+/// <c>Fixtures/oc_pods.json</c> fixture, since it exercises a pure filter method, not dispatch.
 /// </summary>
 public sealed class OcCommandTests
 {
-    // ===================== test_oc_pods_savings (container.rs's own mod tests, "oc support" section) =====================
-
-    [Fact]
-    public void FormatKubectlPods_OcPodsFixture_AchievesAtLeast60PercentTokenSavings()
-    {
-        var inputStr = LoadFixture("Fixtures/oc_pods.json");
-        using var doc = JsonDocument.Parse(inputStr);
-
-        var output = ContainerFilters.FormatKubectlPods(doc.RootElement);
-
-        var inputTokens = CountTokens(inputStr);
-        var outputTokens = CountTokens(output);
-        var savings = 100.0 - (outputTokens / (double)inputTokens * 100.0);
-
-        Assert.True(savings >= 60.0, $"Expected >=60% savings, got {savings:F1}%");
-    }
-
     // ===================== RunCoreAsync: dispatch via a recording/responding fake executor =====================
 
     [Fact]
@@ -166,15 +146,6 @@ public sealed class OcCommandTests
     }
 
     // ===================== helpers =====================
-
-    private static int CountTokens(string text) =>
-        text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).Length;
-
-    private static string LoadFixture(string relativePath, [CallerFilePath] string sourceFile = "")
-    {
-        var dir = Path.GetDirectoryName(sourceFile)!;
-        return File.ReadAllText(Path.Combine(dir, relativePath));
-    }
 
     private static ExecutionResult Ok(string stdout) =>
         new(stdout, "", ExitCode: 0, TimedDuration: TimeSpan.Zero, WasStarted: true, Failure: null, TimedOut: false);

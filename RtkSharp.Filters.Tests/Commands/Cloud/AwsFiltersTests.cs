@@ -1,17 +1,17 @@
 using System;
 using System.Linq;
 using System.Text.Json;
-using RtkSharp.Commands.Cloud;
+using RtkSharp.Filters.Commands.Cloud;
 using Xunit;
 
-namespace RtkSharp.Tests.Commands.Cloud;
+namespace RtkSharp.Filters.Tests.Commands.Cloud;
 
 /// <summary>
 /// Covers <see cref="AwsFilters"/>, a test-for-test port of Rust <c>src/cmds/cloud/aws_cmd.rs</c>'s own
 /// <c>#[cfg(test)] mod tests</c> block. Every fixture JSON string below is copied verbatim from the
 /// corresponding Rust test (same field values, same field ordering).
 /// </summary>
-public sealed class AwsCommandTests
+public sealed class AwsFiltersTests
 {
     /// <summary>Mirrors Rust's own test-local <c>count_tokens</c> helper (<c>core::utils::count_tokens</c>): <c>text.split_whitespace().count()</c>.</summary>
     private static int CountTokens(string text) =>

@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace RtkSharp.Commands.Cloud;
+namespace RtkSharp.Filters.Commands.Cloud;
 
 /// <summary>
 /// Pure filter and redaction functions for <c>rtk az</c>. A pure RtkSharp superset feature — no
@@ -14,7 +14,7 @@ namespace RtkSharp.Commands.Cloud;
 /// <c>AwsCommand</c>/<see cref="AwsFilters"/> split; reuses <see cref="AwsFilters.FilterResult"/>
 /// rather than duplicating an identical type.
 /// </summary>
-internal static class AzFilters
+public static class AzFilters
 {
     // Matches AwsFilters.MaxItems (core/truncate.rs's CAP_LIST equivalent) for consistency.
     private const int MaxItems = 20;

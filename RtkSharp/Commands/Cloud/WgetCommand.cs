@@ -1,8 +1,8 @@
-using System.Text;
 using RtkSharp.Cli;
 using RtkSharp.Core;
 using RtkSharp.Core.Tracking;
 using RtkSharp.Execution;
+using RtkSharp.Filters.Commands.Cloud;
 
 namespace RtkSharp.Commands.Cloud;
 
@@ -155,14 +155,14 @@ public static class WgetCommand
         {
             var filename = ExtractFilenameFromOutput(result.Stderr, url, args);
             var size = GetFileSize(filename);
-            var msg = $"{CompactUrl(url)} ok | {filename} | {FormatSize(size)}";
+            var msg = WgetFilters.FormatWgetOutput(url, filename, size);
             Console.Out.Write(msg + "\n");
             timer.Track($"wget {url}", "rtk wget", rawOutput, msg);
             return 0;
         }
 
-        var error = ParseError(result.Stderr, result.Stdout);
-        var failMsg = $"{CompactUrl(url)} FAILED: {error}";
+        var error = WgetFilters.ParseError(result.Stderr, result.Stdout);
+        var failMsg = WgetFilters.FormatWgetFailure(url, error);
         Console.Out.Write(failMsg + "\n");
         timer.Track($"wget {url}", "rtk wget", rawOutput, failMsg);
         return result.ExitCode;
@@ -195,37 +195,14 @@ public static class WgetCommand
 
         if (result.ExitCode == 0 && result.WasStarted)
         {
-            var lines = SplitLines(result.Stdout);
-            var total = lines.Count;
-
-            var rtkOutput = new StringBuilder();
-            if (total > 20)
-            {
-                rtkOutput.Append($"{CompactUrl(url)} ok | {total} lines | {FormatSize((ulong)result.Stdout.Length)}\n");
-                rtkOutput.Append("first 10 lines:\n");
-                foreach (var line in lines.Take(10))
-                {
-                    rtkOutput.Append(TruncateLine(line, 100)).Append('\n');
-                }
-
-                rtkOutput.Append($"... +{total - 10} more lines");
-            }
-            else
-            {
-                rtkOutput.Append($"{CompactUrl(url)} ok | {total} lines\n");
-                foreach (var line in lines)
-                {
-                    rtkOutput.Append(line).Append('\n');
-                }
-            }
-
-            Console.Out.Write(rtkOutput.ToString());
-            timer.Track($"wget -O - {url}", "rtk wget -o", result.Stdout, rtkOutput.ToString());
+            var rtkOutput = WgetFilters.FormatWgetStdoutOutput(url, result.Stdout);
+            Console.Out.Write(rtkOutput);
+            timer.Track($"wget -O - {url}", "rtk wget -o", result.Stdout, rtkOutput);
             return 0;
         }
 
-        var error = ParseError(result.Stderr, "");
-        var msg = $"{CompactUrl(url)} FAILED: {error}";
+        var error = WgetFilters.ParseError(result.Stderr, "");
+        var msg = WgetFilters.FormatWgetFailure(url, error);
         Console.Out.Write(msg + "\n");
         timer.Track($"wget -O - {url}", "rtk wget -o", result.Stderr, msg);
         return result.ExitCode;
@@ -255,7 +232,7 @@ public static class WgetCommand
             }
         }
 
-        foreach (var line in SplitLines(stderr))
+        foreach (var line in SourceFilterLineSplitter.SplitLines(stderr))
         {
             if (line.Contains("Sauvegarde en") || line.Contains("Saving to"))
             {
@@ -303,169 +280,4 @@ public static class WgetCommand
         }
     }
 
-    /// <summary>Faithful port of <c>format_size</c> (<c>wget_cmd.rs</c>:171-184).</summary>
-    /// <param name="bytes">The byte count to format.</param>
-    /// <returns>A human-readable size string.</returns>
-    internal static string FormatSize(ulong bytes)
-    {
-        if (bytes == 0)
-        {
-            return "?";
-        }
-
-        if (bytes < 1024)
-        {
-            return $"{bytes}B";
-        }
-
-        if (bytes < 1024 * 1024)
-        {
-            return $"{bytes / 1024.0:F1}KB";
-        }
-
-        if (bytes < 1024L * 1024 * 1024)
-        {
-            return $"{bytes / (1024.0 * 1024.0):F1}MB";
-        }
-
-        return $"{bytes / (1024.0 * 1024.0 * 1024.0):F1}GB";
-    }
-
-    /// <summary>Faithful port of <c>compact_url</c> (<c>wget_cmd.rs</c>:186-202).</summary>
-    /// <param name="url">The URL to compact.</param>
-    /// <returns>The URL with its protocol stripped and, if long, truncated with an ellipsis.</returns>
-    internal static string CompactUrl(string url)
-    {
-        var withoutProto = url.StartsWith("https://", StringComparison.Ordinal)
-            ? url["https://".Length..]
-            : url.StartsWith("http://", StringComparison.Ordinal)
-                ? url["http://".Length..]
-                : url;
-
-        if (withoutProto.Length <= 50)
-        {
-            return withoutProto;
-        }
-
-        var prefix = withoutProto[..25];
-        var suffix = withoutProto[^20..];
-        return $"{prefix}...{suffix}";
-    }
-
-    /// <summary>Faithful port of <c>parse_error</c> (<c>wget_cmd.rs</c>:205-247).</summary>
-    /// <param name="stderr">wget's captured stderr.</param>
-    /// <param name="stdout">wget's captured stdout.</param>
-    /// <returns>A short, human-readable error description.</returns>
-    internal static string ParseError(string stderr, string stdout)
-    {
-        var combined = $"{stderr}\n{stdout}";
-
-        if (combined.Contains("404"))
-        {
-            return "404 Not Found";
-        }
-
-        if (combined.Contains("403"))
-        {
-            return "403 Forbidden";
-        }
-
-        if (combined.Contains("401"))
-        {
-            return "401 Unauthorized";
-        }
-
-        if (combined.Contains("500"))
-        {
-            return "500 Server Error";
-        }
-
-        if (combined.Contains("Connection refused"))
-        {
-            return "Connection refused";
-        }
-
-        if (combined.Contains("unable to resolve") || combined.Contains("Name or service not known"))
-        {
-            return "DNS lookup failed";
-        }
-
-        if (combined.Contains("timed out"))
-        {
-            return "Connection timed out";
-        }
-
-        if (combined.Contains("SSL") || combined.Contains("certificate"))
-        {
-            return "SSL/TLS error";
-        }
-
-        foreach (var line in SplitLines(stderr))
-        {
-            var trimmed = line.Trim();
-            if (trimmed.Length != 0 && !trimmed.StartsWith("--", StringComparison.Ordinal))
-            {
-                return trimmed.Length > 60 ? $"{trimmed[..60]}..." : trimmed;
-            }
-        }
-
-        return "Unknown error";
-    }
-
-    /// <summary>Faithful port of <c>truncate_line</c> (<c>wget_cmd.rs</c>:249-256).</summary>
-    /// <param name="line">The line to truncate.</param>
-    /// <param name="max">The maximum length, including the ellipsis if truncated.</param>
-    /// <returns>The original line, or a truncated form ending in <c>...</c>.</returns>
-    internal static string TruncateLine(string line, int max)
-    {
-        if (line.Length <= max)
-        {
-            return line;
-        }
-
-        var take = Math.Max(0, max - 3);
-        return $"{line[..take]}...";
-    }
-
-    /// <summary>
-    /// Splits text into lines exactly as Rust's <c>str::lines()</c> does (on <c>\n</c>, stripping a
-    /// trailing <c>\r</c>, no trailing empty entry after a final <c>\n</c>).
-    /// </summary>
-    /// <param name="text">The text to split.</param>
-    /// <returns>The lines, in order.</returns>
-    private static List<string> SplitLines(string text)
-    {
-        var result = new List<string>();
-        if (text.Length == 0)
-        {
-            return result;
-        }
-
-        var start = 0;
-        for (var i = 0; i < text.Length; i++)
-        {
-            if (text[i] == '\n')
-            {
-                result.Add(StripCarriageReturn(text, start, i));
-                start = i + 1;
-            }
-        }
-
-        if (start < text.Length)
-        {
-            result.Add(StripCarriageReturn(text, start, text.Length));
-        }
-
-        return result;
-    }
-
-    private static string StripCarriageReturn(string text, int start, int end)
-    {
-        if (end > start && text[end - 1] == '\r')
-        {
-            end--;
-        }
-
-        return text[start..end];
-    }
 }

@@ -9,8 +9,15 @@ namespace RtkSharp.Core;
 /// are summarized, and the result renders each key on its own line for readability. Faithful port
 /// of <c>json_cmd::filter_json_compact</c>/<c>compact_json</c> (<c>src/cmds/system/json_cmd.rs</c>:
 /// 91-178). Shared by <c>rtk aws</c>'s and <c>rtk az</c>'s generic (no-dedicated-filter) fallback
-/// paths — extracted from <see cref="RtkSharp.Commands.Cloud.AwsFilters.FilterJsonCompact"/>, which
-/// is now a one-line delegating wrapper preserving byte-identical output.
+/// paths — extracted from <see cref="RtkSharp.Filters.Commands.Cloud.AwsFilters.FilterJsonCompact"/>,
+/// which is now a one-line delegating wrapper preserving byte-identical output. Moved from
+/// <c>RtkSharp/Core/JsonCompaction.cs</c> to this project (Task 13) because
+/// <see cref="RtkSharp.Filters.Commands.Cloud.AwsFilters"/> — its only in-code caller — moved to
+/// <c>RtkSharp.Filters</c> in the same task; <c>RtkSharp.Commands.Cloud.AzCommand</c>'s own direct
+/// call still works unchanged via the <c>RtkSharp.Core</c> namespace (unaffected by which assembly
+/// physically hosts the type), matching the established <c>Utils.cs</c>/<c>Tee.cs</c>/
+/// <c>SourceFilter.cs</c> precedent of keeping the <c>RtkSharp.Core</c> namespace stable across the
+/// physical project move.
 /// </summary>
 public static class JsonCompaction
 {
