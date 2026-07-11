@@ -328,6 +328,41 @@ public sealed class TelemetryCommandTests
     }
 
     [Fact]
+    public void RunForget_RtkDbPathSet_DeletesRedirectedDatabase_NotDefaultLocation()
+    {
+        // Regression test for the intentional divergence from the Rust oracle documented in
+        // TelemetryCommand's class remarks: forget must delete the SAME database every other
+        // command reads/writes via Tracker.ResolveDbPath (RTK_DB_PATH-aware), not always the
+        // default-location file regardless of an RTK_DB_PATH override.
+        using var tmp = new TempDir();
+        using var configGuard = new GlobalScopeGuard(tmp);
+        using var dataGuard = new DataDirGuard(tmp);
+        TelemetryCommand.ResetSaltCacheForTests();
+
+        var redirectedDbPath = Path.Combine(tmp.Root, "redirected-history.db");
+        File.WriteAllText(redirectedDbPath, "fake-redirected-db");
+
+        var defaultDbPath = Path.Combine(dataGuard.DataDir, "rtk", "history.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(defaultDbPath)!);
+        File.WriteAllText(defaultDbPath, "should-not-be-touched");
+
+        using var dbPathGuard = new EnvVarScope(RtkSharp.Core.Tracking.Tracker.DbPathEnvVar, redirectedDbPath);
+
+        var stdout = new StringWriter { NewLine = "\n" };
+        var stderr = new StringWriter { NewLine = "\n" };
+
+        var exit = TelemetryCommand.RunForget(stdout, stderr);
+
+        Assert.Equal(0, exit);
+        Assert.False(File.Exists(redirectedDbPath), "The RTK_DB_PATH-redirected database should be deleted.");
+        Assert.True(
+            File.Exists(defaultDbPath),
+            "The default-location database must be left untouched when RTK_DB_PATH points elsewhere.");
+        Assert.Contains(
+            $"Local tracking database deleted: {redirectedDbPath}\n", stdout.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RunForget_NoSaltFile_NeverPrintsErasureLines()
     {
         using var tmp = new TempDir();

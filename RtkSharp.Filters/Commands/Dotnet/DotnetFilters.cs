@@ -269,6 +269,18 @@ public static class DotnetFilters
         @"^\s*([A-Za-z]:)?[^\r\n]*\.csproj(?:\s|$)",
         RegexOptions.Multiline | RegexOptions.Compiled);
 
+    // New regex, not ported from Rust (no oracle for file-based apps): the modern .NET SDK's
+    // per-project build-completion line ("<ProjectName> -> <outputPath>.dll/.exe"), which is the
+    // ONLY per-project signal a terse, already-up-to-date multi-project build prints — no ".csproj"
+    // path appears anywhere in that console text (ProjectPathRegex above matches zero times), so
+    // CountProjects alone undercounted e.g. a 5-project solution as "1 projects" (the
+    // zero-count-but-something-happened fallback below). Counted alongside ProjectPathRegex via
+    // Math.Max in ParseBuildFromText so a verbose build that DOES mention .csproj paths isn't
+    // double-counted or regressed.
+    private static readonly Regex BuildProjectCompletionLineRegex = new(
+        @"^\s*\S[^\r\n]*\s->\s[^\r\n]*\.(dll|exe)\s*$",
+        RegexOptions.Multiline | RegexOptions.Compiled);
+
     // --- test-output regexes ported verbatim from binlog.rs's lazy_static! block ---
 
     // TEST_RESULT_RE (binlog.rs:74): the VSTest per-project summary line
@@ -755,7 +767,7 @@ public static class DotnetFilters
         var summary = new BuildSummary
         {
             Succeeded = scrubbed.Contains("Build succeeded") && !scrubbed.Contains("Build FAILED"),
-            ProjectCount = CountProjects(scrubbed),
+            ProjectCount = Math.Max(CountProjects(scrubbed), CountBuildCompletionLines(scrubbed)),
             DurationText = ExtractDuration(scrubbed),
         };
 
@@ -938,6 +950,8 @@ public static class DotnetFilters
     }
 
     private static int CountProjects(string text) => ProjectPathRegex.Matches(text).Count;
+
+    private static int CountBuildCompletionLines(string text) => BuildProjectCompletionLineRegex.Matches(text).Count;
 
     private static string? ExtractDuration(string text)
     {

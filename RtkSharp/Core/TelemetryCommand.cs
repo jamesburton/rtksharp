@@ -30,17 +30,19 @@ namespace RtkSharp.Core;
 /// become a genuine divergence — see <c>docs/parity/compatibility-ledger.md</c>.
 /// </para>
 /// <para>
-/// <b><c>forget</c>'s local-tracking-database path deliberately ignores <c>RTK_DB_PATH</c>/
-/// <c>config.tracking.database_path</c> — a faithfully-preserved Rust-source inconsistency.</b> Unlike
-/// <see cref="Tracking.Tracker.ResolveDbPath"/> (used everywhere else tracking data is read/written,
-/// honoring <c>RTK_DB_PATH</c> as its top-priority override), Rust's <c>run_forget</c>
+/// <b>Deliberate divergence from the Rust oracle: <c>forget</c> now honors <c>RTK_DB_PATH</c>/
+/// <c>config.tracking.database_path</c>, unlike upstream.</b> Rust's <c>run_forget</c>
 /// (<c>telemetry_cmd.rs</c>:132-135) computes the history-database path directly as
 /// <c>dirs::data_local_dir()/rtk/history.db</c>, never consulting <c>RTK_DB_PATH</c> or the config
-/// file at all. This means a user who has redirected their tracking database via <c>RTK_DB_PATH</c>
-/// will find <c>rtk telemetry forget</c> deletes the wrong (default-location) file, or reports nothing
-/// to delete if no file exists there — a real, surprising-but-genuine oracle behavior, reproduced here
-/// via a direct <see cref="TrustCommand.ResolveDataDir"/>/<see cref="TrackingConstants"/> path build
-/// rather than routing through <c>Tracker.ResolveDbPath</c>.
+/// file — unlike every other tracking-data read/write, which goes through
+/// <see cref="Tracking.Tracker.ResolveDbPath"/> and honors <c>RTK_DB_PATH</c> as its top-priority
+/// override. That means the real oracle's <c>rtk telemetry forget</c> deletes the wrong
+/// (default-location) file, or reports nothing to delete, for any user who has redirected their
+/// tracking database. This port intentionally does NOT reproduce that inconsistency: <c>RunForget</c>
+/// now calls <see cref="Tracking.Tracker.ResolveDbPath"/> directly, so <c>forget</c> deletes the same
+/// database every other command reads from and writes to. Filed upstream as
+/// https://github.com/rtk-ai/rtk/issues/2956 — resolving it there is upstream's call; this port
+/// isn't waiting on that to stop shipping a data-loss-adjacent bug.
 /// </para>
 /// <para>
 /// <b>Disclosed simplification: Clap usage-error text.</b> Like <c>GainCommand</c>/
@@ -244,7 +246,7 @@ public static class TelemetryCommand
             }
         }
 
-        var dbPath = Path.Combine(TrustCommand.ResolveDataDir(), TrackingConstants.RtkDataDir, TrackingConstants.HistoryDb);
+        var dbPath = Tracker.ResolveDbPath();
         if (File.Exists(dbPath))
         {
             try

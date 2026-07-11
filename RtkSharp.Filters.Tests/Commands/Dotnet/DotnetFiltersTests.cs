@@ -58,11 +58,16 @@ public sealed class DotnetFiltersTests
     {
         var output = DotnetFilters.FilterBuild(BuildSuccessRaw, commandSuccess: true);
 
+        // BuildSuccessRaw contains two distinct "<Project> -> <output>" completion lines
+        // (RtkSharp and RtkSharp.Tests), so the correct count is 2 — see
+        // BuildProjectCompletionLineRegex's remarks in DotnetFilters.cs for why CountProjects
+        // alone (matching ".csproj" paths, absent from this terse/up-to-date-restore output)
+        // used to undercount this as 1.
         Assert.Equal(
             "Warnings:\n" +
             "  C:\\Development\\rtksharp\\RtkSharp.Tests\\Rewrite\\ShellLexerTests.cs(34,9) warning xUnit2012: Do not use Assert.False() to check if a value exists in a collection. Use Assert.DoesNotContain instead. (https://xunit.net/xunit.analyzers/rules/xUnit2012) [C:\\Development\\rtks...\n" +
             "\n" +
-            "ok dotnet build: 1 projects, 0 errors, 1 warnings (00:01:45.81)",
+            "ok dotnet build: 2 projects, 0 errors, 1 warnings (00:01:45.81)",
             output);
     }
 
@@ -166,10 +171,41 @@ public sealed class DotnetFiltersTests
         var summary = DotnetFilters.ParseBuildFromText(BuildSuccessRaw);
 
         Assert.True(summary.Succeeded);
-        Assert.Equal(1, summary.ProjectCount);
+        // BuildSuccessRaw has two "<Project> -> <output>" completion lines (RtkSharp,
+        // RtkSharp.Tests) — see FilterBuild_Success_SummarizesProjectsAndWarnings's comment.
+        Assert.Equal(2, summary.ProjectCount);
         Assert.Empty(summary.Errors);
         Assert.Single(summary.Warnings);
         Assert.Equal("00:01:45.81", summary.DurationText);
+    }
+
+    [Fact]
+    public void ParseBuildFromText_UpToDateMultiProjectSolution_CountsEachProjectCompletionLine()
+    {
+        // Regression test for the undercount fixed alongside this test: a terse,
+        // already-up-to-date multi-project build prints zero ".csproj" paths anywhere in its
+        // console output — only one "<Project> -> <output>" completion line per project — so
+        // CountProjects (matching ".csproj") alone returned 0, falling back to a hardcoded 1
+        // regardless of how many projects actually participated.
+        const string raw =
+            "  Determining projects to restore...\n" +
+            "  All projects are up-to-date for restore.\n" +
+            "  RtkSharp.Filters -> C:\\Development\\rtksharp\\RtkSharp.Filters\\bin\\Release\\net10.0\\RtkSharp.Filters.dll\n" +
+            "  RtkSharp -> C:\\Development\\rtksharp\\RtkSharp\\bin\\Release\\net10.0\\RtkSharp.dll\n" +
+            "  RtkSharp.Tests -> C:\\Development\\rtksharp\\RtkSharp.Tests\\bin\\Release\\net10.0\\RtkSharp.Tests.dll\n" +
+            "  RtkSharp.ParityTests -> C:\\Development\\rtksharp\\RtkSharp.ParityTests\\bin\\Release\\net10.0\\RtkSharp.ParityTests.dll\n" +
+            "  RtkSharp.Filters.Tests -> C:\\Development\\rtksharp\\RtkSharp.Filters.Tests\\bin\\Release\\net10.0\\RtkSharp.Filters.Tests.dll\n" +
+            "\n" +
+            "Build succeeded.\n" +
+            "    0 Warning(s)\n" +
+            "    0 Error(s)\n" +
+            "\n" +
+            "Time Elapsed 00:00:17.29\n";
+
+        var summary = DotnetFilters.ParseBuildFromText(raw);
+
+        Assert.True(summary.Succeeded);
+        Assert.Equal(5, summary.ProjectCount);
     }
 
     [Fact]
