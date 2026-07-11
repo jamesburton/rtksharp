@@ -12,13 +12,16 @@
   <a href="https://opensource.org/licenses/Apache-2.0"><img src="https://img.shields.io/badge/License-Apache_2.0-blue.svg" alt="License: Apache 2.0"></a>
   <a href="https://discord.gg/RySmvNF5kF"><img src="https://img.shields.io/discord/1470188214710046894?label=Discord&logo=discord" alt="Discord"></a>
   <a href="https://formulae.brew.sh/formula/rtk"><img src="https://img.shields.io/homebrew/v/rtk" alt="Homebrew"></a>
+  <a href="https://www.nuget.org/packages/RtkSharp"><img src="https://img.shields.io/nuget/v/RtkSharp?label=NuGet%3A%20RtkSharp" alt="NuGet: RtkSharp"></a>
+  <a href="https://www.nuget.org/packages/RtkSharp.Filters"><img src="https://img.shields.io/nuget/v/RtkSharp.Filters?label=NuGet%3A%20RtkSharp.Filters" alt="NuGet: RtkSharp.Filters"></a>
 </p>
 
 <p align="center">
-  <a href="https://www.rtk-ai.app">Website</a> &bull;
   <a href="#installation">Install</a> &bull;
-  <a href="https://www.rtk-ai.app/guide/troubleshooting">Troubleshooting</a> &bull;
-  <a href="docs/contributing/ARCHITECTURE.md">Architecture</a> &bull;
+  <a href="#commands">Commands</a> &bull;
+  <a href="RESULTS.md">Measured Results</a> &bull;
+  <a href="#rtksharpfilters-embeddable-library">RtkSharp.Filters</a> &bull;
+  <a href="docs/parity/">Parity Docs</a> &bull;
   <a href="https://discord.gg/RySmvNF5kF">Discord</a>
 </p>
 
@@ -34,7 +37,24 @@
 
 ---
 
-rtk filters and compresses command outputs before they reach your LLM context. Single Rust binary, 100+ supported commands, <10ms overhead.
+> **The upstream Rust codebase has moved into [`rust-original/`](rust-original/README.md).**
+> For that Rust CLI's own installation and usage docs, go to the upstream project directly:
+> **[rtk-ai/rtk](https://github.com/rtk-ai/rtk)**. This fork does not build or release the Rust
+> binary — the code under `rust-original/` is kept here and actively maintained, but only to
+> **track and verify feature parity** with upstream: `RtkSharp.ParityTests` builds it as an
+> oracle and diffs its output against this fork's own rebuild command-by-command, and the
+> `upstream-main` branch tracks `upstream/master` so upstream changes can be spotted and ported.
+> It is not a release target of this repository.
+>
+> **Everything below is this fork's own from-scratch .NET rebuild** — `RtkSharp` (the `rtk` CLI,
+> published as a .NET global tool) and `RtkSharp.Filters` (the same filtering logic as an
+> embeddable library) — which *is* the actively developed and released artifact of this repo,
+> published to [NuGet.org](https://www.nuget.org/profiles/jamesburton). It targets behavioral
+> parity with the Rust original (same commands, same filtering strategies, same config file
+> shape) while being a native .NET tool: no Rust toolchain, no separate binary download, install
+> via `dotnet tool install`.
+
+rtk filters and compresses command outputs before they reach your LLM context. This fork's rebuild targets full parity with the upstream Rust CLI: 60+ supported commands, single `dotnet tool install`, no Rust toolchain required.
 
 ## Token Savings (30-min Claude Code Session)
 
@@ -55,49 +75,42 @@ rtk filters and compresses command outputs before they reach your LLM context. S
 | **Total** | | **~118,000** | **~23,900** | **-80%** |
 
 > Estimates based on medium-sized TypeScript/Rust projects. Actual savings vary by project size.
+> For real measured numbers (not estimates) from this fork's `RtkSharp` rebuild, run against this
+> repository's own codebase, see **[RESULTS.md](RESULTS.md)**.
 
 ## Installation
 
-### Homebrew (recommended)
+### .NET Global Tool (all platforms)
+
+Requires the [.NET 10 SDK](https://dotnet.microsoft.com/download) (or a runtime capable of running a global tool). Works identically on Windows, macOS, and Linux:
 
 ```bash
-brew install rtk
+dotnet tool install -g RtkSharp
 ```
 
-### Quick Install (Linux/macOS)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
-```
-
-> Installs to `~/.local/bin`. Add to PATH if needed:
-> ```bash
-> echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
-> ```
-
-### Cargo
-
-```bash
-cargo install --git https://github.com/rtk-ai/rtk
-```
-
-### Pre-built Binaries
-
-Download from [releases](https://github.com/rtk-ai/rtk/releases):
-- macOS: `rtk-x86_64-apple-darwin.tar.gz` / `rtk-aarch64-apple-darwin.tar.gz`
-- Linux: `rtk-x86_64-unknown-linux-musl.tar.gz` / `rtk-aarch64-unknown-linux-gnu.tar.gz`
-- Windows: `rtk-x86_64-pc-windows-msvc.zip`
-
-> **Windows users**: Extract the zip and place `rtk.exe` somewhere in your PATH (e.g. `C:\Users\<you>\.local\bin`). Run RTK from **Command Prompt**, **PowerShell**, or **Windows Terminal** — do not double-click the `.exe` (it will flash and close). For the best experience, use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) where the full hook system works natively. See [Windows setup](#windows) below for details.
+This installs the `rtk` command onto your PATH (via `dotnet tool`'s standard global-tool shim — no separate binary download, no Rust toolchain).
 
 ### Verify Installation
 
 ```bash
-rtk --version   # Should show "rtk 0.28.2"
+rtk --version   # Prints the installed RtkSharp version
 rtk gain        # Should show token savings stats
 ```
 
-> **Name collision warning**: Another project named "rtk" (Rust Type Kit) exists on crates.io. If `rtk gain` fails, you have the wrong package. Use `cargo install --git` above instead.
+### Update / Uninstall
+
+```bash
+dotnet tool update -g RtkSharp     # Update to the latest published version
+dotnet tool uninstall -g RtkSharp  # Remove
+```
+
+### Prerelease builds
+
+Every push to this fork's `develop` branch publishes a prerelease (`X.Y.Z-dev.N`); `main` publishes stable. To try the latest prerelease:
+
+```bash
+dotnet tool install -g RtkSharp --prerelease
+```
 
 ## Quick Start
 
@@ -205,9 +218,11 @@ rtk rubocop                     # Ruby linting (JSON, -60%+)
 rtk pnpm list                   # Compact dependency tree
 rtk pip list                    # Python packages (auto-detect uv)
 rtk pip outdated                # Outdated packages
-rtk bundle install              # Ruby gems (strip Using lines)
 rtk prisma generate             # Schema generation (no ASCII art)
 ```
+
+> Ruby gems: `rtk rake`/`rtk rspec`/`rtk rubocop` automatically wrap with `bundle exec` when a
+> `Gemfile` is present — there is no separate standalone `rtk bundle` command.
 
 ### AWS
 ```bash
@@ -233,15 +248,6 @@ rtk kubectl services            # Compact service list
 rtk oc get pods                 # OpenShift pod summary
 rtk oc get services             # OpenShift service list
 rtk oc logs <pod>               # Deduplicated logs
-```
-
-### Infrastructure as Code
-```bash
-rtk pulumi preview              # Strip header/URL/duration noise
-rtk pulumi up                   # Compact apply output
-rtk pulumi destroy              # Compact destroy output
-rtk pulumi refresh              # Drift summary
-rtk pulumi stack                # Stack metadata (strips owner/timestamps)
 ```
 
 ### Data & Analytics
@@ -328,33 +334,33 @@ After install, **restart Claude Code**.
 
 ## Windows
 
-RTK works on Windows with some limitations. The auto-rewrite hook (`rtk-rewrite.sh`) requires a Unix shell, so on native Windows RTK falls back to **CLAUDE.md injection mode** — your AI assistant receives RTK instructions but commands are not rewritten automatically.
+RtkSharp is itself a native .NET tool (built and tested on Windows first — this fork's primary
+dev machine), so filters, `rtk init`, and `rtk gain`/analytics all work fully on native Windows.
+The one limitation carried over from the Rust original: the Claude Code/Cursor auto-rewrite hook
+is still a `rtk-rewrite.sh` **Bash** script (same mechanism as upstream, for compatibility with
+Claude Code's hook system), so it needs a Unix shell to actually execute. On native Windows,
+`rtk init -g` falls back to **CLAUDE.md injection mode** — your AI assistant receives RTK
+instructions but commands are not rewritten automatically.
 
-### Recommended: WSL (full support)
+### Recommended: WSL (full auto-rewrite support)
 
-For the best experience, use [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) (Windows Subsystem for Linux). Inside WSL, RTK works exactly like Linux — full hook support, auto-rewrite, everything:
+Inside [WSL](https://learn.microsoft.com/en-us/windows/wsl/install), the hook runs like Linux —
+full auto-rewrite:
 
 ```bash
-# Inside WSL
-curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+# Inside WSL, once .NET is installed
+dotnet tool install -g RtkSharp
 rtk init -g
 ```
 
-### Native Windows (limited support)
-
-On native Windows (cmd.exe / PowerShell), RTK filters work but the hook does not auto-rewrite commands:
+### Native Windows (filters + CLI fully work; hook falls back)
 
 ```powershell
-# 1. Download and extract rtk-x86_64-pc-windows-msvc.zip from releases
-# 2. Add rtk.exe to your PATH
-# 3. Initialize (falls back to CLAUDE.md injection)
-rtk init -g
-# 4. Use rtk explicitly
-rtk cargo test
+dotnet tool install -g RtkSharp
+rtk init -g          # Falls back to CLAUDE.md injection (no auto-rewrite)
+rtk cargo test        # Use rtk explicitly instead
 rtk git status
 ```
-
-**Important**: Do not double-click `rtk.exe` — it is a CLI tool that prints usage and exits immediately. Always run it from a terminal (Command Prompt, PowerShell, or Windows Terminal).
 
 | Feature | WSL | Native Windows |
 |---------|-----|----------------|
@@ -365,7 +371,7 @@ rtk git status
 
 ## Supported AI Tools
 
-RTK supports 14 AI coding tools. Each integration rewrites shell commands to `rtk` equivalents for 60-90% token savings where the agent supports command interception.
+This rebuild's `rtk init` ports all 14 of upstream's AI-tool integrations. Each rewrites shell commands to `rtk` equivalents for 60-90% token savings where the agent supports command interception.
 
 | Tool | Install | Method |
 |------|---------|--------|
@@ -389,77 +395,165 @@ For per-agent setup details, override controls, and graceful degradation, see th
 
 ## Configuration
 
-`~/.config/rtk/config.toml` (macOS: `~/Library/Application Support/rtk/config.toml`):
+Single-tier `config.toml` (no per-project `.rtk/config.toml` tier — same as upstream), managed
+via `rtk config`. Location follows OS convention (overridable with `RTK_CONFIG_DIR_OVERRIDE`):
+
+- **Windows**: `%APPDATA%\rtk\config.toml`
+- **macOS**: `~/Library/Application Support/rtk/config.toml`
+- **Linux**: `$XDG_CONFIG_HOME/rtk/config.toml`, falling back to `~/.config/rtk/config.toml`
 
 ```toml
-[hooks]
-exclude_commands = ["curl", "playwright"]  # skip rewrite for these
+[tracking]
+enabled = true              # command tracking / token-savings metrics
+history_days = 90
+# database_path = "..."     # override the SQLite tracking DB location
 
-[tee]
-enabled = true          # save raw output on failure (default: true)
-mode = "failures"       # "failures", "always", or "never"
+[display]
+colors = true
+emoji = true
+max_width = 120
+
+[filters]
+ignore_dirs = [".git", "node_modules", "target", "__pycache__", ".venv", "vendor"]
+ignore_files = ["*.lock", "*.min.js", "*.min.css"]
+
+[telemetry]
+enabled = false              # opt-in only, see Privacy & Telemetry below
+# consent_given = true
+# consent_date = "..."
+
+[hooks]
+exclude_commands = ["curl", "playwright"]  # skip auto-rewrite for these
+transparent_prefixes = []    # e.g. "docker exec mycontainer", "poetry run", "bundle exec"
+
+[limits]
+grep_max_results = 200
+grep_max_per_file = 25
+status_max_files = 15
+status_max_untracked = 10
+passthrough_max_chars = 2000
 ```
 
-When a command fails, RTK saves the full unfiltered output so the LLM can read it without re-executing:
+```bash
+rtk config             # Show current config (creates the file with defaults if missing)
+rtk trust              # Trust a project's .rtk/filters.toml (custom filter overrides)
+rtk untrust            # Revoke trust
+```
+
+When a command fails (or, for some filters like `curl`, unconditionally on large output), RTK
+saves the full unfiltered output to disk so the LLM can inspect it without re-running the command:
 
 ```
 FAILED: 2/15 tests
-[full output: ~/.local/share/rtk/tee/1707753600_cargo_test.log]
+[full output: ~/AppData/Local/rtk/tee/1707753600_cargo_test.log]
 ```
 
-For the full config reference (all sections, env vars, per-project filters), see the [Configuration guide](https://www.rtk-ai.app/guide/getting-started/configuration).
+> **Known gap vs. upstream:** tee-to-disk itself is fully implemented (`Enabled`/`Mode`/
+> `MaxFiles`/`MaxFileSize`/`Directory`, same defaults as Rust: on-failure, 1MB cap, 20 files
+> retained), but it is not yet wired to `config.toml` — there is no `[tee]` table to configure it
+> with. Control it via environment variables instead: `RTK_TEE=0` disables teeing entirely;
+> `RTK_TEE_DIR` overrides the output directory.
 
 ### Uninstall
 
 ```bash
-rtk init -g --uninstall     # Remove hook, RTK.md, settings.json entry
-cargo uninstall rtk          # Remove binary
-brew uninstall rtk           # If installed via Homebrew
+rtk init -g --uninstall        # Remove hook, RTK.md, settings.json entry
+dotnet tool uninstall -g RtkSharp   # Remove the CLI itself
 ```
+
+## RtkSharp.Filters (embeddable library)
+
+Everything above is the `rtk` CLI (`RtkSharp` package). If you're building a .NET agent runtime
+that already executes commands and captures `stdout`/`stderr`/exit code itself, shelling out to a
+separate `rtk` process is unnecessary — `RtkSharp.Filters` exposes the exact same filters as an
+in-process library instead:
+
+```bash
+dotnet add package RtkSharp.Filters
+```
+
+```csharp
+using RtkSharp.Filters;
+
+// You already ran the command and captured its output somewhere:
+string command = "git";
+string[] args = ["status"];
+string stdout = /* captured stdout */;
+string stderr = /* captured stderr */;
+int exitCode = /* captured exit code */;
+
+if (RtkFilters.IsRegistered(command))
+{
+    string filtered = RtkFilters.Filter(command, args, stdout, stderr, exitCode);
+    // pass `filtered` to the LLM instead of the raw output
+}
+```
+
+`RtkFilters.TryParseSingleCommand(commandLine, out command, out args)` is also available to split
+a raw shell command line (e.g. `"git status"`) into `command`/`args`, but only for a single,
+non-compound command — it returns `false` for anything with pipes, `&&`/`||`/`;`, or redirects,
+so compound commands should be filtered per-segment or left unfiltered.
+
+Supported command names (dispatch table in `RtkSharp.Filters/FilterRegistry.cs`): `git`, `diff`,
+`gt`, `glab`, `gh`, `dotnet`, `npm`, `pnpm`, `tsc`, `vitest`, `jest`, `playwright`, `prisma`,
+`cargo`, `go`, `golangci-lint`, `ruff`, `pytest`, `mypy`, `pip`, `rake`, `rubocop`, `rspec`,
+`gradlew`, `mvn`, `aws`, `az`, `docker`, `kubectl`, `oc`, `curl`, `wget`, `psql`, `ls`, `read`,
+`wc`, `tree`, `find`, `grep`, `pipe`, `test`, `format`, `json`, `deps`, `log`, `summary`.
+`RtkFilters.IsRegistered(command)` is the source of truth — check it before calling `Filter`, or
+catch the `InvalidOperationException` it throws for unregistered commands and fall back to raw
+output.
+
+**Disclosed side effect:** unlike every other filter, `Filter("curl", ...)` may write a copy of
+large/non-JSON output to disk (the same tee-to-disk behavior described above), unless disabled via
+`RTK_TEE=0`. See `RtkFilters`'s XML doc for details.
+
+See [`third-party/treesitter-dotnet-trimmed/README.md`](third-party/treesitter-dotnet-trimmed/README.md)
+for how the `RtkSharp.TreeSitter.Trimmed` transitive dependency (used by `RtkSharp.Filters`'s AST
+analyzers) is built and published.
 
 ## Documentation
 
-- **[rtk-ai.app/guide](https://www.rtk-ai.app/guide)** — full user guide (installation, supported agents, what gets optimized, analytics, configuration, troubleshooting)
-- **[INSTALL.md](INSTALL.md)** — detailed installation reference
-- **[ARCHITECTURE.md](docs/contributing/ARCHITECTURE.md)** — system design and technical decisions
-- **[CONTRIBUTING.md](CONTRIBUTING.md)** — contribution guide
-- **[SECURITY.md](SECURITY.md)** — security policy
+Docs specific to this fork's .NET rebuild:
+
+- **[`docs/parity/`](docs/parity/)** — the authoritative parity-tracking area: `command-inventory.md`
+  (every command from the Rust `Commands` enum and its port disposition), `filter-inventory.md`,
+  `hook-inventory.md`, `rewrite-rule-inventory.md`, plus a dedicated `*-parity-report.md` per
+  command family, documenting confirmed-identical behavior and any deliberate deviations from the
+  Rust oracle.
+- **[`rust-original/README.md`](rust-original/README.md)** — why the Rust code is kept, how to
+  build it as the parity oracle, and how it's cross-referenced from the test suite.
+- **[`third-party/treesitter-dotnet-trimmed/README.md`](third-party/treesitter-dotnet-trimmed/README.md)** —
+  how the trimmed `RtkSharp.TreeSitter.Trimmed` NuGet dependency is built and published.
+
+Docs describing the **upstream Rust CLI** specifically (installation/build/architecture for the
+Rust binary this fork does not release) — useful if you're working inside `rust-original/` or
+comparing against upstream, not for using this fork's `RtkSharp` tool:
+
+- **[rtk-ai.app/guide](https://www.rtk-ai.app/guide)** — upstream's full user guide
+- **[INSTALL.md](INSTALL.md)** — upstream Rust binary installation reference
+- **[ARCHITECTURE.md](docs/contributing/ARCHITECTURE.md)** — upstream Rust system design
+- **[SECURITY.md](SECURITY.md)** / **[CONTRIBUTING.md](CONTRIBUTING.md)** — general/upstream policy docs
 
 ## Privacy & Telemetry
 
-RTK can collect **anonymous, aggregate usage metrics** once per day. Telemetry is **disabled by default** and requires **explicit opt-in consent** (GDPR Art. 6, 7) during `rtk init` or via `rtk telemetry enable`. This data helps us build a better product: identifying which commands need filters, which filters need improvement, and how much value RTK delivers. For the full list of fields, data handling, and contributor guidelines, see **[docs/TELEMETRY.md](docs/TELEMETRY.md)**.
+Upstream's Rust CLI collects anonymous, opt-in aggregate usage metrics (see
+**[docs/TELEMETRY.md](docs/TELEMETRY.md)** for the full field list and rationale, if you're using
+the Rust binary from `rust-original/` or upstream directly).
 
-**What is collected and why:**
+**This .NET rebuild currently ports only the consent-management flow, not the data-collection
+pipeline itself** — there is no telemetry ping sent anywhere yet. `rtk telemetry` manages the same
+consent state the Rust CLI would read (so config stays forward-compatible if/when collection is
+ported), but as of today, running any of the commands below changes local consent flags only:
 
-| Category | Data | Why |
-|----------|------|-----|
-| Identity | Salted device hash (SHA-256, not reversible) | Count unique installations without tracking individuals |
-| Environment | RTK version, OS, architecture, install method | Know which platforms to support and test |
-| Usage volume | Command count (24h), total commands, tokens saved (24h/30d/total) | Measure adoption and value delivered |
-| Quality | Top 5 passthrough commands (0% savings), parse failure count, commands with <30% savings | Identify missing filters and weak ones to improve |
-| Ecosystem | Command category distribution (e.g. git 45%, cargo 20%, js 15%) | Prioritize filter development for popular ecosystems |
-| Retention | Days since first use, active days in last 30 | Understand engagement and detect churn |
-| Adoption | AI agent hook type (claude/gemini/codex), custom TOML filter count | Track integration coverage and DSL adoption |
-| Configuration | Whether config.toml exists, number of excluded commands, project count | Understand user maturity and customization patterns |
-| Features | Usage counts for meta-commands (gain, discover, proxy, verify) | Know which RTK features are valued vs unused |
-| Economics | Estimated USD savings (based on API token pricing) | Quantify the value RTK provides to users |
-
-All data is **aggregate counts or anonymized command names** (first 3 words, no arguments). Top commands report only tool names (e.g. "git", "cargo"), never full command lines.
-
-**What is NOT collected:** source code, file paths, command arguments, secrets, environment variables, personal data, or repository contents.
-
-**Manage telemetry:**
 ```bash
 rtk telemetry status     # Check current consent state
-rtk telemetry enable     # Give consent (interactive prompt)
-rtk telemetry disable    # Withdraw consent — stops all collection immediately
-rtk telemetry forget     # Withdraw consent + delete all local data + request server-side erasure
+rtk telemetry enable     # Give consent (interactive prompt) — no data is actually sent yet
+rtk telemetry disable    # Withdraw consent
+rtk telemetry forget     # Withdraw consent + delete local consent state
 ```
 
-**Override via environment:**
-```bash
-export RTK_TELEMETRY_DISABLED=1   # Blocks telemetry regardless of consent
-```
+If this changes (data collection gets ported), this section and `docs/parity/` will be updated
+together — check `docs/parity/telemetry-parity-report.md` for the current, authoritative status.
 
 ## Star History
 
@@ -492,9 +586,9 @@ export RTK_TELEMETRY_DISABLED=1   # Blocks telemetry regardless of consent
 
 ## Contributing
 
-Contributions welcome! Please open an issue or PR on [GitHub](https://github.com/rtk-ai/rtk).
+For the upstream Rust CLI: open an issue or PR on [rtk-ai/rtk](https://github.com/rtk-ai/rtk) and join the community on [Discord](https://discord.gg/RySmvNF5kF).
 
-Join the community on [Discord](https://discord.gg/RySmvNF5kF).
+For this fork's .NET rebuild specifically (`RtkSharp`/`RtkSharp.Filters`): open an issue or PR on [this repository](https://github.com/jamesburton/rtksharp).
 
 ## License
 
