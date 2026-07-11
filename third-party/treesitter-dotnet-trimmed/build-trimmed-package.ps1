@@ -67,9 +67,19 @@ try {
         ($beforeBytes / 1MB), ($afterBytes / 1MB), $removed)
 
     # Drop the original OPC signing/metadata parts - not needed for a local-feed package
-    # and would otherwise carry a stale signature over content we've changed.
-    Remove-Item "$extracted\.signature.p7s", "$extracted\package", "$extracted\_rels", "$extracted\[Content_Types].xml" `
-        -Recurse -Force -ErrorAction SilentlyContinue
+    # and would otherwise carry a stale signature over content we've changed. Removed via
+    # -LiteralPath in a loop, not a single -Path array: "[Content_Types].xml" contains
+    # bracket characters that -Path interprets as a wildcard character class (matching
+    # nothing), which silently no-ops the whole comma-separated Remove-Item call and
+    # leaves every listed part in place -- the survivors then collide with the parts
+    # `nuget.exe pack` regenerates below, producing a nupkg nuget.org rejects for
+    # duplicate files in the same folder.
+    foreach ($part in @('.signature.p7s', 'package', '_rels', '[Content_Types].xml')) {
+        $partPath = Join-Path $extracted $part
+        if (Test-Path -LiteralPath $partPath) {
+            Remove-Item -LiteralPath $partPath -Recurse -Force
+        }
+    }
 
     $nuspecPath = Join-Path $extracted "$PackageId.nuspec"
     @"
