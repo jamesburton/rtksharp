@@ -166,6 +166,11 @@ rtk grep "pattern" .            # Grouped search results
 rtk diff file1 file2            # Condensed diff (exit 1 if files differ)
 ```
 
+> **C#/.NET codebases**: `rtk read file.cs -l aggressive` has C#-specific signature/import
+> recognition (modifiers, `using` directives, `class`/`struct`/`record`/etc., methods,
+> constructors) — measured at 90%+ byte savings on this repo's own `.cs` files, see
+> [RESULTS.md](RESULTS.md).
+
 ### Git
 ```bash
 rtk git status                  # Compact status

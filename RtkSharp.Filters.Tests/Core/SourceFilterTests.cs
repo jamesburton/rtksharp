@@ -211,20 +211,99 @@ public sealed class SourceFilterTests
         Assert.Equal("class Foo {}", csharpResult);
     }
 
-    // Same regexes as every other language (per the user's request: reuse the existing
-    // heuristic verbatim, not a C#-aware enhancement of it), so C#'s own idioms trip the same
-    // known limitations Java/JS already have against this heuristic: IMPORT_PATTERN requires a
-    // literal "use " prefix, so C#'s "using System;" is not recognized as an import and is
-    // dropped; FUNC_SIGNATURE has no "void"/"public" keywords, so only the bare "class Foo {"
-    // (not "public class Foo {") is recognized as a signature. Traced by hand against the
-    // algorithm and confirmed by running the actual port (no Rust oracle exists for .cs, since
-    // Rust's Language enum doesn't have this case at all).
+    // C# gets its own signature/import patterns (CSharpTypeSignature/CSharpMemberSignature/
+    // CSharpImport in AggressiveFilter), NOT the generic FuncSignature/ImportPattern every other
+    // language shares. An earlier version of this filter reused the shared heuristic verbatim for
+    // C# too, but that heuristic only recognizes Rust/Python/JS-family keywords ("pub",
+    // "fn"/"def"/"func", "use "/"import ") — none of which appear in idiomatic C#
+    // ("using System;", "public static class Foo") — so real .cs files collapsed to near-empty
+    // output instead of a useful signature outline. Since Language.CSharp has no Rust oracle
+    // counterpart (RtkSharp-only addition — see this file's Language enum remarks), a
+    // C#-specific pattern here carries zero parity risk; every other language's tests below and
+    // in the "ported" sections above are unaffected (unchanged FuncSignature/ImportPattern path).
     [Fact]
-    public void AggressiveFilter_CSharp_DropsUsingDirective_KeepsBareClassSignature()
+    public void AggressiveFilter_CSharp_KeepsUsingDirective_AndBareClassSignature()
     {
         const string code = "using System;\nclass Foo {\n    void Bar() {\n        var x = 1;\n    }\n}\n";
         var result = new AggressiveFilter().Filter(code, Language.CSharp);
-        Assert.Equal("class Foo {\n    void Bar() {\n    }", result);
+        // "using System;" is now kept (previously dropped). "void Bar()" has no access modifier
+        // (a local-function-style declaration with none is uncommon but legal), so it isn't
+        // recognized by CSharpMemberSignature (which requires >=1 modifier to avoid
+        // misclassifying call expressions like "Foo(bar)" as signatures) — its braces still
+        // survive via the generic brace-tracking fallback, just merged into the class's own body
+        // region rather than getting a distinct signature line + collapse marker of its own.
+        Assert.Equal("using System;\nclass Foo {\n    void Bar() {\n    }", result);
+    }
+
+    [Fact]
+    public void AggressiveFilter_CSharp_KeepsModifierQualifiedTypeAndMemberSignatures()
+    {
+        const string code =
+            "using System;\nusing System.Collections.Generic;\n\n" +
+            "namespace RtkSharp.Demo;\n\n" +
+            "public static class Widget\n{\n" +
+            "    private const int MaxCount = 10;\n\n" +
+            "    public static string Format(string input, int count)\n    {\n" +
+            "        var result = input.Trim();\n" +
+            "        for (var i = 0; i < count; i++)\n        {\n" +
+            "            result += \".\";\n" +
+            "        }\n" +
+            "        return result;\n" +
+            "    }\n\n" +
+            "    internal Widget()\n    {\n" +
+            "        Console.WriteLine(\"created\");\n" +
+            "    }\n" +
+            "}\n";
+
+        var result = new AggressiveFilter().Filter(code, Language.CSharp);
+
+        Assert.Contains("using System;", result);
+        Assert.Contains("using System.Collections.Generic;", result);
+        Assert.Contains("namespace RtkSharp.Demo;", result);
+        Assert.Contains("public static class Widget", result);
+        Assert.Contains("public static string Format(string input, int count)", result);
+        Assert.Contains("internal Widget()", result);
+        // Body statements are excluded — the actual point of "aggressive": a signature outline,
+        // not the implementation.
+        Assert.DoesNotContain("input.Trim()", result);
+        Assert.DoesNotContain("Console.WriteLine", result);
+        Assert.DoesNotContain("result +=", result);
+        // Known, pre-existing heuristic limitation shared with every other language (not
+        // introduced by the C# patterns above): a class/struct-body-scope field or const
+        // declaration that isn't itself a recognized signature is silently dropped while nested
+        // one level inside a matched type's body-tracking region — the trailing
+        // const/static-prefix fallback below only fires when NOT already inside a tracked body.
+        // Documented here rather than "fixed" because fixing it means restructuring the shared
+        // brace-tracking state machine every ported language's oracle-verified output also
+        // depends on.
+        Assert.DoesNotContain("MaxCount", result);
+    }
+
+    [Fact]
+    public void AggressiveFilter_CSharp_SemicolonTerminatedDeclaration_DoesNotSwallowFollowingLine()
+    {
+        // A self-contained declaration (no body to collapse) must not put the filter into
+        // body-tracking mode — otherwise the next unrelated top-level line gets misread as the
+        // end of a (nonexistent) body and dropped or mislabeled.
+        const string code =
+            "internal sealed partial class GainJsonContext : JsonSerializerContext;\n" +
+            "public static class NextThing\n{\n}\n";
+
+        var result = new AggressiveFilter().Filter(code, Language.CSharp);
+
+        Assert.Contains("internal sealed partial class GainJsonContext : JsonSerializerContext;", result);
+        Assert.Contains("public static class NextThing", result);
+    }
+
+    [Fact]
+    public void AggressiveFilter_CSharp_DoesNotMatchArbitraryCallExpressionAsSignature()
+    {
+        // "Console.WriteLine(x);" has no modifier prefix, so CSharpMemberSignature must not treat
+        // it as a method declaration — this is the guard that keeps the heuristic from exploding
+        // back into "everything looks like a signature" territory.
+        const string code = "public static void Run()\n{\n    Console.WriteLine(\"hi\");\n}\n";
+        var result = new AggressiveFilter().Filter(code, Language.CSharp);
+        Assert.DoesNotContain("Console.WriteLine", result);
     }
 
     // ---- SourceFilter.GetFilter selects the right strategy ----

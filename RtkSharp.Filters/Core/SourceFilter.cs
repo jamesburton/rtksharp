@@ -292,8 +292,41 @@ public sealed partial class AggressiveFilter : IFilterStrategy
         RegexOptions.Compiled | RegexOptions.CultureInvariant)]
     private static partial Regex BuildFuncSignatureRegex();
 
+    // C#-specific patterns (see AggressiveFilter_CSharp_* tests for the rationale/history):
+    // FuncSignature/ImportPattern above only recognize Rust/Python/JS-family keywords ("pub",
+    // "fn"/"def"/"func", "use "/"import ") ported verbatim from filter.rs. C# uses none of
+    // these — "using System;" doesn't start with "use ", and "public static class Foo" doesn't
+    // start with "pub "/bare "class" — so against real .cs files almost nothing matched either
+    // pattern, collapsing whole files to near-empty output instead of a useful signature outline.
+    // Since Language.CSharp has no Rust oracle counterpart (RtkSharp-only addition, see this
+    // file's Language enum remarks), a language-specific pattern here carries zero parity risk
+    // for the ported languages Rust/Python/JS/Go/etc. still use FuncSignature/ImportPattern
+    // unchanged above.
+    [GeneratedRegex(
+        @"^using\s+(static\s+)?[\w.]+(\s*=\s*[\w.<>,\[\]]+)?\s*;",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex BuildCSharpImportRegex();
+
+    // Type declarations: (modifiers)* (class|struct|interface|enum|record|delegate|namespace) Name
+    [GeneratedRegex(
+        @"^((public|private|protected|internal|static|sealed|abstract|virtual|override|readonly|partial|async|unsafe|extern|new|required|file)\s+)*(class|struct|interface|enum|record|delegate|namespace)\s+[\w.]+",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex BuildCSharpTypeSignatureRegex();
+
+    // Method/constructor declarations: at least one modifier, then an optional return type, then
+    // Name(. Requiring a modifier avoids misclassifying arbitrary body statements/calls (e.g.
+    // "if (x)", "Foo(bar)") as signatures, mirroring FuncSignature's own "don't over-match"
+    // intent for the other languages.
+    [GeneratedRegex(
+        @"^((public|private|protected|internal|static|sealed|abstract|virtual|override|readonly|partial|async|unsafe|extern|new|required)\s+)+([\w<>\[\],.?]+\s+)?\w+\s*\(",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant)]
+    private static partial Regex BuildCSharpMemberSignatureRegex();
+
     private static readonly Regex ImportPattern = BuildImportPatternRegex();
     private static readonly Regex FuncSignature = BuildFuncSignatureRegex();
+    private static readonly Regex CSharpImport = BuildCSharpImportRegex();
+    private static readonly Regex CSharpTypeSignature = BuildCSharpTypeSignatureRegex();
+    private static readonly Regex CSharpMemberSignature = BuildCSharpMemberSignatureRegex();
     private static readonly MinimalFilter Minimal = new();
 
     /// <inheritdoc />
@@ -306,6 +339,7 @@ public sealed partial class AggressiveFilter : IFilterStrategy
             return Minimal.Filter(content, language);
         }
 
+        var isCSharp = language == Language.CSharp;
         var minimal = Minimal.Filter(content, language);
         var result = new StringBuilder(minimal.Length / 2);
         var braceDepth = 0;
@@ -315,17 +349,32 @@ public sealed partial class AggressiveFilter : IFilterStrategy
         {
             var trimmed = line.Trim();
 
-            if (ImportPattern.IsMatch(trimmed))
+            var isImport = isCSharp ? CSharpImport.IsMatch(trimmed) : ImportPattern.IsMatch(trimmed);
+            if (isImport)
             {
                 result.Append(line).Append('\n');
                 continue;
             }
 
-            if (FuncSignature.IsMatch(trimmed))
+            var isSignature = isCSharp
+                ? CSharpTypeSignature.IsMatch(trimmed) || CSharpMemberSignature.IsMatch(trimmed)
+                : FuncSignature.IsMatch(trimmed);
+            if (isSignature)
             {
                 result.Append(line).Append('\n');
-                inImplBody = true;
-                braceDepth = 0;
+                // A C# signature line ending in ';' is fully self-contained (e.g.
+                // "internal sealed partial class Foo;" or an abstract/interface method
+                // declaration) — it has no body to collapse, so don't enter body-tracking mode
+                // or the next unrelated line would wrongly get a synthetic
+                // "// ... implementation" marker appended when inImplBody closes on it. Scoped to
+                // C# only — the ported languages' oracle-verified output must stay byte-identical,
+                // and this guard has no equivalent in filter.rs.
+                if (!isCSharp || !trimmed.EndsWith(';'))
+                {
+                    inImplBody = true;
+                    braceDepth = 0;
+                }
+
                 continue;
             }
 

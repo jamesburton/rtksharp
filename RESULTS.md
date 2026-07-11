@@ -28,6 +28,8 @@ Real measurements, not estimates. Run against this repository itself (`RtkSharp`
 | `wc -l *.cs` (63 files) | 2,950 | 1,615 | **45.3%** | 128 | 127 | 0.8% |
 | `read FilterRegistry.cs` (default level) | 25,336 | 25,336 | 0% | 2,423 | 2,423 | 0% |
 | `read FilterRegistry.cs -l minimal` | 25,336 | 11,949 | **52.8%** | 2,423 | 984 | **59.4%** |
+| `read FilterRegistry.cs -l aggressive` | 25,336 | 2,081 | **91.8%** | 2,423 | 197 | **91.9%** |
+| `read GainCommand.cs -l aggressive` | 39,695 | 3,617 | **90.9%** | 3,489 | 380 | **89.1%** |
 | `dotnet build` (clean, no warnings/errors) | 269 | 64 | **76.2%** | 22 | 10 | **54.5%** |
 
 ## Observations
@@ -44,12 +46,22 @@ Real measurements, not estimates. Run against this repository itself (`RtkSharp`
 - **`rtk read` with no `-l` flag makes zero changes** — this is expected, not a bug: the default
   filter level is a verbatim passthrough (only `-n`/line-numbering is applied at that tier). Real
   reduction requires an explicit level: `-l minimal` cut this file by more than half.
-- **`-l aggressive` produced unreliable results on the `.cs` files tested** (near-empty or
-  seemingly-arbitrary single-line output rather than the expected "signatures only" view) — this
-  looks like a real gap in the C# AST-backed aggressive tier, not something addressed in this
-  session. Worth checking against `docs/parity/` or filing as a tracked issue before relying on
-  `-l aggressive` for C# sources; `-l minimal` was reliable in this testing and is what the results
-  above use.
+- **`-l aggressive` on `.cs` files was broken, then fixed, in this same testing pass.** The first
+  measurement run found it produced near-empty/garbage output on real C# files (root cause: its
+  signature/import regexes were ported verbatim from the Rust oracle and only recognize
+  Rust/Python/JS-family keywords — `fn`/`def`/`func`, `use `/`import ` — none of which appear in
+  C#, so `public static class Foo`/`using System;` matched nothing and almost the entire file was
+  treated as disposable "body" content). Since `Language.CSharp` has no Rust oracle counterpart
+  (an RtkSharp-only addition), C#-specific signature/import patterns were added
+  (`RtkSharp.Filters/Core/SourceFilter.cs`'s `AggressiveFilter`, gated on `language ==
+  Language.CSharp` so every other language's oracle-verified output is untouched) — see
+  `RtkSharp.Filters.Tests/Core/SourceFilterTests.cs` for the new coverage. Re-measured after the
+  fix: **91.8%/90.9%** byte savings on the same two files that previously produced near-nothing.
+  One known remaining limitation, documented in the tests rather than silently left unexplained: a
+  class-body-scope field/const declaration that isn't itself a recognized signature (e.g. `private
+  const int MaxCount = 10;` sitting directly inside a class body) is still dropped — a
+  pre-existing heuristic characteristic shared with every other language's brace-tracking, not
+  something touched by this fix.
 - **`dotnet build`'s 76%/54.5% savings come from an already-clean, warning-free build** — `rtk
   dotnet build` collapses that whole case down to a single `ok` summary line. This is the smallest
   possible raw log for that command; the relative savings on a build with real warnings/errors
