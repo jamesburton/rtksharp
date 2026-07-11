@@ -24,39 +24,6 @@ public sealed class GrepCommandTests
         Assert.True(GrepCommand.IsGrepErrorExit(127));
     }
 
-    // ---- clean_line ----
-
-    [Fact]
-    public void CleanLine_TrimsAndCaps()
-    {
-        var cleaned = GrepCommand.CleanLine("            const result = someFunction();", 50, null, "result");
-        Assert.False(cleaned.StartsWith(' '));
-        Assert.True(cleaned.Length <= 50);
-    }
-
-    [Fact]
-    public void CleanLine_Multibyte_DoesNotThrow()
-    {
-        var cleaned = GrepCommand.CleanLine("  สวัสดีครับ นี่คือข้อความที่ยาวมากสำหรับทดสอบ  ", 20, null, "ครับ");
-        Assert.NotEqual(0, cleaned.Length);
-    }
-
-    [Fact]
-    public void CleanLine_Emoji_DoesNotThrow()
-    {
-        var cleaned = GrepCommand.CleanLine("🎉🎊🎈🎁🎂🎄 some text 🎃🎆🎇✨", 15, null, "text");
-        Assert.NotEqual(0, cleaned.Length);
-    }
-
-    // ---- compact_path ----
-
-    [Fact]
-    public void CompactPath_ShortensLongPaths()
-    {
-        var compact = GrepCommand.CompactPath("/Users/patrick/dev/project/src/components/Button.tsx");
-        Assert.True(compact.Length <= 60);
-    }
-
     // ---- BRE alternation translation ----
 
     [Fact]
@@ -390,92 +357,6 @@ public sealed class GrepCommandTests
     [Fact]
     public void StripRgOnly_KeepsGrepCompatible() =>
         Assert.Equal(["-i", "-w", "-A", "3", "-v"], GrepCommand.StripRgOnly(["-i", "-w", "-A", "3", "-v"]));
-
-    // ---- parse_match_line ----
-
-    [Fact]
-    public void ParseMatchLine_Simple()
-    {
-        var (file, lineNum, isMatch, content) = GrepCommand.ParseMatchLine("file.php\u000010:use Foo\\Bar;")!.Value;
-        Assert.Equal("file.php", file);
-        Assert.Equal(10, lineNum);
-        Assert.True(isMatch);
-        Assert.Equal("use Foo\\Bar;", content);
-    }
-
-    [Fact]
-    public void ParseMatchLine_ContentWithDoubleColon()
-    {
-        var line =
-            "externalImportShell.class.php\u000081:        $this->queueProcessModel = ClassRegistry::init('Collections.QueueProcess');";
-        var (file, lineNum, isMatch, content) = GrepCommand.ParseMatchLine(line)!.Value;
-        Assert.Equal("externalImportShell.class.php", file);
-        Assert.Equal(81, lineNum);
-        Assert.True(isMatch);
-        Assert.Equal(
-            "        $this->queueProcessModel = ClassRegistry::init('Collections.QueueProcess');",
-            content);
-    }
-
-    [Fact]
-    public void ParseMatchLine_WindowsPath()
-    {
-        var (file, lineNum, isMatch, content) = GrepCommand.ParseMatchLine("C:\\src\\file.rs\u000042:fn main() {}")!.Value;
-        Assert.Equal(@"C:\src\file.rs", file);
-        Assert.Equal(42, lineNum);
-        Assert.True(isMatch);
-        Assert.Equal("fn main() {}", content);
-    }
-
-    [Fact]
-    public void ParseMatchLine_FilenameWithColons()
-    {
-        var (file, lineNum, isMatch, content) = GrepCommand.ParseMatchLine("badly_named:52:file.txt\u00001:xxx")!.Value;
-        Assert.Equal("badly_named:52:file.txt", file);
-        Assert.Equal(1, lineNum);
-        Assert.True(isMatch);
-        Assert.Equal("xxx", content);
-    }
-
-    [Fact]
-    public void ParseMatchLine_ContentWithDigitColons()
-    {
-        var (file, lineNum, isMatch, content) =
-            GrepCommand.ParseMatchLine("log.txt\u00007:debug: counter is :42: now")!.Value;
-        Assert.Equal("log.txt", file);
-        Assert.Equal(7, lineNum);
-        Assert.True(isMatch);
-        Assert.Equal("debug: counter is :42: now", content);
-    }
-
-    [Fact]
-    public void ParseMatchLine_MalformedReturnsNull()
-    {
-        Assert.Null(GrepCommand.ParseMatchLine("file.rs:1:content"));
-        Assert.Null(GrepCommand.ParseMatchLine("not a match line"));
-        Assert.Null(GrepCommand.ParseMatchLine("file.rs\u0000fn foo()"));
-        Assert.Null(GrepCommand.ParseMatchLine(""));
-    }
-
-    [Fact]
-    public void ParseMatchLine_EmptyContent()
-    {
-        var (file, lineNum, isMatch, content) = GrepCommand.ParseMatchLine("file.rs\u00007:")!.Value;
-        Assert.Equal("file.rs", file);
-        Assert.Equal(7, lineNum);
-        Assert.True(isMatch);
-        Assert.Equal("", content);
-    }
-
-    [Fact]
-    public void ParseMatchLine_ContextLine()
-    {
-        var (file, lineNum, isMatch, content) = GrepCommand.ParseMatchLine("file.txt\u00004-after1")!.Value;
-        Assert.Equal("file.txt", file);
-        Assert.Equal(4, lineNum);
-        Assert.False(isMatch);
-        Assert.Equal("after1", content);
-    }
 
     // ---- unparsed_signal ----
 

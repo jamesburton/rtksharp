@@ -20,7 +20,7 @@ public sealed class CargoCommandTests
     private static string RunBlockFilter(IStreamFilter filter, string input, int exitCode)
     {
         var output = new StringBuilder();
-        foreach (var line in ReadCommand.SplitLines(input))
+        foreach (var line in RtkSharp.Filters.Commands.System.ReadFilters.SplitLines(input))
         {
             var s = filter.FeedLine(line);
             if (s is not null)

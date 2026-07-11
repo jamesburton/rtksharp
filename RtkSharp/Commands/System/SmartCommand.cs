@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using RtkSharp.Core;
+using RtkSharp.Filters.Commands.System;
 
 namespace RtkSharp.Commands.System;
 
@@ -30,7 +31,7 @@ namespace RtkSharp.Commands.System;
 /// (<c>RtkSharp/Core/SourceFilter.cs</c>), the same enum <c>ReadCommand</c> uses for its
 /// <c>--level</c> filters — this is the C# equivalent of Rust's <c>crate::core::filter::Language</c>,
 /// already ported and shared rather than re-invented here. Extension extraction reuses
-/// <see cref="ReadCommand.GetExtension"/> for the same dotfile-safe <c>Path::extension()</c>
+/// <see cref="ReadFilters.GetExtension"/> for the same dotfile-safe <c>Path::extension()</c>
 /// semantics (a leading-dot-only name like <c>.gitignore</c> has no extension, unlike
 /// <see cref="Path.GetExtension(string)"/>).
 /// </para>
@@ -83,7 +84,7 @@ public static partial class SmartCommand
             throw new IOException($"Failed to read file: {parsed.File}: {ex.Message}", ex);
         }
 
-        var extension = ReadCommand.GetExtension(parsed.File);
+        var extension = ReadFilters.GetExtension(parsed.File);
         var lang = extension.Length > 0 ? LanguageExtensions.FromExtension(extension) : Language.Unknown;
 
         var summary = AnalyzeCode(content, lang);

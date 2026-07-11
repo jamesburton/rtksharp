@@ -188,7 +188,7 @@ public static class LintCommand
             Console.Error.Write("[warn] Linter process terminated abnormally (possibly out of memory)\n");
             if (!string.IsNullOrEmpty(result.Stderr))
             {
-                var lines = ReadCommand.SplitLines(result.Stderr).Take(5);
+                var lines = RtkSharp.Core.SourceFilterLineSplitter.SplitLines(result.Stderr).Take(5);
                 Console.Error.Write($"stderr: {string.Join('\n', lines)}\n");
             }
 

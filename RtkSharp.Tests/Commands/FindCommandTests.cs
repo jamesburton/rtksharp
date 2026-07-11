@@ -1,4 +1,5 @@
 using RtkSharp.Commands.System;
+using RtkSharp.Filters.Commands.System;
 
 namespace RtkSharp.Tests.Commands;
 
@@ -194,7 +195,7 @@ public sealed class FindCommandTests
             [".secret.txt"] = "s"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*.rs", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*.rs", root, 50, null, "f", false));
         // b.rs and sub/c.rs match; the hidden .hidden/e.rs is skipped.
         Assert.Equal("2F 2D:\n\n./ b.rs\nsub/ c.rs\n", output);
     }
@@ -209,7 +210,7 @@ public sealed class FindCommandTests
             [Combine(".hidden", "e.rs")] = "e"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "d", false));
+        var output = RunToString(new FindArgs("*", root, 50, null, "d", false));
         // Only the non-hidden "sub" directory; the search root itself is excluded.
         Assert.Equal("1F 1D:\n\n./ sub\n", output);
     }
@@ -224,7 +225,7 @@ public sealed class FindCommandTests
             [".secret.txt"] = "s"
         });
 
-        var output = RunToString(new FindCommand.FindArgs(".secret.txt", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs(".secret.txt", root, 50, null, "f", false));
         Assert.Equal("1F 1D:\n\n./ .secret.txt\n", output);
     }
 
@@ -239,7 +240,7 @@ public sealed class FindCommandTests
             [Combine("sub", "d.md")] = "d"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*", root, 50, null, "f", false));
         // Ext summary ordered by count desc, ties broken by ordinal name (md before txt).
         Assert.Equal(
             "4F 2D:\n\n./ a.txt b.rs\nsub/ c.rs d.md\n\next: .rs(2) .md(1) .txt(1)\n",
@@ -257,7 +258,7 @@ public sealed class FindCommandTests
             [Combine("sub", "d.md")] = "d"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 1, null, "f", false));
+        var output = RunToString(new FindArgs("*", root, 1, null, "f", false));
         // Only one file shown; overflow marker for the remaining three; ext summary spans all four.
         Assert.Equal(
             "4F 2D:\n\n./ a.txt\n+3 more\n\next: .rs(2) .md(1) .txt(1)\n",
@@ -268,7 +269,7 @@ public sealed class FindCommandTests
     public void Run_NoMatches_ReportsZero()
     {
         var root = CreateTree(new Dictionary<string, string> { ["a.txt"] = "a" });
-        var output = RunToString(new FindCommand.FindArgs("*.xyz", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*.xyz", root, 50, null, "f", false));
         Assert.Equal("0 for '*.xyz'\n", output);
     }
 
@@ -282,7 +283,7 @@ public sealed class FindCommandTests
         });
 
         // Depth 1 = search root's immediate children only; sub/deep.rs (depth 2) is excluded.
-        var output = RunToString(new FindCommand.FindArgs("*.rs", root, 50, 1, "f", false));
+        var output = RunToString(new FindArgs("*.rs", root, 50, 1, "f", false));
         Assert.Equal("1F 1D:\n\n./ top.rs\n", output);
     }
 
@@ -296,7 +297,7 @@ public sealed class FindCommandTests
             [Combine("ignored", "x.rs")] = "x"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*.rs", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*.rs", root, 50, null, "f", false));
         // The ignored/ directory is pruned, so ignored/x.rs never appears.
         Assert.Equal("1F 1D:\n\n./ keep.rs\n", output);
     }
@@ -323,7 +324,7 @@ public sealed class FindCommandTests
             [Combine("sub", "foo")] = "nested, ignored by both git and this engine"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*", root, 50, null, "f", false));
         Assert.Equal("1F 1D:\n\n./ foo\n", output);
     }
 
@@ -339,7 +340,7 @@ public sealed class FindCommandTests
             ["kept.txt"] = "kept"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*", root, 50, null, "f", false));
         Assert.Equal("1F 1D:\n\n./ kept.txt\n", output);
     }
 
@@ -354,7 +355,7 @@ public sealed class FindCommandTests
             ["keep.txt"] = "kept"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*", root, 50, null, "f", false));
         Assert.Equal("1F 1D:\n\n./ keep.txt\n", output);
     }
 
@@ -373,7 +374,7 @@ public sealed class FindCommandTests
             ["filea.txt"] = "would match a git character class, but this engine has none, so it is kept"
         });
 
-        var output = RunToString(new FindCommand.FindArgs("*", root, 50, null, "f", false));
+        var output = RunToString(new FindArgs("*", root, 50, null, "f", false));
         Assert.Equal("1F 1D:\n\n./ filea.txt\n", output);
     }
 
@@ -381,7 +382,7 @@ public sealed class FindCommandTests
 
     private static string Combine(params string[] parts) => Path.Combine(parts);
 
-    private static string RunToString(FindCommand.FindArgs args)
+    private static string RunToString(FindArgs args)
     {
         using var sw = new StringWriter();
         FindCommand.Run(args, sw);

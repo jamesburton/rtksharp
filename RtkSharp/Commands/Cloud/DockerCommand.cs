@@ -171,7 +171,7 @@ public static class DockerCommand
 
         var runningLines = new List<string>();
         var stoppedLines = new List<string>();
-        foreach (var line in ReadCommand.SplitLines(result.Stdout).Where(l => !string.IsNullOrWhiteSpace(l)))
+        foreach (var line in RtkSharp.Core.SourceFilterLineSplitter.SplitLines(result.Stdout).Where(l => !string.IsNullOrWhiteSpace(l)))
         {
             var parts = line.Split('\t');
             var state = parts.Length > 0 ? parts[0] : "";

@@ -661,7 +661,7 @@ public static class GitCommand
     {
         ArgumentNullException.ThrowIfNull(raw);
 
-        foreach (var line in ReadCommand.SplitLines(raw))
+        foreach (var line in RtkSharp.Core.SourceFilterLineSplitter.SplitLines(raw))
         {
             var stripped = line.Trim();
 
@@ -689,7 +689,7 @@ public static class GitCommand
     {
         ArgumentNullException.ThrowIfNull(raw);
 
-        return ReadCommand.SplitLines(raw)
+        return RtkSharp.Core.SourceFilterLineSplitter.SplitLines(raw)
             .Select(l => l.Trim())
             .FirstOrDefault(l => l.StartsWith("HEAD detached ", StringComparison.Ordinal));
     }
@@ -826,7 +826,7 @@ public static class GitCommand
 
         if (Succeeded(result))
         {
-            var firstLine = ReadCommand.SplitLines(result.Stdout).FirstOrDefault() ?? string.Empty;
+            var firstLine = RtkSharp.Core.SourceFilterLineSplitter.SplitLines(result.Stdout).FirstOrDefault() ?? string.Empty;
             stdout.Write(ParseCommitOutput(firstLine) + "\n");
             return 0;
         }
@@ -903,7 +903,7 @@ public static class GitCommand
             pushedRef ??= ExtractPushedRef(line);
         }
 
-        foreach (var line in ReadCommand.SplitLines(result.Stderr))
+        foreach (var line in RtkSharp.Core.SourceFilterLineSplitter.SplitLines(result.Stderr))
         {
             if (IsPushNoiseLine(line))
             {
@@ -914,7 +914,7 @@ public static class GitCommand
             stderr.Write(line + "\n");
         }
 
-        foreach (var line in ReadCommand.SplitLines(result.Stdout))
+        foreach (var line in RtkSharp.Core.SourceFilterLineSplitter.SplitLines(result.Stdout))
         {
             if (IsPushNoiseLine(line))
             {

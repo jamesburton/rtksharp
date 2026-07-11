@@ -173,7 +173,7 @@ public sealed partial class ErrorStreamFilter : IStreamFilter
     /// <summary>
     /// Splits text into lines exactly as Rust's <c>str::lines()</c> does (on <c>\n</c>, stripping a
     /// trailing <c>\r</c>, with no trailing empty entry after a final <c>\n</c>). Duplicated locally
-    /// (rather than depending on <c>RtkSharp.Commands.System.ReadCommand.SplitLines</c>) to keep
+    /// (rather than depending on <c>RtkSharp.Commands.System.RtkSharp.Core.SourceFilterLineSplitter.SplitLines</c>) to keep
     /// <c>RtkSharp.Core</c> free of a dependency on the <c>Commands</c> layer.
     /// </summary>
     /// <param name="text">The text to split.</param>

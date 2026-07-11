@@ -910,7 +910,7 @@ public static class TomlFilterEngine
     /// <returns>The filtered output.</returns>
     public static string ApplyFilter(CompiledFilter filter, string stdout)
     {
-        var lines = ReadCommand.SplitLines(stdout);
+        var lines = RtkSharp.Core.SourceFilterLineSplitter.SplitLines(stdout);
 
         // 1. strip_ansi
         if (filter.StripAnsi)

@@ -15,147 +15,15 @@ namespace RtkSharp.Tests.Commands.System;
 
 /// <summary>
 /// Tests for <see cref="EnvCommand"/>, the <c>rtk env</c> categorized/masked/truncated environment
-/// variable display. Faithful-port target: Rust <c>src/cmds/system/env_cmd.rs</c> (305 lines
-/// including its own inline <c>#[cfg(test)]</c> module, ported below plus additional integration
-/// coverage for the full <see cref="EnvCommand.Run"/> flow).
+/// variable display. The pure masking/categorization helpers moved to
+/// <c>RtkSharp.Filters.Commands.System.EnvFilters</c> - see
+/// <c>RtkSharp.Filters.Tests.Commands.System.EnvFiltersTests</c>. Faithful-port target: Rust
+/// <c>src/cmds/system/env_cmd.rs</c>, covering argument parsing and the full
+/// <see cref="EnvCommand.Run"/> flow (now delegating to
+/// <c>RtkSharp.Filters.Commands.System.EnvFilters.FormatEnvReport</c>).
 /// </summary>
 public sealed class EnvCommandTests
 {
-    // -----------------------------------------------------------------------
-    // MaskValue - ported from env_cmd.rs's test_mask_value_* (lines 219-243)
-    // -----------------------------------------------------------------------
-
-    [Fact]
-    public void MaskValue_ShortValue_ReturnsAllAsterisks()
-    {
-        Assert.Equal("****", EnvCommand.MaskValue("abc"));
-        Assert.Equal("****", EnvCommand.MaskValue(""));
-    }
-
-    [Fact]
-    public void MaskValue_LongValue_PreservesPrefixAndSuffix()
-    {
-        var result = EnvCommand.MaskValue("supersecrettoken");
-        Assert.Contains("****", result, StringComparison.Ordinal);
-        Assert.StartsWith("su", result, StringComparison.Ordinal);
-        Assert.EndsWith("en", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void MaskValue_ExactlyFourChars_ReturnsAllAsterisks()
-    {
-        Assert.Equal("****", EnvCommand.MaskValue("abcd"));
-    }
-
-    [Fact]
-    public void MaskValue_FiveChars_PreservesPrefixAndSuffix()
-    {
-        var result = EnvCommand.MaskValue("abcde");
-        Assert.StartsWith("ab", result, StringComparison.Ordinal);
-        Assert.EndsWith("de", result, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void MaskValue_SurrogatePairCharacters_MaskedByUnicodeScalarValue_NotUtf16CodeUnit()
-    {
-        // "😀" (U+1F600) is one Rust `char` / one .NET Rune but two UTF-16 code units. A value made
-        // of 5 such emoji is > 4 Rune-counted "chars", so it must mask to prefix+****+suffix using
-        // whole emoji, not split a surrogate pair the way naive string.Length indexing would.
-        const string value = "😀😀😀😀😀";
-        var result = EnvCommand.MaskValue(value);
-        Assert.Equal("😀😀****😀😀", result);
-    }
-
-    // -----------------------------------------------------------------------
-    // IsLangVar / IsCloudVar / IsToolVar / IsInterestingVar - ported from env_cmd.rs (lines 245-295)
-    // -----------------------------------------------------------------------
-
-    [Fact]
-    public void IsLangVar_PositiveCases()
-    {
-        Assert.True(EnvCommand.IsLangVar("RUST_LOG"));
-        Assert.True(EnvCommand.IsLangVar("CARGO_HOME"));
-        Assert.True(EnvCommand.IsLangVar("GOPATH"));
-        Assert.True(EnvCommand.IsLangVar("NODE_ENV"));
-    }
-
-    [Fact]
-    public void IsLangVar_NegativeCases()
-    {
-        Assert.False(EnvCommand.IsLangVar("HOME"));
-        Assert.False(EnvCommand.IsLangVar("PATH"));
-        Assert.False(EnvCommand.IsLangVar("USER"));
-    }
-
-    [Fact]
-    public void IsCloudVar_PositiveCases()
-    {
-        Assert.True(EnvCommand.IsCloudVar("AWS_ACCESS_KEY_ID"));
-        Assert.True(EnvCommand.IsCloudVar("AZURE_CLIENT_ID"));
-        Assert.True(EnvCommand.IsCloudVar("DOCKER_HOST"));
-        Assert.True(EnvCommand.IsCloudVar("KUBERNETES_SERVICE_HOST"));
-    }
-
-    [Fact]
-    public void IsCloudVar_NegativeCases()
-    {
-        Assert.False(EnvCommand.IsCloudVar("HOME"));
-        Assert.False(EnvCommand.IsCloudVar("RUST_LOG"));
-    }
-
-    [Fact]
-    public void IsToolVar_PositiveCases()
-    {
-        Assert.True(EnvCommand.IsToolVar("EDITOR"));
-        Assert.True(EnvCommand.IsToolVar("GIT_AUTHOR_NAME"));
-        Assert.True(EnvCommand.IsToolVar("SSH_AUTH_SOCK"));
-        Assert.True(EnvCommand.IsToolVar("CLAUDE_API_KEY"));
-    }
-
-    [Fact]
-    public void IsInterestingVar_PositiveCases()
-    {
-        Assert.True(EnvCommand.IsInterestingVar("HOME"));
-        Assert.True(EnvCommand.IsInterestingVar("USER"));
-        Assert.True(EnvCommand.IsInterestingVar("LANG"));
-        Assert.True(EnvCommand.IsInterestingVar("TZ"));
-        Assert.True(EnvCommand.IsInterestingVar("PWD"));
-    }
-
-    [Fact]
-    public void IsInterestingVar_NegativeCases()
-    {
-        Assert.False(EnvCommand.IsInterestingVar("RANDOM_VAR"));
-        Assert.False(EnvCommand.IsInterestingVar("MY_CUSTOM_VAR"));
-    }
-
-    [Fact]
-    public void IsInterestingVar_UsesStartsWith_NotContains_UnlikeTheOtherThreeHelpers()
-    {
-        // "MY_HOME_DIR" contains "HOME" as a substring but does not START with it - the deliberate
-        // Contains-vs-StartsWith asymmetry documented in the phase plan and class remarks.
-        Assert.False(EnvCommand.IsInterestingVar("MY_HOME_DIR"));
-        Assert.True(EnvCommand.IsInterestingVar("HOME_DIR"));
-    }
-
-    [Fact]
-    public void GetSensitivePatterns_ContainsExpectedKeys()
-    {
-        var patterns = EnvCommand.GetSensitivePatterns();
-        Assert.Contains("key", patterns);
-        Assert.Contains("secret", patterns);
-        Assert.Contains("password", patterns);
-        Assert.Contains("token", patterns);
-        Assert.Contains("credential", patterns);
-        Assert.Contains("auth", patterns);
-        Assert.Contains("private", patterns);
-        Assert.Contains("api_key", patterns);
-        Assert.Contains("apikey", patterns);
-        Assert.Contains("access_key", patterns);
-        Assert.Contains("jwt", patterns);
-        Assert.Equal(11, patterns.Count);
-    }
-
     // -----------------------------------------------------------------------
     // ParseArgs
     // -----------------------------------------------------------------------

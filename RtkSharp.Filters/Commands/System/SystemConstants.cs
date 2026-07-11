@@ -1,4 +1,4 @@
-namespace RtkSharp.Commands.System;
+namespace RtkSharp.Filters.Commands.System;
 
 /// <summary>
 /// Shared constants for the system command filters (ls, tree, find, grep, etc.).

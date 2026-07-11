@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using RtkSharp.Filters.Commands.System;
 
 namespace RtkSharp.Commands.System;
 
@@ -46,8 +47,6 @@ namespace RtkSharp.Commands.System;
 /// </remarks>
 public static class FindCommand
 {
-    private const int DefaultMaxResults = 50;
-
     /// <summary>
     /// Native <c>find</c> flags that RTK recognizes and classifies input as native-find syntax.
     /// </summary>
@@ -90,27 +89,6 @@ public static class FindCommand
 
         Run(parsed, Console.Out);
         return Task.FromResult(0);
-    }
-
-    /// <summary>Parsed arguments from either native <c>find</c> or RTK <c>find</c> syntax.</summary>
-    /// <param name="Pattern">The filename glob to match (defaults to <c>*</c>).</param>
-    /// <param name="Path">The search root (defaults to <c>.</c>).</param>
-    /// <param name="MaxResults">The maximum number of individual files to display (defaults to 50).</param>
-    /// <param name="MaxDepth">The maximum walk depth (root = 0), or null for unlimited.</param>
-    /// <param name="FileType">The type filter: <c>f</c> for files, <c>d</c> for directories.</param>
-    /// <param name="CaseInsensitive">Whether the pattern matches case-insensitively (<c>-iname</c>).</param>
-    internal sealed record FindArgs(
-        string Pattern,
-        string Path,
-        int MaxResults,
-        int? MaxDepth,
-        string FileType,
-        bool CaseInsensitive
-    )
-    {
-        /// <summary>Creates the default arguments (<c>*</c> in <c>.</c>, 50 files, type <c>f</c>).</summary>
-        /// <returns>The default <see cref="FindArgs"/>.</returns>
-        public static FindArgs Default() => new("*", ".", DefaultMaxResults, null, "f", false);
     }
 
     /// <summary>
@@ -208,7 +186,7 @@ public static class FindCommand
             }
         }
 
-        return new FindArgs(pattern, path, DefaultMaxResults, maxDepth, fileType, caseInsensitive);
+        return new FindArgs(pattern, path, FindArgs.DefaultMaxResults, maxDepth, fileType, caseInsensitive);
     }
 
     /// <summary>
@@ -222,7 +200,7 @@ public static class FindCommand
     {
         var pattern = args[0];
         var path = ".";
-        var maxResults = DefaultMaxResults;
+        var maxResults = FindArgs.DefaultMaxResults;
         var fileType = "f";
 
         var i = 1;
@@ -311,116 +289,7 @@ public static class FindCommand
         var files = Walk(parsed.Path, effectivePattern, wantDirs, parsed.MaxDepth, searchHidden,
             parsed.CaseInsensitive);
 
-        files.Sort(StringComparer.Ordinal);
-
-        if (files.Count == 0)
-        {
-            output.Write($"0 for '{effectivePattern}'\n");
-            return;
-        }
-
-        // Group by directory.
-        var byDir = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-        foreach (var file in files)
-        {
-            var dir = global::System.IO.Path.GetDirectoryName(file);
-            if (string.IsNullOrEmpty(dir))
-            {
-                dir = ".";
-            }
-
-            var filename = global::System.IO.Path.GetFileName(file);
-            if (!byDir.TryGetValue(dir, out var bucket))
-            {
-                bucket = [];
-                byDir[dir] = bucket;
-            }
-
-            bucket.Add(filename);
-        }
-
-        var dirs = byDir.Keys.ToList();
-        dirs.Sort(StringComparer.Ordinal);
-        var dirsCount = dirs.Count;
-        var totalFiles = files.Count;
-
-        var lines = new List<string>
-        {
-            $"{totalFiles}F {dirsCount}D:",
-            string.Empty
-        };
-
-        // Display with --max limiting (counting individual files).
-        var shown = 0;
-        foreach (var dir in dirs)
-        {
-            if (shown >= parsed.MaxResults)
-            {
-                break;
-            }
-
-            var filesInDir = byDir[dir];
-            var dirDisplay = dir.Length > 50 ? "..." + dir[^47..] : dir;
-
-            var remainingBudget = parsed.MaxResults - shown;
-            if (filesInDir.Count <= remainingBudget)
-            {
-                lines.Add($"{dirDisplay}/ {string.Join(' ', filesInDir)}");
-                shown += filesInDir.Count;
-            }
-            else
-            {
-                var partial = filesInDir.Take(remainingBudget).ToList();
-                lines.Add($"{dirDisplay}/ {string.Join(' ', partial)}");
-                shown += partial.Count;
-                break;
-            }
-        }
-
-        if (shown < totalFiles)
-        {
-            lines.Add($"+{totalFiles - shown} more");
-        }
-
-        // Extension summary (only when more than one extension is present).
-        var byExt = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var file in files)
-        {
-            var ext = ExtensionOf(file);
-            byExt[ext] = byExt.GetValueOrDefault(ext) + 1;
-        }
-
-        if (byExt.Count > 1)
-        {
-            lines.Add(string.Empty);
-
-            // The `.ThenBy(Ordinal)` tie-break is an intentional determinism choice, not a literal
-            // port: find_cmd.rs accumulates counts in a std::collections::HashMap and its iteration
-            // order (used to break ties among equal counts) is randomized per-process by Rust's
-            // SipHash-based default hasher. There is no single "correct" Rust tie order to match —
-            // the oracle itself is nondeterministic here, so a fresh oracle run can legitimately
-            // differ from another oracle run on tied-count extensions. RtkSharp instead picks a
-            // fixed, reproducible order (alphabetical) rather than reproducing that nondeterminism.
-            var extParts = byExt
-                .OrderByDescending(kv => kv.Value)
-                .ThenBy(kv => kv.Key, StringComparer.Ordinal)
-                .Take(5)
-                .Select(kv => $".{kv.Key}({kv.Value})");
-            lines.Add($"ext: {string.Join(' ', extParts)}");
-        }
-
-        output.Write(string.Join("\n", lines) + "\n");
-    }
-
-    /// <summary>
-    /// Returns the extension of <paramref name="file"/> without the leading dot, or <c>none</c>
-    /// when it has no extension — mirroring Rust's <c>Path::extension()</c> (which yields
-    /// <c>None</c> for dotfiles and extensionless names).
-    /// </summary>
-    private static string ExtensionOf(string file)
-    {
-        var ext = global::System.IO.Path.GetExtension(file);
-        return ext.Length > 0 ? ext[1..] : "none";
+        output.Write(FindFilters.FormatFindResults(files, parsed));
     }
 
     /// <summary>

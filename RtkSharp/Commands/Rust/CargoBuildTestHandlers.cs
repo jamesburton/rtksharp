@@ -175,7 +175,7 @@ internal sealed class CargoTestHandler : IBlockHandler
             }
 
             // Fallback: last 5 meaningful lines.
-            var meaningful = ReadCommand.SplitLines(raw)
+            var meaningful = RtkSharp.Core.SourceFilterLineSplitter.SplitLines(raw)
                 .Where(l => l.Trim().Length != 0 && !l.TrimStart().StartsWith("Compiling", StringComparison.Ordinal))
                 .ToList();
             var last5 = meaningful.Skip(Math.Max(0, meaningful.Count - 5));

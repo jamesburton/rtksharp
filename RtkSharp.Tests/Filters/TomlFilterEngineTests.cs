@@ -694,7 +694,7 @@ public sealed class TomlFilterEngineTests
 
             foreach (var test in tests)
             {
-                // ApplyFilter already normalizes \r\n -> \n internally (ReadCommand.SplitLines
+                // ApplyFilter already normalizes \r\n -> \n internally (RtkSharp.Filters.Commands.System.ReadFilters.SplitLines
                 // mirrors Rust's str::lines(), which strips a trailing \r from each line), so
                 // `actual` is always \n-only. `expected` is compared as raw TOML string content and
                 // needs the same normalization applied explicitly: a Windows checkout of
