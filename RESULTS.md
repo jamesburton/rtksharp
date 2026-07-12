@@ -1,8 +1,10 @@
 # Measured Token Savings — RtkSharp (.NET rebuild)
 
-Real measurements, not estimates. Run against this repository itself (`RtkSharp` v1.0.0, built
-`dotnet build -c Release`, run via `dotnet RtkSharp/bin/Release/net10.0/RtkSharp.dll`) on
-2026-07-11, comparing each command's raw output against the same command run through `rtk`.
+Real measurements, not estimates. Run against this repository itself, built locally from source
+(`dotnet build -c Release`, run via `dotnet RtkSharp/bin/Release/net10.0/RtkSharp.dll`) on
+2026-07-11 and 2026-07-12. The `-l aggressive` and `dotnet build` rows below were captured
+before-and-after fixing two real bugs found via this same measurement process (see Observations);
+both fixes shipped in the published **v1.0.1** stable release, not v1.0.0.
 
 ## Methodology
 
@@ -31,6 +33,7 @@ Real measurements, not estimates. Run against this repository itself (`RtkSharp`
 | `read FilterRegistry.cs -l aggressive` | 25,336 | 2,081 | **91.8%** | 2,423 | 197 | **91.9%** |
 | `read GainCommand.cs -l aggressive` | 39,695 | 3,617 | **90.9%** | 3,489 | 380 | **89.1%** |
 | `dotnet build` (clean, no warnings/errors) | 269 | 64 | **76.2%** | 22 | 10 | **54.5%** |
+| `dotnet build RtkSharp.slnx` (5-project solution, up-to-date/no-op) | 689 | 64 | **90.7%** | 34 | 10 | **70.6%** |
 
 ## Observations
 
@@ -68,6 +71,20 @@ Real measurements, not estimates. Run against this repository itself (`RtkSharp`
   would be larger in absolute terms (more to group/dedupe) even if the percentage varies, since
   RtkSharp's dotnet filter groups by file/error-code rather than growing linearly with warning
   count. Not measured here — a real dirty/failing build would be a good follow-up sample.
+- **The 5-project solution build (`RtkSharp.slnx`) row demonstrates a real bug fix, not just
+  savings.** Before this session's fix, an up-to-date/no-op multi-project build's console text
+  names every project only via a `<Project> -> <output>` completion line — no `.csproj` path
+  appears anywhere — so the project-counting logic (which only matched `.csproj` paths) silently
+  undercounted this exact repo's own solution as `1 projects` regardless of its true size. It now
+  correctly reports `5 projects`. `dotnet restore` has the identical undercount for the same
+  no-op case and was NOT fixed — an already-satisfied restore's console text carries no
+  per-project signal at all (not even a completion line, unlike build), so there's nothing for a
+  text-based fix to key off; accurate restore counting needs the deferred MSBuild binary log (see
+  `docs/parity/compatibility-ledger.md`). `rtk dotnet restore RtkSharp.slnx` on this same
+  already-restored repo still reports `0 projects`. Byte/word savings on the build row are still
+  real and substantial
+  (90.7%/70.6%), but the more important fix here was *correctness*, not compression — a wrong
+  project count is a wrong project count no matter how compact the line around it is.
 - **No command tested here made output larger** except word-count-only artifacts (`find`) noted
   above, which is a metric quirk, not a real regression — byte count for every single command
   tested was equal or smaller.
