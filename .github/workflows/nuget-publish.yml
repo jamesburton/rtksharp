@@ -78,7 +78,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          LATEST_TAG=$(git tag -l 'dotnet-v[0-9]*.[0-9]*.[0-9]*' --sort=-version:refname | grep -vE '\-' | head -1 || true)
+          # Exact-anchor match for a clean "dotnet-vX.Y.Z" tag only -- NOT
+          # 'dotnet-v[0-9]*.[0-9]*.[0-9]*' | grep -vE '\-', which was the previous approach and is
+          # broken: the "dotnet-v" prefix itself contains a hyphen, so that negative filter
+          # excluded every stable tag too, not just "-dev.N" prereleases. That silently made this
+          # job think NO prior stable tag ever existed, on every single run, forever -- reseeding
+          # at the hardcoded 1.0.0 baseline each time instead of bumping from history. Harmless
+          # (a no-op) until a second real push to main tried to recreate the exact same
+          # already-existing dotnet-v1.0.0 tag and got correctly rejected by the ls-remote
+          # collision guard below -- which is what surfaced this.
+          LATEST_TAG=$(git tag -l --sort=-version:refname | grep -E '^dotnet-v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
           if [ -z "$LATEST_TAG" ]; then
             LATEST_VERSION="1.0.0"
             RANGE="HEAD"
